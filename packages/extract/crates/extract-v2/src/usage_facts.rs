@@ -3024,7 +3024,7 @@ pub(crate) fn string_code<'a>(program: &oxc::ast::ast::Program<'a>, scoping: &ox
         /// one in its place, and each added may prove another.
         fn proves(&self, seeds: &FxHashSet<SymbolId>) -> bool {
             let mut functions: FxHashSet<SymbolId> =
-                self.functions.iter().chain(seeds.iter().filter(|seed| !self.scoping.symbol_is_mutated(**seed))).copied().collect();
+                self.functions.iter().chain(seeds.iter().filter(|seed| !crate::identity::reassigned(self.scoping, **seed))).copied().collect();
             // A module that reads `arguments` proves no parameter.
             if !self.arguments {
                 loop {
@@ -3034,7 +3034,7 @@ pub(crate) fn string_code<'a>(program: &oxc::ast::ast::Program<'a>, scoping: &ox
                         .filter(|(parameter, (binding, at))| {
                             let calls = self.calls.get(binding).map_or(&[][..], Vec::as_slice);
                             !functions.contains(*parameter)
-                                && !self.scoping.symbol_is_mutated(**parameter)
+                                && !crate::identity::reassigned(self.scoping, **parameter)
                                 && !self.exported.contains(binding)
                                 && !calls.is_empty()
                                 && calls.len() == self.scoping.get_resolved_reference_ids(*binding).len()
@@ -3073,7 +3073,7 @@ pub(crate) fn string_code<'a>(program: &oxc::ast::ast::Program<'a>, scoping: &ox
                 match symbol {
                     // Only a variable, a parameter or a reassigned name is
                     // ever given the global object (`given`).
-                    Some(symbol) if self.scoping.symbol_flags(symbol).is_variable() || self.scoping.symbol_is_mutated(symbol) => {
+                    Some(symbol) if self.scoping.symbol_flags(symbol).is_variable() || crate::identity::reassigned(self.scoping, symbol) => {
                         self.judge(id.span, GlobalRoot::Binding(symbol));
                     }
                     Some(_) => {}
@@ -3168,7 +3168,7 @@ pub(crate) fn string_code<'a>(program: &oxc::ast::ast::Program<'a>, scoping: &ox
                     if let Some((params, unnamed)) = function_params(init) {
                         self.function(symbol, unnamed.then_some(params));
                     }
-                    if let Some(string) = static_string(init.get_inner_expression()).filter(|_| !self.scoping.symbol_is_mutated(symbol)) {
+                    if let Some(string) = static_string(init.get_inner_expression()).filter(|_| !crate::identity::reassigned(self.scoping, symbol)) {
                         self.strings.insert(symbol, string);
                     }
                 }
@@ -3264,7 +3264,7 @@ pub(crate) fn string_code<'a>(program: &oxc::ast::ast::Program<'a>, scoping: &ox
     });
     let mut trusts_promise = false;
     if reads.found.is_none() && reads.timers.iter().any(|first| !matches!(first, Argument::Function)) {
-        reads.functions.retain(|symbol| !scoping.symbol_is_mutated(*symbol));
+        reads.functions.retain(|symbol| !crate::identity::reassigned(scoping, *symbol));
         // An executor's parameters trust the global `Promise`; a module that
         // reads `arguments` may call an executor as `callee`.
         let mut proven = reads.proves(&FxHashSet::default());
@@ -5608,7 +5608,7 @@ fn spread_wrappers(
             scan.invalid.insert(index);
             continue;
         };
-        if scoping.symbol_is_mutated(binding) || scoping.symbol_is_mutated(spread) {
+        if crate::identity::reassigned(scoping, binding) || crate::identity::reassigned(scoping, spread) {
             scan.invalid.insert(index);
         }
         scan.bindings.insert(binding, index);
@@ -5616,7 +5616,7 @@ fn spread_wrappers(
         // A named prop the body reassigns no longer holds what renders pass.
         for prop in &candidate.named {
             if let (Some(symbol), Some(default)) = (prop.binding.symbol_id.get(), &prop.default) {
-                if !scoping.symbol_is_mutated(symbol) {
+                if !crate::identity::reassigned(scoping, symbol) {
                     scan.named
                         .insert(symbol, (index, prop.key.clone(), default.clone()));
                 }
@@ -5904,7 +5904,7 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
         if let Some((alias, omits)) = self.alias_initialized_by(ident.span, symbol) {
             // Read or written before here, the alias is not what the spread
             // carries.
-            if self.referenced.contains(&alias) || self.scoping.symbol_is_mutated(alias) {
+            if self.referenced.contains(&alias) || crate::identity::reassigned(self.scoping, alias) {
                 self.invalid.insert(index);
             }
             self.aliases.insert(alias, (index, omits));
@@ -7078,7 +7078,7 @@ impl ParameterScan<'_> {
         let (Some(mut set), Some(symbol)) = (set, id.symbol_id.get()) else {
             return;
         };
-        if self.scoping.symbol_is_mutated(symbol) {
+        if crate::identity::reassigned(self.scoping, symbol) {
             return;
         }
         if let Some(default) = default {
@@ -7444,7 +7444,7 @@ fn rest_parameters(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<Symbol
                 .map(|property| crate::eval::property_name(&property.key).filter(|_| !property.computed).map(|key| key.to_string()))
                 .collect();
             match keys {
-                Some(keys) if !self.scoping.symbol_is_mutated(symbol) => {
+                Some(keys) if !crate::identity::reassigned(self.scoping, symbol) => {
                     self.rests.insert(symbol, keys);
                 }
                 _ => {}
@@ -7563,7 +7563,7 @@ fn prop_tags_and_uses(
                 },
                 _ => continue,
             };
-            if let Some(symbol) = binding.symbol_id.get().filter(|symbol| !scoping.symbol_is_mutated(*symbol)) {
+            if let Some(symbol) = binding.symbol_id.get().filter(|symbol| !crate::identity::reassigned(scoping, *symbol)) {
                 props.insert(symbol, (name.to_string(), key.to_string()));
             }
         }
@@ -7906,7 +7906,7 @@ fn ordinary_components(
     let mut wrappers: Vec<(&BindingIdentifier<'_>, Option<&str>)> = Vec::new();
     let mut aliases: BTreeMap<String, String> = BTreeMap::new();
     let unwritten = |id: &BindingIdentifier<'_>| {
-        id.symbol_id.get().is_some_and(|symbol| !scoping.symbol_is_mutated(symbol))
+        id.symbol_id.get().is_some_and(|symbol| !crate::identity::reassigned(scoping, symbol))
     };
     let mut names = BTreeSet::new();
     for statement in &program.body {

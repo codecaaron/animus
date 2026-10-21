@@ -55,7 +55,7 @@ fn literal_consts(program: &Program<'_>, scoping: &oxc::semantic::Scoping) -> Fx
         for declarator in &declaration.declarations {
             if let (BindingPattern::BindingIdentifier(id), Some(init)) = (&declarator.id, &declarator.init) {
                 if init.get_inner_expression().is_literal() {
-                    consts.extend(id.symbol_id.get().filter(|symbol| !scoping.symbol_is_mutated(*symbol)));
+                    consts.extend(id.symbol_id.get().filter(|symbol| !crate::identity::reassigned(scoping, *symbol)));
                 }
             }
         }

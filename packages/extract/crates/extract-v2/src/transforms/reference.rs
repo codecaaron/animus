@@ -289,7 +289,7 @@ impl<'s> Module<'s> {
             return Err("is a namespace import");
         }
         if flags.is_function() {
-            if scoping.symbol_is_mutated(symbol) {
+            if crate::identity::reassigned(scoping, symbol) {
                 return Err("is reassigned");
             }
             return self.function_declaration(name).map(Binding::Function).ok_or(UNRESOLVED_VALUE);

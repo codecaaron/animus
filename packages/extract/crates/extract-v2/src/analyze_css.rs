@@ -14836,6 +14836,8 @@ const Render = ({ children }) => { document.body.onclick = t; return <div>{child
             ("function size(n) { if (!n) return; return `${n}px`; }\nconst Render = ({ children }) => { document.body.onclick = size(document.body.clientWidth); return <div>{children}</div>; };", "", "", false),
             ("const size = (n) => n;\nconst Render = ({ children }) => { document.body.onclick = size(pad); return <div>{children}</div>; };", "", "", true),
             ("function size(n) { if (n) return pad; return ''; }\nconst Render = ({ children }) => { document.body.onclick = size(1); return <div>{children}</div>; };", "", "", true),
+            ("var v = '';\nvar v = pad;\nconst Render = ({ children }) => { document.body.onclick = v; return <div>{children}</div>; };", "", "", true),
+            ("const v = '';\nconst Render = ({ children }) => { document.body.onclick = v; return <div>{children}</div>; };", "", "", false),
             ("let size = () => '';\nsize = () => pad;\nconst Render = ({ children }) => { document.body.onclick = size(); return <div>{children}</div>; };", "", "", true),
             ("const size = async () => '';\nconst Render = ({ children }) => { document.body.onclick = size(); return <div>{children}</div>; };", "", "", true),
             ("import { size } from './other';\nconst Render = ({ children }) => { document.body.onclick = size(); return <div>{children}</div>; };", "", "export const size = () => '';\n", true),
@@ -15682,6 +15684,13 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ("1e+21", "export const App = () => <Btn {...{ 16: 'lg' }} />;\n", false),
             ("1000000000000000000000", "const Wrap = ({ 1e21: v, ...rest }) => <Btn {...rest} />;\nexport const App = () => <Wrap {...{ '1000000000000000000000': 'lg' }} />;\n", true),
             ("1000000000000000000000", "const Wrap = ({ '1000000000000000000000': v, ...rest }) => <Btn {...rest} />;\nexport const App = () => <Wrap {...{ '1000000000000000000000': 'lg' }} />;\n", false),
+            // A `var` declared again holds its later initializer, which is
+            // no write: neither is an index nor a fresh literal.
+            ("size", "var key = 0;\nvar key = '__proto__';\nvar p = {};\nvar p = ({})[key];\np.size = 'lg';\nexport const App = () => <Btn />;\n", true),
+            ("size", "var key = 0;\nfunction set() {\n  var p = {};\n  var p = ({})[key];\n  p.size = 'lg';\n}\nvar key = '__proto__';\nset();\nexport const App = () => <Btn />;\n", true),
+            ("size", "var key = 0;\nvar key = '__proto__';\npad(({})[key]);\nexport const App = () => <Btn />;\n", true),
+            ("size", "import { protoOf } from 'outside';\nvar p = {};\nvar p = protoOf();\np.size = 'lg';\nexport const App = () => <Btn />;\n", true),
+            ("size", "const key = 0;\npad(({})[key]);\nexport const App = () => <Btn />;\n", false),
         ] {
             let source = listed(prop, program);
             assert_eq!(analyze(&[("a.tsx", &source)], &test_inputs()).sheets.variants.contains("3px"), keeps, "{program}");
@@ -19163,6 +19172,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("export const run = (s) => window.self.setTimeout(s, 0);\n", true),
             ("export const run = (s) => parent.frames.setInterval(s, 0);\n", true),
             ("const key = 'setTimeout';\nexport const run = (s) => window[key](s, 0);\n", true),
+            ("var key = 'scrollTo';\nfunction go() { window[key](globalThis.code, 0); }\nvar key = 'setTimeout';\ngo();\n", true),
+            ("var later = () => {};\nvar later = globalThis.code;\nexport const run = () => setTimeout(later, 0);\n", true),
             ("export const run = (s, key) => window[key](s, 0);\n", true),
             ("export const run = (s) => window['eval'](s);\n", true),
             ("export const run = (s) => new globalThis['Function'](s)();\n", true),

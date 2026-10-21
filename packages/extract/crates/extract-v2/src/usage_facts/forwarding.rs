@@ -755,7 +755,7 @@ impl<'s> Module<'s> {
         // nothing reassigns it (`declares_itself`).
         let may_hold_prototype = |symbol: SymbolId| {
             let flags = scoping.symbol_flags(symbol);
-            !declarations.literal_bindings.contains(&symbol) && (!declares_itself(flags, SymbolFlags::Function | SymbolFlags::Class) || scoping.symbol_is_mutated(symbol))
+            !declarations.literal_bindings.contains(&symbol) && (!declares_itself(flags, SymbolFlags::Function | SymbolFlags::Class) || crate::identity::reassigned(scoping, symbol))
         };
         // A built-in's name written into a binding that may hold a prototype.
         let redirected = declarations.built_in_writes.iter().filter(|(symbol, _)| may_hold_prototype(**symbol)).map(|(_, at)| *at).min();
@@ -1047,7 +1047,7 @@ impl<'s> Module<'s> {
     /// its top or imports, by name, with its scope when the module has it.
     fn function_of(&self, id: &IdentifierReference<'_>) -> Option<(Option<String>, Option<ScopeId>)> {
         let symbol = self.symbol(id)?;
-        if self.scoping.symbol_is_mutated(symbol) {
+        if crate::identity::reassigned(self.scoping, symbol) {
             return None;
         }
         if self.sources.contains_key(&symbol) {
@@ -1252,8 +1252,9 @@ struct Declarations<'r> {
     /// decides once every function is declared, with the binding and the
     /// method's name.
     blind_calls: Vec<(SymbolId, &'r str, &'r CallExpression<'r>)>,
-    /// Whether each variable is never written (`symbol_is_mutated`, which
-    /// scans every reference), once known: 0 unknown, 1 unwritten, 2 written.
+    /// Whether each variable holds only its declaration's value
+    /// (`identity::reassigned`, which scans every reference), once known: 0
+    /// unknown, 1 unwritten, 2 written or declared again.
     unwritten: Vec<u8>,
     depth: usize,
 }
@@ -1358,7 +1359,7 @@ impl<'r> Declarations<'r> {
         }
         let known = &mut self.unwritten[symbol.index()];
         if *known == 0 {
-            *known = if self.scoping.symbol_is_mutated(symbol) { 2 } else { 1 };
+            *known = if crate::identity::reassigned(self.scoping, symbol) { 2 } else { 1 };
         }
         *known == 1
     }
@@ -1371,7 +1372,7 @@ impl<'r> Declarations<'r> {
         let scope = match call.arguments.first().and_then(|argument| argument.as_expression()).map(unwrap_type_assertions) {
             None => return true,
             Some(Expression::Identifier(id)) => super::symbol_of(self.scoping, id)
-                .filter(|symbol| !self.scoping.symbol_is_mutated(*symbol))
+                .filter(|symbol| !crate::identity::reassigned(self.scoping, *symbol))
                 .and_then(|symbol| self.functions.get(&symbol).copied()),
             Some(expression) => function_scope(expression),
         };
@@ -1537,7 +1538,7 @@ impl<'r> Declarations<'r> {
     /// while nothing reassigns it and it reads no `arguments`.
     fn parameter(&self, function: SymbolId, position: usize) -> Option<SymbolId> {
         let scope = *self.functions.get(&function)?;
-        if self.scoping.symbol_is_mutated(function) || self.uses_arguments.contains(&scope) {
+        if crate::identity::reassigned(self.scoping, function) || self.uses_arguments.contains(&scope) {
             return None;
         }
         *self.positional_params.get(&scope)?.get(position)?
@@ -1827,7 +1828,7 @@ impl<'r> Declarations<'r> {
         }
         let parameter = params.items.first().filter(|parameter| parameter.initializer.is_none())?;
         let BindingPattern::BindingIdentifier(id) = &parameter.pattern else { return None };
-        let symbol = id.symbol_id.get().filter(|symbol| !self.scoping.symbol_is_mutated(*symbol))?;
+        let symbol = id.symbol_id.get().filter(|symbol| !crate::identity::reassigned(self.scoping, *symbol))?;
         let returned = |value: Option<&Expression<'_>>| match value.map(unwrap_type_assertions) {
             None | Some(Expression::ObjectExpression(_) | Expression::ArrayExpression(_)) => true,
             Some(Expression::Identifier(returned)) => self.symbol(returned) == Some(symbol),
@@ -2498,7 +2499,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
             _ => return,
         };
         let (Some(symbol), Some(body)) = (id.and_then(|id| id.symbol_id.get()), body) else { return };
-        if !self.scoping.symbol_is_mutated(symbol) && every_return(body, &|value| value.is_none_or(|value| self.primitive_by(value, false))) {
+        if !crate::identity::reassigned(self.scoping, symbol) && every_return(body, &|value| value.is_none_or(|value| self.primitive_by(value, false))) {
             self.primitive_functions.insert(symbol);
         }
     }
@@ -2508,7 +2509,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
             None => Base::None,
             Some(base) if self.react.names(self.scoping, base, &["Component", "PureComponent"], true) => Base::React,
             Some(Expression::Identifier(id)) => Base::Other(self.symbol(id).filter(|symbol| {
-                self.scoping.symbol_scope_id(*symbol) == self.scoping.root_scope_id() && !self.scoping.symbol_is_mutated(*symbol)
+                self.scoping.symbol_scope_id(*symbol) == self.scoping.root_scope_id() && !crate::identity::reassigned(self.scoping, *symbol)
             }).map(|_| id.name.to_string())),
             Some(_) => Base::Other(None),
         };
@@ -2860,7 +2861,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
                     if let Expression::ClassExpression(class) = init {
                         self.class_bindings.insert(symbol, class.span.start);
                     }
-                    let constant = !self.scoping.symbol_is_mutated(symbol);
+                    let constant = !crate::identity::reassigned(self.scoping, symbol);
                     // React's `useRef` and `createRef` give a fresh `{ current }`.
                     let literal = matches!(init, Expression::ObjectExpression(_) | Expression::ClassExpression(_))
                         || function_scope(init).is_some()
@@ -2872,7 +2873,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
                     if constant && self.primitive(init) {
                         self.primitive_consts.insert(symbol);
                     }
-                    if constant && self.numeric(init) {
+                    if constant && self.numeric(init) && self.scoping.symbol_flags(symbol).contains(SymbolFlags::ConstVariable) {
                         self.number_consts.insert(symbol);
                     }
                     if let Some(string) = super::static_string(init).filter(|_| constant) {
@@ -3220,7 +3221,7 @@ impl<'a> Walk<'_, '_, 'a> {
 
     /// Whether `id` names one of `among`, which nothing reassigns.
     fn unchanged(&self, id: &IdentifierReference<'_>, among: &FxHashSet<SymbolId>) -> bool {
-        self.module.symbol(id).is_some_and(|symbol| among.contains(&symbol) && !self.module.scoping.symbol_is_mutated(symbol))
+        self.module.symbol(id).is_some_and(|symbol| among.contains(&symbol) && !crate::identity::reassigned(self.module.scoping, symbol))
     }
 
     /// An element of the caller's type at `at`, which `value` reaches, hands
@@ -3293,7 +3294,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 // any further arguments.
                 None if SCHEDULING_GLOBALS.contains(&id.name.as_str()) => Callee::PassThrough { calls: &[0] },
                 None => Callee::Unknown,
-                Some(symbol) if module.scoping.symbol_is_mutated(symbol) => Callee::Unknown,
+                Some(symbol) if crate::identity::reassigned(module.scoping, symbol) => Callee::Unknown,
                 Some(_) if module.react(id) => module.react_name(id).map_or(Callee::Unknown, react_function),
                 Some(symbol) if module.setters.contains_key(&symbol) => Callee::State(module.setters[&symbol].clone()),
                 Some(symbol) if module.slot_renders.contains(&symbol) => Callee::PassThrough { calls: &[] },
@@ -4037,7 +4038,7 @@ impl<'a> Walk<'_, '_, 'a> {
             return false;
         };
         let Some(symbol) = self.module.symbol(id) else { return false };
-        !self.module.scoping.symbol_is_mutated(symbol)
+        !crate::identity::reassigned(self.module.scoping, symbol)
             && object.properties.iter().any(|property| {
                 !property.computed
                     && property.key.static_name().is_some_and(|key| key == "children")
@@ -4481,7 +4482,7 @@ impl<'a> Visit<'a> for Walk<'_, '_, 'a> {
         // see the state; `setState`'s updater sees the state and the props.
         let (states, calls): (Option<Vec<SymbolId>>, &[usize]) = match unwrap_type_assertions(&call.callee) {
             Expression::Identifier(id) => match self.module.symbol(id) {
-                Some(symbol) if self.module.setters.contains_key(&symbol) && !self.module.scoping.symbol_is_mutated(symbol) => {
+                Some(symbol) if self.module.setters.contains_key(&symbol) && !crate::identity::reassigned(self.module.scoping, symbol) => {
                     (Some(self.module.setters[&symbol].clone()), &[0])
                 }
                 _ => (None, &[]),

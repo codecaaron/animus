@@ -377,6 +377,16 @@ fn default_export(
     None
 }
 
+/// Whether `symbol` may hold anything but what its one declaration gives
+/// it: written, or declared as a runtime value more than once
+/// (`var p = {}; var p = q`, whose later initializer is no write). A type,
+/// an ambient declaration or an import sharing its name gives it nothing.
+pub(crate) fn reassigned(scoping: &Scoping, symbol: SymbolId) -> bool {
+    use oxc::semantic::SymbolFlags;
+    let runtime = |flags: SymbolFlags| flags.is_value() && !flags.is_ambient() && !flags.contains(SymbolFlags::Import);
+    scoping.symbol_is_mutated(symbol) || scoping.symbol_redeclarations(symbol).iter().filter(|declaration| runtime(declaration.flags)).count() > 1
+}
+
 /// Whether `symbol` is a runtime value: a symbol's flags union its merged
 /// declarations, and it is one when any one of them is a runtime value
 /// declaration rather than an ambient one.

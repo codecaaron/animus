@@ -102,7 +102,7 @@ impl AssignSources<'_, '_> {
             | Expression::ArrowFunctionExpression(_) => true,
             Expression::Identifier(id) => {
                 let Some(symbol) = self.scoping.get_root_binding(id.name) else { return false };
-                !self.scoping.symbol_is_mutated(symbol) && self.declared_inert(id.name.as_str())
+                !crate::identity::reassigned(self.scoping, symbol) && self.declared_inert(id.name.as_str())
             }
             _ => false,
         }
