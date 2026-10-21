@@ -14788,6 +14788,9 @@ const Render = ({ children }) => { document.body.onclick = t; return <div>{child
             // literal that holds a callable under one, may redirect it.
             ("const w = document.defaultView;\nw.Math = { max: pad };\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const t = top;\nt.Math = pad;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const Render = ({ children, rows }) => { rows.map(top); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, rows }) => { rows.map(parent); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, rows }) => { rows.map(frames); return <div>{children}</div>; };", "", "", true),
             ("Object.assign(document.defaultView, { Math: { max: pad } });\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const Render = ({ children }) => { document.body.model = { Map: pad }; return <div>{children}</div>; };", "", "", true),
             ("const w = document.defaultView;\nw.title = pad;\ndocument.body.model = { Date: 'x', Map: 1 };\nconst Render = ({ children }) => <div>{children}</div>;", "", "", false),

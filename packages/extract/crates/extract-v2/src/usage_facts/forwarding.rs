@@ -351,7 +351,8 @@ fn trusted_global(name: &str) -> bool {
 }
 
 /// The names of the global object: a trusted global is a member of it.
-const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
+/// `top`, `parent` and `frames` name it too when the page is in no frame.
+const GLOBAL_OBJECTS: [&str; 7] = ["globalThis", "window", "self", "global", "top", "parent", "frames"];
 
 /// What one module's walk records.
 #[derive(Default)]
