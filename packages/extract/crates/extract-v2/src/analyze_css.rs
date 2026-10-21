@@ -6162,6 +6162,31 @@ fn bounded_prop_tags(
         }
         declarations
     };
+    // The modules code usage cannot follow may reach whole: each one loaded
+    // at runtime, and each namespace imported and used other than to read a
+    // member by name (an alias, a member path, an export of it:
+    // `written_namespaces`), or exported as a value (`export * as sub`,
+    // `export { ns }`), which any importer may use so. Code given the
+    // namespace may also set a component's `defaultProps`, its `as` among
+    // them.
+    let opened_modules: OnceCell<Vec<String>> = OnceCell::new();
+    let opened_module_list = || {
+        let mut opened = Vec::new();
+        for (path, ff) in files {
+            for load in &ff.module_loads {
+                opened.extend(loaded_modules(path, load, files, inputs).into_iter().cloned());
+            }
+            let let_go = ff.namespace_imports.iter().filter(|(namespace, _)| {
+                ff.value_escapes.iter().any(|escaped| escaped == *namespace) || ff.written_namespaces.contains_key(*namespace)
+            });
+            for source in let_go.map(|(_, source)| source).chain(ff.namespace_exports.values()) {
+                opened.extend(resolve_import_source(path, source, files, inputs));
+            }
+        }
+        opened.sort();
+        opened.dedup();
+        opened
+    };
     let mut bounded: FxHashMap<(String, String, String), bool> = FxHashMap::default();
     let mut renders_bounded = |module: &String, function: &String, prop: &String| -> bool {
         let target = (module.clone(), function.clone());
@@ -6175,21 +6200,10 @@ fn bounded_prop_tags(
         if cloned.iter().any(|cloned| *cloned == prop) {
             return false;
         }
-        // A module loaded at runtime hands its exports to code usage cannot
-        // follow: the declaring module, or one that re-exports from it. So
-        // does a namespace of either let go as a value.
-        for (path, ff) in files {
-            for load in &ff.module_loads {
-                if loaded_modules(path, load, files, inputs).into_iter().any(|loaded| reexports_from(loaded, module)) {
-                    return false;
-                }
-            }
-            for (namespace, source) in &ff.namespace_imports {
-                let let_go = ff.value_escapes.iter().any(|escaped| escaped == namespace);
-                if let_go && resolve_import_source(path, source, files, inputs).is_some_and(|found| reexports_from(&found, module)) {
-                    return false;
-                }
-            }
+        // An opened module hands its exports, and those of every module it
+        // re-exports from, to code usage cannot follow.
+        if opened_modules.get_or_init(opened_module_list).iter().any(|opened| reexports_from(opened, module)) {
+            return false;
         }
         // An element of it handed to code outside the analysis may be cloned
         // with any prop.
@@ -10683,9 +10697,9 @@ fn run_with_system_floor(
     for (id, at) in delivered_ids {
         escape(&mut escaped_ids, escape_reasons.as_mut(), [id], || delivered_tags[at].opening());
     }
-    // A direct `eval` can load any module and render what it exports with
-    // any props.
-    if let Some((file, _)) = files.iter().find(|(_, ff)| ff.direct_eval) {
+    // Code from a string (`eval`, `Function`, a timer given a string) can
+    // load any module and render what it exports with any props.
+    if let Some((file, _)) = files.iter().find(|(_, ff)| ff.direct_eval || ff.dynamic_code.is_some()) {
         escape(&mut escaped_ids, escape_reasons.as_mut(), evaluated_ids.iter().cloned(), || SlotOpening::rule("direct-eval").in_file(file));
     }
     // A family built through `Object.assign` is followed only while no
@@ -14766,6 +14780,27 @@ const Render = ({ children }) => { document.body.onclick = t; return <div>{child
             ("Object.assign(document.defaultView, { Math: { max: pad } });\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const Render = ({ children }) => { document.body.model = { Map: pad }; return <div>{children}</div>; };", "", "", true),
             ("const w = document.defaultView;\nw.title = pad;\ndocument.body.model = { Date: 'x', Map: 1 };\nconst Render = ({ children }) => <div>{children}</div>;", "", "", false),
+            // The global React is trusted as an import is, and so is let go
+            // as one; an object may reach code that writes into it by any
+            // trusted name, React's `Children` methods and the trusted
+            // globals included; a binding reassigned, or a `this` its method
+            // may be called with, may be the global object.
+            ("const C = React.Children;\nC.only = pad;\nconst Render = ({ children }) => <div>{React.Children.only(children)}</div>;", "", "", true),
+            ("const d = React.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;\nd.H = { useState: pad };\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const d = window.React.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;\nd.H = { useState: pad };\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("import * as R from 'react';\nimport { bridge } from './other';\nbridge.map(R.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE);\nconst Render = ({ children }) => <div>{children}</div>;", "", "export const bridge = { map(d) { d.H = {}; } };\n", true),
+            ("const Render = ({ children }) => <div>{[1].map(String).concat(Object.keys(document.body.dataset).filter(Boolean))}{children}</div>;", "", "", false),
+            ("const C = window.React.Children;\nC.only = pad;\nconst Render = ({ children }) => <div>{React.Children.only(children)}</div>;", "", "", true),
+            // A member of `Children` the walk does not list is unknown code.
+            ("import * as R from 'react';\nconst Render = ({ children }) => <div>{R.Children.fake(children)}</div>;", "", "", true),
+            ("const Render = ({ children }) => <div>{React.Children.only(children)}</div>;", "", "", false),
+            ("import * as R from 'react';\nimport { bridge } from './other';\nbridge.map(R.Children);\nconst Render = ({ children }) => <div>{R.Children.only(children)}</div>;", "", "export const bridge = { map(C) { C.only = (c) => c; } };\n", true),
+            ("import * as R from 'react';\nconst patch = (x, C) => { C.only = pad; };\nsetTimeout(patch, 0, 1, R.Children);\nconst Render = ({ children }) => <div>{R.Children.only(children)}</div>;", "", "", true),
+            ("const w = document.defaultView;\nw.React = { Children: { only: pad } };\nconst Render = ({ children }) => <div>{React.Children.only(children)}</div>;", "", "", true),
+            ("Object.assign(document.defaultView, { React: { Children: { toArray: pad } } });\nconst Render = ({ children }) => <div>{React.Children.toArray(children)}</div>;", "", "", true),
+            ("function w() {}\nw = document.defaultView;\nw.Array = { isArray: pad };\nconst Render = ({ children }) => <div>{(Array.isArray(children), children)}</div>;", "", "", true),
+            ("class w {}\nw = document.defaultView;\nw.Array = { isArray: pad };\nconst Render = ({ children }) => <div>{(Array.isArray(children), children)}</div>;", "", "", true),
+            ("class W {\n  patch() { this.Array = { isArray: pad }; }\n}\nconst w = new W();\nw.patch.call(document.defaultView);\nconst Render = ({ children }) => <div>{(Array.isArray(children), children)}</div>;", "", "", true),
             // A member read may be any object, React's own dispatcher among
             // them (`ReactCurrentDispatcher.current = { useState }`).
             ("const Render = ({ children }) => { const r = useRef(null); r.current.typing.current = { useState: r ? pad : 0 }; return <div>{children}</div>; };", "", "", true),
@@ -17011,8 +17046,19 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         // The function module's additions, the app, any further files and the
         // slots left.
         type Case<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
-        let wrap = [("wrap.tsx", "export const Wrap = ({ as: Tag = 'span', ...rest }) => <Tag {...rest} />;\n")];
-        let cases: [Case; 30] = [
+        let wrap_tsx = ("wrap.tsx", "export const Wrap = ({ as: Tag = 'span', ...rest }) => <Tag {...rest} />;\n");
+        let wrap = [wrap_tsx];
+        let wrap_star_as = [wrap_tsx, ("barrel.ts", "export * as sub from './wrap';\n")];
+        let wrap_export = [wrap_tsx, ("barrel.ts", "import * as ns from './wrap';\nexport { ns };\n")];
+        let wrap_default = [wrap_tsx, ("barrel.ts", "import * as ns from './wrap';\nexport { ns as default };\n")];
+        let wrap_app = "() => <><Outer /><Parts.Root /><Wrap as=\"a\" /><Box p={8} /></>;\nimport { Wrap } from './wrap';\n";
+        let alias = format!("{wrap_app}import * as ns from './wrap';\nconst alias = ns;\nconsume(alias)");
+        let nested = format!("{wrap_app}import * as ns from './barrel';\nconsume(ns.sub)");
+        let named = format!("{wrap_app}import {{ sub }} from './barrel';\nconsume(sub)");
+        let exported = format!("{wrap_app}import {{ ns }} from './barrel';\nconsume(ns)");
+        let default = format!("{wrap_app}import ns from './barrel';\nconsume(ns)");
+        let component = format!("{wrap_app}consume(Wrap)");
+        let cases: [Case; 36] = [
             ("", "() => <><Outer /><Parts.Root><div /></Parts.Root><Box p={8} /></>", &[], &[]),
             ("", "() => <><Outer as=\"span\" /><Parts.Root as=\"section\" /><Box p={8} /></>", &[], &[]),
             ("", "({ X }) => <><Outer as={X} /><Box p={8} /></>", &[], &["p"]),
@@ -17052,6 +17098,15 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             ("", "() => <><Outer /><Parts.Root /><Box p={8} /></>;\nimport * as ns from './el';\nconsume(ns.Parts)", &[], &["p"]),
             ("", "() => <><Outer /><Parts.Root /><Wrap as=\"a\" /><Box p={8} /></>;\nimport { Wrap } from './wrap'", &wrap, &[]),
             ("", "() => <><Outer /><Parts.Root /><Wrap as=\"a\" /><Box p={8} /></>;\nimport { Wrap } from './wrap';\nimport * as ns from './wrap';\nconsume(ns)", &wrap, &["p"]),
+            // Through an alias, a member path, or a namespace exported named
+            // or as the default, and so the component itself, whose
+            // `defaultProps` code outside may set.
+            ("", &alias, &wrap, &["p"]),
+            ("", &nested, &wrap_star_as, &["p"]),
+            ("", &named, &wrap_star_as, &["p"]),
+            ("", &exported, &wrap_export, &["p"]),
+            ("", &default, &wrap_default, &["p"]),
+            ("", &component, &wrap, &["p"]),
             // A default export, however spelled.
             ("export { El as default };\n", both, &[], &["p"]),
             ("", both, &barrel("export { El as default } from './el';\n"), &["p"]),
@@ -18716,6 +18771,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("import { Slot } from 'ui-lib';\nimport { createElement } from 'react';\nconst Poly = ({ as, ...rest }) => createElement(as ?? 'span', rest, <R size=\"sm\" />);\nexport const S = () => <Poly as={Slot} />;", &every),
             ("import { Slot } from 'ui-lib';\nconst Poly = ({ as: Tag = 'span' }) => <Tag icon={<R size=\"sm\" />} />;\nexport const S = () => <Poly as={Slot} />;", &every),
             ("const Poly = ({ as: Tag = 'span', ...rest }) => <Tag {...rest}><R size=\"sm\" /></Tag>;\nexport const S = () => <Poly as=\"div\" />;\neval('0');", &every),
+            // So do the children and config a clone of such an element adds.
+            ("import { Slot } from 'ui-lib';\nimport { cloneElement } from 'react';\nconst Poly = ({ as: Tag = 'span' }) => cloneElement(<Tag />, {}, <R size=\"sm\" />);\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("import { Slot } from 'ui-lib';\nimport { cloneElement } from 'react';\nconst Poly = ({ as: Tag = 'span' }) => cloneElement(<Tag />, { icon: <R size=\"sm\" /> });\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("import { Slot } from 'ui-lib';\nimport { cloneElement, createElement } from 'react';\nconst Poly = ({ as }) => cloneElement(createElement(as ?? 'span'), {}, <R size=\"sm\" />);\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("import { Slot } from 'ui-lib';\nimport { renderAsChild } from '@animus-ui/system';\nconst Poly = ({ as: Tag = 'span' }) => renderAsChild(<Tag />, { icon: <R size=\"sm\" /> });\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("import { cloneElement } from 'react';\nexport const S = () => cloneElement(<section />, {}, <R size=\"sm\" />);", &pruned),
             ("const W = (p) => <R {...p} />;\nexport const S = () => <W size=\"sm\" />;", &pruned),
             ("function Card({ children }) { return <section>{children}</section>; }\nexport const S = () => <Card><R size=\"sm\" /></Card>;", &pruned),
             ("const Box = ds.styles({}).asElement('section');\nexport const S = () => <Box><R size=\"sm\" /></Box>;", &pruned),
@@ -18727,8 +18788,40 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         // A direct `eval` in any module can load any module and render what
         // it exports with any props.
         let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
-        let evil = "export const run = () => eval('0');\n";
-        assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app), ("evil.tsx", evil)]), &every);
+        // So does any other way to run code from a string, a timer given
+        // one among them.
+        for (evil, want) in [
+            ("export const run = () => eval('0');\n", &every),
+            ("export const run = (s) => (0, eval)(s);\n", &every),
+            ("const e = eval;\nexport const run = (s) => e(s);\n", &every),
+            ("export const run = (s) => window.eval(s);\n", &every),
+            ("export const run = (s) => Function(s)();\n", &every),
+            ("export const run = (s) => new Function(s)();\n", &every),
+            ("export const run = (s) => setTimeout(s, 0);\n", &every),
+            ("export const run = (s) => window.setInterval(s, 0);\n", &every),
+            ("export const run = (s) => globalThis.setTimeout(s, 0);\n", &every),
+            ("export const run = () => setTimeout('0', 0);\n", &every),
+            ("let tick = () => {};\nexport const run = (s) => { tick = s; setTimeout(tick, 0); };\n", &every),
+            ("export const run = () => setTimeout(() => {}, 0);\n", &pruned),
+            ("function tick() {}\nexport const run = () => setTimeout(tick, 0);\n", &pruned),
+            ("const later = setTimeout;\nexport const run = (s) => later(s, 0);\n", &every),
+            ("export const run = (s) => setTimeout.call(null, s, 0);\n", &every),
+            ("export const run = (s) => [s].forEach(window.setInterval);\n", &every),
+            ("export const run = () => typeof setTimeout === 'function' && setTimeout(() => {}, 0);\n", &pruned),
+            ("export const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\n", &pruned),
+            ("export const wait = (ms) => new Promise((resolve, reject, more) => setTimeout(more, ms));\n", &every),
+            ("const later = (fn, ms) => setTimeout(fn, ms);\nexport const run = () => { later(() => {}, 1); later(function () {}, 2); };\n", &pruned),
+            ("const later = (fn, ms) => setTimeout(fn, ms);\nexport const run = (s) => { later(() => {}, 1); later(s, 2); };\n", &every),
+            ("const later = (fn, ms) => setTimeout(fn, ms);\nlater(() => {}, 1);\nconsume(later);\n", &every),
+            ("const later = (fn, ms) => { fn = String(fn); setTimeout(fn, ms); };\nlater(() => {}, 1);\n", &every),
+            ("export default function later(fn) { setTimeout(fn, 0); }\nlater(() => {});\n", &every),
+            ("function later(fn) { setTimeout(fn, 0); }\nlater(() => {});\nexport { later };\n", &every),
+            ("const later = (a, fn) => setTimeout(fn, 0);\nexport const run = (pair) => later(...pair, () => {});\n", &every),
+            ("const Promise = (run) => run(globalThis.code);\nexport const wait = () => new Promise((resolve) => setTimeout(resolve, 0));\n", &every),
+            ("function later(fn) { arguments[0] = globalThis.code; setTimeout(fn, 0); }\nlater(() => {});\n", &every),
+        ] {
+            assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app), ("evil.tsx", evil)]), want, "{evil}");
+        }
         let app = "import { R } from './r';\nimport { Family } from './receivers';\n\
                    export const S = () => <Family.Root><R size=\"sm\" active /></Family.Root>;\n";
         for (receivers, want) in [

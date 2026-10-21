@@ -2614,7 +2614,16 @@ fn style_object_use(
 ///
 /// It calls `eval` directly, reading and writing any binding by name, only
 /// where a call's callee is the unbound `eval` itself (`eval(…)`,
-/// `(eval)(…)`); any other call of it runs in the global scope.
+/// `(eval)(…)`); any other call of it runs in the global scope. A browser
+/// timer (`setTimeout`, `setInterval`, unbound or off the global object)
+/// runs a first argument that is a string as code: a timer read as a value,
+/// or called with a first argument not provably a function, counts, as its
+/// bare name under `typeof` or `instanceof` does not. A function or arrow
+/// written there is one, and so is a
+/// binding never reassigned that is declared to one, that a `Promise`
+/// executor gets (`resolve`, `reject`), or that is a parameter of a
+/// function every use of which calls it with a function in its place (an
+/// export is a use; a module that reads `arguments` proves none).
 pub(crate) struct StringCode {
     pub(crate) reads: Option<&'static str>,
     pub(crate) direct_eval: bool,
@@ -2622,48 +2631,193 @@ pub(crate) struct StringCode {
 
 /// How `program` runs code from strings: see `StringCode`.
 pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> StringCode {
-    use oxc::ast::ast::{BinaryExpression, CallExpression, Expression, IdentifierReference, StaticMemberExpression, UnaryExpression};
+    use oxc::ast::ast::{BinaryExpression, CallExpression, Expression, FormalParameters, IdentifierReference, StaticMemberExpression, UnaryExpression};
     use oxc::ast_visit::Visit;
+    use oxc::semantic::SymbolId;
     use oxc::syntax::operator::{BinaryOperator, UnaryOperator};
     const RUNNERS: [&str; 2] = ["eval", "Function"];
+    const TIMERS: [&str; 2] = ["setTimeout", "setInterval"];
     const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
+    const STRING_TIMER: &str = "lets a timer run what may be a string";
     struct Reads<'s> {
         scoping: &'s oxc::semantic::Scoping,
         found: Option<&'static str>,
         direct_eval: bool,
+        /// Each timer call's first argument.
+        timers: Vec<Argument>,
+        /// Bindings declared to a function, and `Promise` executors'
+        /// parameters.
+        functions: FxHashSet<SymbolId>,
+        /// Each parameter of a function a binding names, by that binding and
+        /// position.
+        parameters: FxHashMap<SymbolId, (SymbolId, usize)>,
+        /// The arguments of each call of a binding, by position.
+        calls: FxHashMap<SymbolId, Vec<Vec<Argument>>>,
+        /// Bindings an export declaration declares, which code outside may
+        /// call with anything.
+        exported: FxHashSet<SymbolId>,
+        /// Whether the module reads `arguments`, which in a script can
+        /// change a parameter.
+        arguments: bool,
+    }
+    /// An argument as a timer's first would read it.
+    enum Argument {
+        Function,
+        Binding(SymbolId),
+        Other,
+    }
+    impl Argument {
+        fn is_function(&self, functions: &FxHashSet<SymbolId>) -> bool {
+            match self {
+                Argument::Function => true,
+                Argument::Binding(symbol) => functions.contains(symbol),
+                Argument::Other => false,
+            }
+        }
+    }
+    /// The parameters of a function or arrow written as `expression`.
+    fn function_params<'b>(expression: &'b Expression<'_>) -> Option<&'b FormalParameters<'b>> {
+        match expression.get_inner_expression() {
+            Expression::ArrowFunctionExpression(arrow) => Some(&arrow.params),
+            Expression::FunctionExpression(function) => Some(&function.params),
+            _ => None,
+        }
+    }
+    /// Each parameter that is a plain binding, with its position.
+    fn plain_parameters<'b>(params: &'b FormalParameters<'_>) -> impl Iterator<Item = (usize, SymbolId)> + 'b {
+        params.items.iter().enumerate().filter_map(|(at, parameter)| match &parameter.pattern {
+            oxc::ast::ast::BindingPattern::BindingIdentifier(id) => id.symbol_id.get().map(|symbol| (at, symbol)),
+            _ => None,
+        })
     }
     impl Reads<'_> {
         fn unbound(&self, id: &IdentifierReference<'_>) -> bool {
-            id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none())
+            symbol_of(self.scoping, id).is_none()
         }
-        /// The bare unbound `eval` or `Function`, which `typeof` and
+        /// The bare unbound name of a runner or a timer, which `typeof` and
         /// `instanceof` only inspect.
         fn bare_runner(&self, expr: &Expression<'_>) -> bool {
             matches!(expr.get_inner_expression(), Expression::Identifier(id)
-                if RUNNERS.contains(&id.name.as_str()) && self.unbound(id))
+                if (RUNNERS.contains(&id.name.as_str()) || TIMERS.contains(&id.name.as_str())) && self.unbound(id))
         }
         fn record(&mut self, name: &str) {
-            self.found.get_or_insert(if name == "eval" { "reads eval" } else { "reads Function" });
+            self.found.get_or_insert(match name {
+                "eval" => "reads eval",
+                "Function" => "reads Function",
+                _ => STRING_TIMER,
+            });
+        }
+        fn global_object(&self, expression: &Expression<'_>) -> bool {
+            matches!(expression.get_inner_expression(), Expression::Identifier(object)
+                if GLOBAL_OBJECTS.contains(&object.name.as_str()) && self.unbound(object))
+        }
+        fn argument(&self, argument: &oxc::ast::ast::Argument<'_>) -> Argument {
+            match argument.as_expression().map(Expression::get_inner_expression) {
+                Some(Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)) => Argument::Function,
+                Some(Expression::Identifier(id)) => symbol_of(self.scoping, id).map_or(Argument::Other, Argument::Binding),
+                _ => Argument::Other,
+            }
+        }
+        /// Records `symbol` as declared to a function with `params`.
+        fn function(&mut self, symbol: SymbolId, params: &FormalParameters<'_>) {
+            self.functions.insert(symbol);
+            self.parameters.extend(plain_parameters(params).map(|(at, parameter)| (parameter, (symbol, at))));
         }
     }
     impl<'a> Visit<'a> for Reads<'_> {
         fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
             let value = id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_value());
-            if value && RUNNERS.contains(&id.name.as_str()) && self.unbound(id) {
-                self.record(&id.name);
+            let name = id.name.as_str();
+            if value && (RUNNERS.contains(&name) || TIMERS.contains(&name)) && self.unbound(id) {
+                self.record(name);
             }
+            self.arguments |= name == "arguments";
         }
         fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
             if matches!(call.callee.get_inner_expression(), Expression::Identifier(id) if id.name == "eval" && self.unbound(id)) {
                 self.direct_eval = true;
             }
+            // A timer called by name runs its first argument; read any other
+            // way, it may run a string.
+            let timer = match call.callee.get_inner_expression() {
+                Expression::Identifier(id) => TIMERS.contains(&id.name.as_str()) && self.unbound(id),
+                Expression::StaticMemberExpression(member) => {
+                    TIMERS.contains(&member.property.name.as_str()) && self.global_object(&member.object)
+                }
+                _ => false,
+            };
+            if timer {
+                let first = call.arguments.first().map_or(Argument::Other, |argument| self.argument(argument));
+                self.timers.push(first);
+                for argument in &call.arguments {
+                    self.visit_argument(argument);
+                }
+                return;
+            }
+            if let Expression::Identifier(id) = &call.callee {
+                if let Some(symbol) = symbol_of(self.scoping, id) {
+                    // A spread moves every argument after it.
+                    let mut spread = false;
+                    let arguments = call
+                        .arguments
+                        .iter()
+                        .map(|argument| {
+                            spread |= argument.is_spread();
+                            if spread { Argument::Other } else { self.argument(argument) }
+                        })
+                        .collect();
+                    self.calls.entry(symbol).or_default().push(arguments);
+                }
+            }
             oxc::ast_visit::walk::walk_call_expression(self, call);
         }
+        fn visit_new_expression(&mut self, new: &oxc::ast::ast::NewExpression<'a>) {
+            let promise = matches!(new.callee.get_inner_expression(), Expression::Identifier(id) if id.name == "Promise" && self.unbound(id));
+            if let (true, Some(params)) = (promise, new.arguments.first().and_then(|argument| argument.as_expression()).and_then(function_params)) {
+                self.functions.extend(plain_parameters(params).filter(|(at, _)| *at < 2).map(|(_, symbol)| symbol));
+            }
+            oxc::ast_visit::walk::walk_new_expression(self, new);
+        }
+        fn visit_export_declaration(&mut self, export: &oxc::ast::ast::ExportDeclaration<'a>) {
+            match &export.declaration {
+                oxc::ast::ast::Declaration::VariableDeclaration(declaration) => {
+                    for declarator in &declaration.declarations {
+                        if let oxc::ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id {
+                            self.exported.extend(id.symbol_id.get());
+                        }
+                    }
+                }
+                oxc::ast::ast::Declaration::FunctionDeclaration(function) => {
+                    self.exported.extend(function.id.as_ref().and_then(|id| id.symbol_id.get()));
+                }
+                _ => {}
+            }
+            oxc::ast_visit::walk::walk_export_declaration(self, export);
+        }
+        fn visit_export_default_declaration(&mut self, export: &oxc::ast::ast::ExportDefaultDeclaration<'a>) {
+            if let oxc::ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(function) = &export.declaration {
+                self.exported.extend(function.id.as_ref().and_then(|id| id.symbol_id.get()));
+            }
+            oxc::ast_visit::walk::walk_export_default_declaration(self, export);
+        }
+        fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
+            if let Some(symbol) = function.id.as_ref().and_then(|id| id.symbol_id.get()) {
+                self.function(symbol, &function.params);
+            }
+            oxc::ast_visit::walk::walk_function(self, function, flags);
+        }
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            if let (oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init)) = (&declarator.id, &declarator.init) {
+                if let (Some(symbol), Some(params)) = (id.symbol_id.get(), function_params(init)) {
+                    self.function(symbol, params);
+                }
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
         fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
-            let global = matches!(member.object.get_inner_expression(), Expression::Identifier(object)
-                if GLOBAL_OBJECTS.contains(&object.name.as_str()) && self.unbound(object));
-            if global && RUNNERS.contains(&member.property.name.as_str()) {
-                self.record(&member.property.name);
+            let name = member.property.name.as_str();
+            if (RUNNERS.contains(&name) || TIMERS.contains(&name)) && self.global_object(&member.object) {
+                self.record(name);
             }
             oxc::ast_visit::walk::walk_static_member_expression(self, member);
         }
@@ -2681,8 +2835,45 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
             oxc::ast_visit::walk::walk_binary_expression(self, binary);
         }
     }
-    let mut reads = Reads { scoping, found: None, direct_eval: false };
+    let mut reads = Reads {
+        scoping,
+        found: None,
+        direct_eval: false,
+        timers: Vec::new(),
+        functions: FxHashSet::default(),
+        parameters: FxHashMap::default(),
+        calls: FxHashMap::default(),
+        exported: FxHashSet::default(),
+        arguments: false,
+    };
     reads.visit_program(program);
+    if reads.found.is_none() && reads.timers.iter().any(|first| !matches!(first, Argument::Function)) {
+        reads.functions.retain(|symbol| !scoping.symbol_is_mutated(*symbol));
+        // A parameter is a function once every use of its function calls it
+        // with one in its place; each added may prove another.
+        while !reads.arguments {
+            let proven: Vec<_> = reads
+                .parameters
+                .iter()
+                .filter(|(parameter, (binding, at))| {
+                    let calls = reads.calls.get(binding).map_or(&[][..], Vec::as_slice);
+                    !reads.functions.contains(*parameter)
+                        && !scoping.symbol_is_mutated(**parameter)
+                        && !reads.exported.contains(binding)
+                        && calls.len() == scoping.get_resolved_reference_ids(*binding).len()
+                        && calls.iter().all(|arguments| arguments.get(*at).is_some_and(|argument| argument.is_function(&reads.functions)))
+                })
+                .map(|(parameter, _)| *parameter)
+                .collect();
+            if proven.is_empty() {
+                break;
+            }
+            reads.functions.extend(proven);
+        }
+        if reads.timers.iter().any(|first| !first.is_function(&reads.functions)) {
+            reads.found = Some(STRING_TIMER);
+        }
+    }
     StringCode { reads: reads.found, direct_eval: reads.direct_eval }
 }
 

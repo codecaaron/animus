@@ -732,8 +732,11 @@ impl<'s> Module<'s> {
             .built_in_writes
             .iter()
             .filter(|(symbol, _)| {
+                // A function or class declaration names itself only while
+                // nothing reassigns it.
                 !declarations.literal_bindings.contains(symbol)
-                    && !scoping.symbol_flags(**symbol).intersects(SymbolFlags::Function | SymbolFlags::Class)
+                    && (!scoping.symbol_flags(**symbol).intersects(SymbolFlags::Function | SymbolFlags::Class)
+                        || scoping.symbol_is_mutated(**symbol))
             })
             .map(|(_, at)| *at)
             .min();
@@ -1388,7 +1391,7 @@ impl<'r> Declarations<'r> {
             // built-in, except by a key the walk cannot read into an object
             // the module may not own.
             if !self.stores_no_trusted_callable(span) || (computed && !self.unshared(object)) {
-                self.written_into(object, computed || name.is_some_and(|name| built_in_name(name) || trusted_global(name)));
+                self.written_into(object, computed || name.is_some_and(stored_name));
             }
             // Whatever it stores, a store by a static key into an object that
             // may be a prototype every props object inherits counts where a
@@ -1744,6 +1747,10 @@ impl<'r> Declarations<'r> {
         }
         if !self.owned(object) {
             self.patch(at, "unowned-write");
+        } else if let (true, Expression::ThisExpression(_)) = (built_in, unwrap_type_assertions(object)) {
+            // A method may be called with any `this` (`.call`, `.apply`,
+            // `.bind`, or read off and called), the global object included.
+            self.patch(at, "prototype-name-write");
         } else if let (true, Expression::Identifier(id)) = (built_in, unwrap_type_assertions(object)) {
             if let Some(symbol) = self.symbol(id) {
                 self.built_in_writes.entry(symbol).or_insert(at);
@@ -1833,8 +1840,13 @@ impl<'r> Declarations<'r> {
 
     /// Whether a trusted name, used itself as a value under `parent`, stays
     /// where the walk can see it: tested, compared, `typeof`, a base class,
-    /// or handed to a built-in array method, a global function or React.
-    fn harmless_value(&self, parent: Option<&AstKind<'r>>, span: Span) -> bool {
+    /// or handed to a built-in array method, a global function or React. An
+    /// `object` (the global object, React or React's `Children`) goes to an
+    /// array method only of an array a built-in builds: a method's name
+    /// says nothing of whose method it is, and the receiver may write into
+    /// it by a name the walk does not list. A function written into by a
+    /// trusted name is caught where it is written (`stored_name`).
+    fn harmless_value(&self, parent: Option<&AstKind<'r>>, span: Span, object: bool) -> bool {
         match parent {
             None => true,
             Some(AstKind::UnaryExpression(unary)) => matches!(unary.operator, UnaryOperator::Typeof | UnaryOperator::LogicalNot),
@@ -1849,8 +1861,10 @@ impl<'r> Declarations<'r> {
             Some(AstKind::Class(class)) => class.heritage.as_ref().is_some_and(|heritage| heritage.expression.span() == span),
             Some(AstKind::JSXOpeningElement(_) | AstKind::JSXClosingElement(_) | AstKind::JSXMemberExpression(_)) => true,
             Some(AstKind::CallExpression(call)) => match unwrap_type_assertions(&call.callee) {
+                // A read method of an array a built-in builds: a method's name
+                // alone says nothing of whose method it is.
                 Expression::StaticMemberExpression(member) => {
-                    ARRAY_READ_METHODS.contains(&member.property.name.as_str())
+                    (ARRAY_READ_METHODS.contains(&member.property.name.as_str()) && (!object || self.fresh_array(&member.object)))
                         || matches!(&member.object, Expression::Identifier(object) if self.symbol(object).is_some_and(|symbol| self.react_imports.contains(&symbol)))
                 }
                 Expression::Identifier(callee) => match self.symbol(callee) {
@@ -1890,14 +1904,18 @@ impl<'r> Declarations<'r> {
         // into unseen: only React's functions and classes are not objects
         // whose members redirect React.
         let (members, first, called, parent) = self.chain(id.span);
-        let react = self.symbol(id).is_some();
+        // The global `React` is React as an import is; off the global object
+        // (`window.React.Children`), any member of it is let go.
+        let react = self.symbol(id).is_some() || matches!(name, "React" | "ReactDOM");
         let let_go = match members {
             _ if called => false,
             0 => react || trusted_global(name),
             1 if !react => GLOBAL_OBJECTS.contains(&name) && first.is_none_or(trusted_global),
-            _ => react && first.is_none_or(|first| !react_value(first)),
+            _ if !react => GLOBAL_OBJECTS.contains(&name) && matches!(first, Some("React" | "ReactDOM")),
+            _ => first.is_none_or(|first| !react_value(first)),
         };
-        let_go && !self.harmless_value(parent, id.span)
+        let object = react || GLOBAL_OBJECTS.contains(&name);
+        let_go && !self.harmless_value(parent, id.span, object)
     }
 
 }
@@ -1982,13 +2000,23 @@ fn intrinsic(expression: &Expression<'_>, unbound: impl Fn(&IdentifierReference<
     }
 }
 
+/// Whether a member store of `name` may set what the walk trusts by name on
+/// an object it cannot see: a built-in's method or hook, a trusted global
+/// (an object that may be the global object holds it:
+/// `document.defaultView`), or a method of React's `Children`.
+fn stored_name(name: &str) -> bool {
+    built_in_name(name) || trusted_global(name) || REACT_CHILDREN_METHODS.contains(&name)
+}
+
+/// The methods of React's `Children`, which the walk trusts by name.
+const REACT_CHILDREN_METHODS: [&str; 5] = ["map", "forEach", "count", "only", "toArray"];
+
 /// Whether a store of `name` may redirect what the walk trusts by name: a
 /// built-in's method or hook, React's functions, a writer, a prototype, or
 /// a trusted global, which an object that may be the global object holds
-/// (`document.defaultView`).
+/// (`document.defaultView`), or a method of React's `Children`.
 fn trusted_name(name: &str) -> bool {
-    built_in_name(name)
-        || trusted_global(name)
+    stored_name(name)
         || !matches!(react_function(name), Callee::Unknown)
         || writer("Object", name)
         || writer("Reflect", name)
@@ -2753,6 +2781,24 @@ impl<'a> Walk<'_, '_, 'a> {
         }
     }
 
+    /// Whether `expression` is an element whose type may be the caller's
+    /// `as`: JSX named by it, or `createElement` of it.
+    fn of_caller_type(&self, expression: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(expression) {
+            Expression::JSXElement(element) => self.names_caller_type(&element.opening_element.name),
+            Expression::CallExpression(call) => {
+                self.creates_element(call)
+                    && call.arguments.first().and_then(|argument| argument.as_expression()).is_some_and(|kind| self.caller_type(kind) == Some(true))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a JSX tag is the component's own `as` input.
+    fn names_caller_type(&self, name: &JSXElementName<'_>) -> bool {
+        matches!(name, JSXElementName::IdentifierReference(id) if self.unchanged(id, &self.module.as_types))
+    }
+
     /// Whether `id` names one of `among`, which nothing reassigns.
     fn unchanged(&self, id: &IdentifierReference<'_>, among: &FxHashSet<SymbolId>) -> bool {
         self.module.symbol(id).is_some_and(|symbol| among.contains(&symbol) && !self.module.scoping.symbol_is_mutated(symbol))
@@ -2882,7 +2928,11 @@ impl<'a> Walk<'_, '_, 'a> {
                         }
                         _ => Callee::Unknown,
                     },
-                    _ if module.children(&member.object) => Callee::PassThrough { calls: &[1] },
+                    // React's `Children` methods the walk trusts by name;
+                    // any other member is unknown code.
+                    _ if module.children(&member.object) => {
+                        if REACT_CHILDREN_METHODS.contains(&name) { Callee::PassThrough { calls: &[1] } } else { Callee::Unknown }
+                    }
                     Expression::Identifier(object) if module.react_namespace(object) => react_function(name),
                     Expression::Identifier(object) if module.react(object) => Callee::Unknown,
                     Expression::Identifier(object) => match module.symbol(object) {
@@ -2946,6 +2996,14 @@ impl<'a> Walk<'_, '_, 'a> {
                 }
                 continue;
             };
+            // A clone of an element of the caller's type gets what the clone
+            // adds there, which no caller's site judges.
+            if position == 0 && self.clones(call) && Some(expression.span()) != current && self.of_caller_type(expression) {
+                if value.has_elements() {
+                    self.sink(call.span.start, None, &value.elements());
+                }
+                continue;
+            }
             if position == 0 && self.creates_element(call) {
                 if let Some(caller_as) = self.caller_type(expression) {
                     if caller_as {
@@ -3416,7 +3474,7 @@ impl<'a> Walk<'_, '_, 'a> {
             }
             return Place::Carry;
         }
-        if matches!(&opening.name, JSXElementName::IdentifierReference(id) if self.unchanged(id, &self.module.as_types)) {
+        if self.names_caller_type(&opening.name) {
             self.hands_on_as(element.span.start, value);
             return Place::Carry;
         }
