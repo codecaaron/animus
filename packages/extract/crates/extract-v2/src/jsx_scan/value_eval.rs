@@ -14,9 +14,12 @@ pub(crate) fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> Pro
         // A valueless attribute (`<Box disabled />`) is `true`.
         None => PropValueResult::Static(Value::Bool(true)),
 
-        Some(JSXAttributeValue::StringLiteral(lit)) => {
-            PropValueResult::Static(Value::String(lit.value.to_string()))
-        }
+        // An entity may spell a lone surrogate (`&#xD800;`), which has no
+        // static text (`eval::literal_string`).
+        Some(JSXAttributeValue::StringLiteral(lit)) => match crate::eval::literal_string(lit) {
+            Some(text) => PropValueResult::Static(Value::String(text.to_string())),
+            None => dynamic(DynamicExpressionKind::Other, lit.span),
+        },
 
         Some(JSXAttributeValue::ExpressionContainer(container)) => {
             if matches!(container.expression, JSXExpression::EmptyExpression(_)) {
@@ -25,37 +28,7 @@ pub(crate) fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> Pro
             // Runtime-erased TypeScript wrappers and parentheses hold the
             // same value.
             let expr = crate::chain_walk::unwrap_type_assertions(container.expression.to_expression());
-            match expr {
-                Expression::StringLiteral(lit) => {
-                    PropValueResult::Static(Value::String(lit.value.to_string()))
-                }
-                Expression::NumericLiteral(lit) => PropValueResult::Static(make_json_number(lit.value)),
-                Expression::BooleanLiteral(lit) => PropValueResult::Static(Value::Bool(lit.value)),
-                Expression::NullLiteral(_) => PropValueResult::Static(Value::Null),
-                Expression::UnaryExpression(unary) => {
-                    if unary.operator == oxc::syntax::operator::UnaryOperator::UnaryNegation {
-                        if let Expression::NumericLiteral(lit) = &unary.argument {
-                            return PropValueResult::Static(make_json_number(-lit.value));
-                        }
-                    }
-                    dynamic_expression(expr)
-                }
-                Expression::ObjectExpression(obj) => match eval_static_object(obj) {
-                    Some(v) => PropValueResult::Static(v),
-                    None => dynamic_expression(expr),
-                },
-                Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
-                    match tpl
-                        .quasis
-                        .first()
-                        .map(|q| Value::String(q.value.raw.to_string()))
-                    {
-                        Some(v) => PropValueResult::Static(v),
-                        None => PropValueResult::Skip,
-                    }
-                }
-                _ => dynamic_expression(expr),
-            }
+            eval_static_expression(expr).map_or_else(|| dynamic_expression(expr), PropValueResult::Static)
         }
 
         Some(JSXAttributeValue::Element(_)) | Some(JSXAttributeValue::Fragment(_)) => {
@@ -80,27 +53,24 @@ fn dynamic_expression(expr: &Expression<'_>) -> PropValueResult {
         Expression::ArrayExpression(_) => DynamicExpressionKind::Array,
         _ => DynamicExpressionKind::Other,
     };
-    let span = expr.span();
-    PropValueResult::Dynamic {
-        kind,
-        span: UsageSpan {
-            start: span.start,
-            end: span.end,
-        },
-    }
+    dynamic(kind, expr.span())
+}
+
+fn dynamic(kind: DynamicExpressionKind, span: oxc::span::Span) -> PropValueResult {
+    PropValueResult::Dynamic { kind, span: UsageSpan { start: span.start, end: span.end } }
 }
 
 pub(crate) fn eval_static_expression(expr: &Expression) -> Option<Value> {
     match crate::chain_walk::unwrap_type_assertions(expr) {
-        Expression::StringLiteral(lit) => Some(Value::String(lit.value.to_string())),
-        Expression::NumericLiteral(lit) => Some(make_json_number(lit.value)),
+        Expression::StringLiteral(lit) => crate::eval::literal_string(lit).map(|text| Value::String(text.to_string())),
+        Expression::NumericLiteral(lit) => make_json_number(lit.value),
         Expression::BooleanLiteral(lit) => Some(Value::Bool(lit.value)),
         Expression::NullLiteral(_) => Some(Value::Null),
 
         Expression::UnaryExpression(unary) => {
             if unary.operator == oxc::syntax::operator::UnaryOperator::UnaryNegation {
                 if let Expression::NumericLiteral(lit) = &unary.argument {
-                    return Some(make_json_number(-lit.value));
+                    return make_json_number(-lit.value);
                 }
             }
             None
@@ -108,10 +78,10 @@ pub(crate) fn eval_static_expression(expr: &Expression) -> Option<Value> {
 
         Expression::ObjectExpression(obj) => eval_static_object(obj),
 
-        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => tpl
-            .quasis
-            .first()
-            .map(|q| Value::String(q.value.raw.to_string())),
+        // Its cooked text is what the runtime gets: `\x72ed` is `red`.
+        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
+            crate::eval::cooked_text(tpl.quasis.first()?).map(|text| Value::String(text.to_string()))
+        }
 
         _ => None,
     }
@@ -140,18 +110,14 @@ fn eval_static_object(obj: &oxc::ast::ast::ObjectExpression) -> Option<Value> {
 pub(crate) fn eval_property_key(key: &PropertyKey) -> Option<String> {
     match key {
         PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
-        PropertyKey::StringLiteral(lit) => Some(lit.value.to_string()),
+        PropertyKey::StringLiteral(lit) => crate::eval::literal_string(lit).map(str::to_string),
         PropertyKey::NumericLiteral(lit) => Some(lit.value.to_string()),
         _ => None,
     }
 }
 
-pub(crate) fn make_json_number(v: f64) -> Value {
-    if v.fract() == 0.0 && v.abs() < (i64::MAX as f64) {
-        Value::Number(serde_json::Number::from(v as i64))
-    } else {
-        Value::Number(
-            serde_json::Number::from_f64(v).unwrap_or_else(|| serde_json::Number::from(0)),
-        )
-    }
+/// A number's static value (`eval::json_number`); `None` for Infinity and
+/// NaN.
+pub(crate) fn make_json_number(v: f64) -> Option<Value> {
+    crate::eval::json_number(v).map(Value::Number)
 }

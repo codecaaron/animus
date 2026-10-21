@@ -484,7 +484,7 @@ pub(crate) fn create_element_props(argument: Option<&Argument<'_>>) -> Option<Ve
                     return None;
                 }
                 let key = p.key.static_name().filter(|_| !p.computed)?;
-                Some((key.to_string(), option_text(&p.value).map_or(VariantValue::Dynamic, VariantValue::Literal)))
+                Some((key.to_string(), expr_variant(&p.value)))
             })
             .collect(),
         _ => None,
@@ -552,39 +552,51 @@ pub(crate) fn create_element_literals(
 
 /// Classify a present JSX attribute value for variant tracking: a string
 /// literal yields its string, an expression the option it selects
-/// (`option_text`).
+/// (`expr_variant`).
 pub(crate) fn classify_jsx_attribute_as_variant_value(value: &Option<JSXAttributeValue>) -> VariantValue {
     match value {
         // `<Column fit />` writes `true`.
         None => VariantValue::Literal("true".to_string()),
 
-        Some(JSXAttributeValue::StringLiteral(lit)) => VariantValue::Literal(lit.value.to_string()),
+        Some(JSXAttributeValue::StringLiteral(lit)) => {
+            crate::eval::literal_string(lit).map_or(VariantValue::Dynamic, |text| VariantValue::Literal(text.to_string()))
+        }
 
         Some(JSXAttributeValue::ExpressionContainer(container)) => {
-            container.expression.as_expression().and_then(option_text).map_or(VariantValue::Dynamic, VariantValue::Literal)
+            container.expression.as_expression().map_or(VariantValue::Dynamic, expr_variant)
         }
 
         Some(JSXAttributeValue::Element(_)) | Some(JSXAttributeValue::Fragment(_)) => VariantValue::Dynamic,
     }
 }
 
-/// The option a value selects, as the runtime names it (`--{prop}-${value}`),
-/// through runtime-erased TypeScript wrappers and parentheses: a string, a
-/// template with no substitutions (its cooked text), a boolean (`'true'` or
-/// `'false'`), or a number whose `String(n)` is provably its own text
-/// (`js_number_text`); `None` for every other form.
-fn option_text(expr: &Expression<'_>) -> Option<String> {
-    match crate::chain_walk::unwrap_type_assertions(expr) {
-        Expression::StringLiteral(lit) => Some(lit.value.to_string()),
-        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => tpl.quasis.first()?.value.cooked.as_ref().map(|cooked| cooked.to_string()),
-        Expression::BooleanLiteral(lit) => Some(lit.value.to_string()),
-        // `1e400` is Infinity, which `make_json_number` would write as 0.
-        Expression::NumericLiteral(lit) if lit.value.is_finite() => match super::make_json_number(lit.value) {
-            serde_json::Value::Number(number) => crate::eval::js_number_text(&number),
-            _ => None,
-        },
-        _ => None,
+/// The option an expression selects: its static value
+/// (`eval_static_expression`, which reads through runtime-erased TypeScript
+/// wrappers and parentheses) as `value_variant` reads it. An object selects
+/// none, so it is not built.
+fn expr_variant(expr: &Expression<'_>) -> VariantValue {
+    if matches!(crate::chain_walk::unwrap_type_assertions(expr), Expression::ObjectExpression(_)) {
+        return VariantValue::Dynamic;
     }
+    match eval_static_expression(expr) {
+        Some(serde_json::Value::String(text)) => VariantValue::Literal(text),
+        Some(value) => value_variant(&value),
+        None => VariantValue::Dynamic,
+    }
+}
+
+/// The option a static value selects, as the runtime names it
+/// (`--{prop}-${value}`): a string, a boolean (`'true'` or `'false'`), or a
+/// number whose `String(n)` is provably its own text (`js_number_text`);
+/// any other value `Dynamic`.
+pub(crate) fn value_variant(value: &serde_json::Value) -> VariantValue {
+    let text = match value {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Bool(flag) => Some(flag.to_string()),
+        serde_json::Value::Number(number) => crate::eval::js_number_text(number),
+        _ => None,
+    };
+    text.map_or(VariantValue::Dynamic, VariantValue::Literal)
 }
 
 /// Resolve a member tag to the extracted component binding via the member

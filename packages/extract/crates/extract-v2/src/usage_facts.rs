@@ -23,7 +23,7 @@ mod renders_through;
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::static_value::StaticValue;
 use crate::jsx_scan::{
-    classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, eval_jsx_attribute_value, eval_property_key,
+    classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, eval_jsx_attribute_value, eval_property_key, value_variant,
     eval_static_expression, make_json_number,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, ComposeFamilyInfo, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage, record_written,
@@ -4923,7 +4923,7 @@ fn spread_wrapper_candidates<'b, 'a>(program: &'b Program<'a>) -> Vec<WrapperCan
                             &assignment.left,
                             match &assignment.right {
                                 Expression::StringLiteral(literal) => {
-                                    Some(Some(literal.value.to_string()))
+                                    crate::eval::literal_string(literal).map(|text| Some(text.to_string()))
                                 }
                                 _ => None,
                             },
@@ -5882,10 +5882,7 @@ impl<'a> FactCollector<'a, '_> {
                 // writes those entries, on the branches that hold them.
                 match self.enrich.then(|| listed_spread(&spread_attribute.argument, self.origins)).flatten() {
                     Some(entries) => attrs.extend(entries.into_iter().map(|(name, value)| AttrFact {
-                        variant_class: match &value {
-                            Value::String(class) => VariantValue::Literal(class.clone()),
-                            _ => VariantValue::Dynamic,
-                        },
+                        variant_class: value_variant(&value),
                         conditions: (!value.is_object()).then(|| BTreeSet::from([BASE_CONDITION.to_string()])),
                         name,
                         static_value: Some(value),
@@ -6094,7 +6091,7 @@ fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
             Some(text.value.to_string())
         }
         [JSXChild::ExpressionContainer(container)] => match container.expression.as_expression().map(crate::chain_walk::unwrap_type_assertions) {
-            Some(Expression::StringLiteral(literal)) => Some(literal.value.to_string()),
+            Some(Expression::StringLiteral(literal)) => crate::eval::literal_string(literal).map(str::to_string),
             _ => None,
         },
         _ => None,
@@ -6442,13 +6439,13 @@ impl ParameterScan<'_> {
                 TSType::TSUndefinedKeyword(_) | TSType::TSNullKeyword(_) => set.absent = true,
                 TSType::TSLiteralType(literal) => {
                     let value = match &literal.literal {
-                        TSLiteral::StringLiteral(text) => Value::String(text.value.to_string()),
-                        TSLiteral::NumericLiteral(number) => make_json_number(number.value),
+                        TSLiteral::StringLiteral(text) => Value::String(crate::eval::literal_string(text)?.to_string()),
+                        TSLiteral::NumericLiteral(number) => make_json_number(number.value)?,
                         TSLiteral::UnaryExpression(unary)
                             if unary.operator == oxc::syntax::operator::UnaryOperator::UnaryNegation =>
                         {
                             let Expression::NumericLiteral(number) = &unary.argument else { return None };
-                            make_json_number(-number.value)
+                            make_json_number(-number.value)?
                         }
                         _ => return None,
                     };

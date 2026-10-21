@@ -15,7 +15,7 @@ pub use usage::{
 };
 
 pub(crate) use usage::{
-    classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, is_component_like_identifier,
+    classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, is_component_like_identifier, value_variant,
     is_prototype_setter,
     jsx_member_path,
 };

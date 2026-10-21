@@ -15440,6 +15440,72 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         }
     }
 
+    /// Contract: a static value reads as the runtime writes it. A template's
+    /// cooked text is the value (`\x72ed` is `red`); a number that is
+    /// Infinity at runtime, and a string or template with a lone surrogate
+    /// (which oxc holds encoded), have no static value, so a prop keeps its
+    /// runtime slot, a variant every option, and a style is skipped, never
+    /// written as 0 or as the encoding; and a listed spread's boolean or
+    /// number selects the option a JSX attribute does.
+    #[test]
+    fn a_static_value_reads_as_the_runtime_writes_it() {
+        let kit = "import { createElement } from 'react';\n\
+                   export const Box = ds.system({ space: true }).props({ tone: { property: 'color' } }).asElement('div');\n\
+                   export const Btn = ds.styles({ display: 'inline' }).variant({ prop: 'size', defaultVariant: 'md', variants: { '1': { gap: '1px' }, '-1': { gap: '4px' }, md: { gap: '2px' }, lg: { gap: '3px' } } }).asElement('button');\n\
+                   export const Flag = ds.styles({ display: 'block' }).variant({ prop: 'size', defaultVariant: 'md', variants: { true: { gap: '5px' }, false: { gap: '6px' }, md: { gap: '2px' }, lg: { gap: '3px' } } }).asElement('span');\n";
+        for app in [
+            r"export const App = () => <Box tone={`\x72ed`} />;",
+            r"export const App = () => createElement(Box, { tone: `\x72ed` });",
+            r"export const App = () => <Box {...{ tone: `\x72ed` }} />;",
+        ] {
+            let out = analyze(&[("a.tsx", &format!("{kit}{app}\n"))], &test_inputs());
+            assert!(out.css.contains("color: red;") && !out.css.contains(r"\x72ed"), "{app}");
+        }
+        for app in [
+            "export const App = () => <Box p={1e400} />;",
+            "export const App = () => createElement(Box, { p: 1e400 });",
+            "export const App = () => <Box {...{ p: 1e400 }} />;",
+        ] {
+            let out = analyze(&[("a.tsx", &format!("{kit}{app}\n"))], &test_inputs());
+            assert!(out.dynamic_props.contains_key("p") && !out.css.contains("padding: 0;"), "{app}");
+        }
+        for (style, css) in [("opacity: 1e400", "opacity: 0"), ("width: `${1e400}px`", "width: 0px"), ("opacity: -1e400", "opacity: 0")] {
+            let source = format!("export const S = ds.styles({{ {style} }}).asElement('div');\nexport const App = () => <S />;\n");
+            let out = analyze(&[("a.tsx", &source)], &test_inputs());
+            assert!(!out.css.contains(css), "{style}");
+            assert!(out.diagnostics.iter().any(|d| d.kind == "skip"), "{style} skipped: {:?}", out.diagnostics);
+        }
+        let out = analyze(&[("a.tsx", "export const S = ds.styles({ color: `\\x72ed` }).asElement('div');\nexport const App = () => <S />;\n")], &test_inputs());
+        assert!(out.css.contains("color: red;"), "{}", out.css);
+        for app in [
+            r"export const App = () => <Box tone={`\uD800`} />;",
+            r"export const App = () => createElement(Box, { tone: `\uD800` });",
+            r"export const App = () => <Box {...{ tone: `\uD800` }} />;",
+            r#"export const App = () => <Box tone={"\uD800"} />;"#,
+            r#"export const App = () => createElement(Box, { tone: "\uD800" });"#,
+            r#"export const App = () => <Box {...{ tone: "\uD800" }} />;"#,
+        ] {
+            let out = analyze(&[("a.tsx", &format!("{kit}{app}\n"))], &test_inputs());
+            assert!(out.components["a.tsx::Box"].replacement.contains("customDynamicConfig"), "runtime slot: {app}");
+            assert!(!out.css.contains('\u{FFFD}'), "no encoded text: {app}");
+        }
+        for app in [r"export const App = () => <Btn size={`\uD800`} />;", r#"export const App = () => <Btn size={"\uD800"} />;"#] {
+            let out = analyze(&[("a.tsx", &format!("{kit}{app}\n"))], &test_inputs());
+            for kept in ["--size-1", "--size-md", "--size-lg"] {
+                assert!(out.sheets.variants.contains(kept), "{kept} kept: {app}");
+            }
+        }
+        let out = analyze(&[("a.tsx", &format!("{kit}export const App = () => <Flag {{...{{ size: true }}}} />;\n"))], &test_inputs());
+        assert!(out.sheets.variants.contains("--size-true") && !out.sheets.variants.contains("--size-false") && !out.sheets.variants.contains("--size-lg"), "{}", out.sheets.variants);
+        for (app, kept) in [
+            ("export const App = () => <Btn {...{ size: 1 }} />;", "--size-1"),
+            ("export const App = () => <Btn size={-1} />;", "--size--1"),
+        ] {
+            let out = analyze(&[("a.tsx", &format!("{kit}{app}\n"))], &test_inputs());
+            assert!(out.sheets.variants.contains(kept) && !out.sheets.variants.contains("--size-lg"), "{app}");
+        }
+    }
+
     fn inputs_with_provenance() -> CssInputs {
         let mut inputs = test_inputs();
         inputs.slot_provenance = true;

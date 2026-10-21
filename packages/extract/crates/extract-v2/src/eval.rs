@@ -240,13 +240,10 @@ fn computed_key(
     let unsupported = || BailError::new(UnevaluatedKind::ComputedKey, "computed property key in style object");
     let expr = key.as_expression().ok_or_else(unsupported)?;
     match crate::chain_walk::unwrap_type_assertions(expr) {
-        Expression::StringLiteral(lit) => Ok(lit.value.to_string()),
-        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => tpl
-            .quasis
-            .first()
-            .and_then(|quasi| quasi.value.cooked)
-            .map(|cooked| cooked.to_string())
-            .ok_or_else(unsupported),
+        Expression::StringLiteral(lit) => literal_string(lit).map(str::to_string).ok_or_else(unsupported),
+        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
+            tpl.quasis.first().and_then(cooked_text).map(str::to_string).ok_or_else(unsupported)
+        }
         other => {
             let statics = static_values.ok_or_else(unsupported)?;
             if let Some(reason) = expression_clause(other, statics) {
@@ -280,7 +277,7 @@ pub(crate) fn static_path_value<'v>(expr: &Expression<'_>, static_values: Static
         }
         Expression::ComputedMemberExpression(member) => {
             let key = match crate::chain_walk::unwrap_type_assertions(&member.expression) {
-                Expression::StringLiteral(lit) => lit.value.to_string(),
+                Expression::StringLiteral(lit) => literal_string(lit)?.to_string(),
                 other => static_path_value(other, static_values)?.as_str()?.to_string(),
             };
             member_of(static_path_value(&member.object, static_values)?, &key)
@@ -326,7 +323,7 @@ fn static_object_at(
 fn eval_property_key(key: &PropertyKey<'_>) -> Result<String, BailError> {
     match key {
         PropertyKey::StaticIdentifier(id) => Ok(id.name.to_string()),
-        PropertyKey::StringLiteral(lit) => Ok(lit.value.to_string()),
+        PropertyKey::StringLiteral(lit) => literal_string(lit).map(str::to_string).ok_or_else(lone_surrogate),
         PropertyKey::NumericLiteral(lit) => Ok(lit.value.to_string()),
         _ => Err(BailError::new(UnevaluatedKind::ComputedKey, "non-static property key")),
     }
@@ -348,14 +345,47 @@ pub(crate) fn eval_expression_with_statics(
 }
 
 /// A numeric literal's value, as JSON spells it: an integer where it is
-/// one, else a float.
-fn number(value: f64) -> StaticValue {
-    let number = if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
-        serde_json::Number::from(value as i64)
+/// one, else a float. Infinity and NaN have no JSON spelling and no static
+/// value; JavaScript writes them as text no CSS value takes.
+pub(crate) fn json_number(value: f64) -> Option<serde_json::Number> {
+    if !value.is_finite() {
+        None
+    } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+        Some(serde_json::Number::from(value as i64))
     } else {
-        serde_json::Number::from_f64(value).unwrap_or_else(|| serde_json::Number::from(0))
-    };
-    StaticValue::Number(StaticNumber(number))
+        serde_json::Number::from_f64(value)
+    }
+}
+
+fn number(value: f64) -> Result<StaticValue, BailError> {
+    json_number(value)
+        .map(|number| StaticValue::Number(StaticNumber(number)))
+        .ok_or_else(|| BailError::new(UnevaluatedKind::Unsupported, "a number JavaScript writes as Infinity"))
+}
+
+/// A string literal's text as JavaScript holds it. One with a lone surrogate
+/// has none: oxc writes its value encoded (`\u{FFFD}` and the code unit in
+/// hex), which no static text may stand for.
+pub(crate) fn literal_string<'a>(literal: &'a oxc::ast::ast::StringLiteral<'_>) -> Option<&'a str> {
+    (!literal.lone_surrogates).then(|| literal.value.as_str())
+}
+
+/// A template element's cooked text, as `literal_string` reads a string's:
+/// none for one with a lone surrogate, or with an invalid escape.
+pub(crate) fn cooked_text<'a>(quasi: &'a oxc::ast::ast::TemplateElement<'_>) -> Option<&'a str> {
+    if quasi.lone_surrogates {
+        return None;
+    }
+    quasi.value.cooked.as_ref().map(|cooked| cooked.as_str())
+}
+
+fn lone_surrogate() -> BailError {
+    BailError::new(UnevaluatedKind::Unsupported, "a string with a lone surrogate")
+}
+
+/// A string literal's static value (`literal_string`).
+fn string_value(literal: &oxc::ast::ast::StringLiteral<'_>) -> Result<StaticValue, BailError> {
+    literal_string(literal).map(|text| StaticValue::String(text.to_string())).ok_or_else(lone_surrogate)
 }
 
 fn eval_expression_scoped(
@@ -366,9 +396,9 @@ fn eval_expression_scoped(
 ) -> Result<StaticValue, BailError> {
     let expr = crate::chain_walk::unwrap_type_assertions(expr);
     match expr {
-        Expression::StringLiteral(lit) => Ok(StaticValue::String(lit.value.to_string())),
+        Expression::StringLiteral(lit) => string_value(lit),
 
-        Expression::NumericLiteral(lit) => Ok(number(lit.value)),
+        Expression::NumericLiteral(lit) => number(lit.value),
 
         Expression::BooleanLiteral(lit) => Ok(StaticValue::Bool(lit.value)),
 
@@ -377,7 +407,7 @@ fn eval_expression_scoped(
         Expression::UnaryExpression(unary) => {
             if unary.operator == oxc::syntax::operator::UnaryOperator::UnaryNegation {
                 if let Expression::NumericLiteral(lit) = &unary.argument {
-                    return Ok(number(-lit.value));
+                    return number(-lit.value);
                 }
             }
             Err(BailError::new(UnevaluatedKind::Operator, "non-static unary expression"))
@@ -525,8 +555,8 @@ fn member_expression_skip_reason(
 
 fn eval_array_element(elem: &ArrayExpressionElement<'_>) -> Result<StaticValue, BailError> {
     match elem {
-        ArrayExpressionElement::StringLiteral(lit) => Ok(StaticValue::String(lit.value.to_string())),
-        ArrayExpressionElement::NumericLiteral(lit) => Ok(number(lit.value)),
+        ArrayExpressionElement::StringLiteral(lit) => string_value(lit),
+        ArrayExpressionElement::NumericLiteral(lit) => number(lit.value),
         ArrayExpressionElement::BooleanLiteral(lit) => Ok(StaticValue::Bool(lit.value)),
         ArrayExpressionElement::NullLiteral(_) => Ok(StaticValue::Null),
         ArrayExpressionElement::ObjectExpression(obj) => {
@@ -594,15 +624,12 @@ pub fn parse_variant_arg(
         if let ObjectPropertyKind::ObjectProperty(p) = prop_kind {
             let key = eval_property_key(&p.key)?;
             match key.as_str() {
-                "prop" => {
-                    if let Expression::StringLiteral(lit) = &p.value {
-                        prop = lit.value.to_string();
-                    } else {
-                        all_skips.push(skip("prop", expression_kind(&p.value), "variant prop name (non-static)", &p.value));
-                    }
-                }
+                "prop" => match &p.value {
+                    Expression::StringLiteral(lit) if literal_string(lit).is_some() => prop = lit.value.to_string(),
+                    other => all_skips.push(skip("prop", expression_kind(other), "variant prop name (non-static)", other)),
+                },
                 "defaultVariant" => match &p.value {
-                    Expression::StringLiteral(lit) => default_variant = Some(lit.value.to_string()),
+                    Expression::StringLiteral(lit) if literal_string(lit).is_some() => default_variant = Some(lit.value.to_string()),
                     // A boolean variant's default names its key.
                     Expression::BooleanLiteral(lit) => default_variant = Some(lit.value.to_string()),
                     other => all_skips.push(skip(
@@ -1122,12 +1149,13 @@ fn eval_asset_call(call: &oxc::ast::ast::CallExpression<'_>, relative_allowed: b
     let [Argument::StringLiteral(specifier)] = call.arguments.as_slice() else {
         return Err(BailError::new(UnevaluatedKind::Call, "asset() of a non-literal specifier (non-static)"));
     };
-    if is_relative_specifier(&specifier.value) && !relative_allowed {
+    let specifier = literal_string(specifier).ok_or_else(lone_surrogate)?;
+    if is_relative_specifier(specifier) && !relative_allowed {
         return Err(BailError::new(UnevaluatedKind::Call, 
             "asset() of a relative specifier in a package file, which would resolve from the wrong origin (non-static)",
         ));
     }
-    Ok(StaticValue::String(format!("{ASSET_PLACEHOLDER_PREFIX}{}", specifier.value)))
+    Ok(StaticValue::String(format!("{ASSET_PLACEHOLDER_PREFIX}{specifier}")))
 }
 
 /// `firstThatWorks(…)`, as the members it falls back through: each a static
@@ -1177,7 +1205,7 @@ fn eval_static_template(
     }
     let mut text = String::new();
     for (index, quasi) in tpl.quasis.iter().enumerate() {
-        text.push_str(quasi.value.cooked.as_ref()?);
+        text.push_str(cooked_text(quasi)?);
         if let Some(part) = parts.get(index) {
             text.push_str(part);
         }
