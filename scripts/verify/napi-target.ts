@@ -12,7 +12,7 @@ export const CRATE_DIR = 'packages/extract/crates/extractor';
 export class UnsupportedHostError extends Error {
   constructor(input: HostTargetInput) {
     super(
-      `Unsupported host for extractor NAPI freshness: platform=${input.platform} ` +
+      `Unsupported host for extractor binary freshness: platform=${input.platform} ` +
         `arch=${input.arch} libc=${input.libc ?? 'n/a'}. Supported release ` +
         'targets: darwin-arm64, linux-x64-gnu, linux-arm64-gnu.'
     );

@@ -114,7 +114,11 @@ jobs:
             fi
             bun install
             (
-              cd packages/extract/crates/extractor
+              # A ref from before the v2 naming retired keeps its crate in
+              # crates/extract-v2.
+              crate=packages/extract/crates/extractor
+              [ -f "$crate/Cargo.toml" ] || crate=packages/extract/crates/extract-v2
+              cd "$crate"
               unset RUSTUP_TOOLCHAIN
               bunx @napi-rs/cli build --platform --no-js --release --target x86_64-unknown-linux-gnu
             )

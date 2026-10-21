@@ -19,7 +19,7 @@ crates/
     src/{eval,evaluator,theme,transforms}.rs — static eval + theme/token resolution
     src/{css,analyze_css,assemble,emit}.rs   — @layer CSS generation + source emission
     src/{jsx_scan,facts,usage_facts,dynamic_meta}.rs — usage scanning + fact extraction
-  system-loader/      — shared SystemInstance loader crate, linked by extractor
+  system-loader/      — shared SystemInstance loader crate, linked by the extractor crate
     src/lib.rs        — load/evaluate a system module (rquickjs), keyframes extraction
 ```
 
@@ -82,9 +82,9 @@ compile-time `{scale.path}` → `var(--name)` resolution.
 ## Build Commands
 
 ```bash
-# Production build (from repo root): extractor NAPI + TS dists
+# Production build (from repo root): extractor binary + TS dists
 vp run build:extract          # = build:extractor && build:ts (this package only)
-vp run build:extractor       # extractor NAPI only — asserts rustc == rust-toolchain.toml
+vp run build:extractor       # extractor binary only — asserts rustc == rust-toolchain.toml
                               # channel BEFORE building; aborts on mismatch
 
 # From this directory

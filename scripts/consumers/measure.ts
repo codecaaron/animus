@@ -177,7 +177,7 @@ function buildRef(ref: string, work: string): BuiltRef {
       'sh',
       [
         '-c',
-        'if [ -d packages/extract/crates/extractor ]; then bunx vp run build:extractor; else bunx vp run build:extract-v2; fi',
+        'if [ -f packages/extract/crates/extractor/Cargo.toml ]; then bunx vp run build:extractor; else bunx vp run build:extract-v2; fi',
       ],
     ],
     ['bunx', ['vp', 'run', 'build:ts']],

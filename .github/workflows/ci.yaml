@@ -158,7 +158,7 @@ jobs:
 
       - run: bun install
 
-      - name: Build extractor NAPI binary
+      - name: Build extractor binary
         working-directory: packages/extract/crates/extractor
         run: |
           unset RUSTUP_TOOLCHAIN
@@ -196,12 +196,12 @@ jobs:
 
       - run: bun install
 
-      - name: Verify extractor NAPI binary (repo root context)
+      - name: Verify extractor binary (repo root context)
         run: |
           ls -la packages/extract/crates/extractor/*.node
           bun -e "const m = require('./packages/extract/extractor.js'); if (typeof m.ExtractEngine !== 'function') { throw new Error('ExtractEngine missing — extractor NAPI load failed'); } console.log('extractor NAPI exports:', Object.keys(m));"
 
-      - name: Verify extractor NAPI binary (_integration context)
+      - name: Verify extractor binary (_integration context)
         working-directory: packages/_integration/__tests__
         run: |
           bun -e "const m = require('../../extract/extractor.js'); if (typeof m.ExtractEngine !== 'function') { throw new Error('ExtractEngine not a function — NAPI loading contract violated'); } console.log('OK: ExtractEngine is a function from _integration context');"

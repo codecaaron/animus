@@ -41,7 +41,7 @@ export function probeEnginePrerequisites(): EnginePrerequisites {
   if (!hostNativeBinaryExists()) {
     return {
       ok: false,
-      reason: `extractor NAPI native binary not found for ${process.platform}-${process.arch} under packages/extract/crates/extractor/. Run: ${BUILD_NAPI}`,
+      reason: `extractor binary not found for ${process.platform}-${process.arch} under packages/extract/crates/extractor/. Run: ${BUILD_NAPI}`,
     };
   }
 

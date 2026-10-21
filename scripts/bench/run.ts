@@ -173,9 +173,7 @@ function requireRelease(version: string): void {
  *  sources. */
 function requireFreshCheckout(root: string, packages: readonly string[]): void {
   const checks = [
-    // A checkout from before the v2 naming retired names it
-    // require_fresh_napi_v2.
-    'if declare -F require_fresh_napi >/dev/null; then require_fresh_napi; else require_fresh_napi_v2; fi',
+    renamedCheckout(root) ? 'require_fresh_napi' : 'require_fresh_napi_v2',
     ...packages.map((name) => `require_fresh_package_dist ${name}`),
   ];
   const result = sh(
@@ -484,14 +482,17 @@ function summarize(result: RowResult, budget: Budget) {
   };
 }
 
+/** Whether `root` is a checkout from after the v2 naming retired. One from
+ *  before keeps its binary in crates/extract-v2, named animus-extract-v2,
+ *  and checks it with require_fresh_napi_v2. */
+function renamedCheckout(root: string): boolean {
+  return existsSync(join(root, 'packages/extract/crates/extractor/Cargo.toml'));
+}
+
 /** Where the candidate checkout's timed binding came from: its commit and
  *  the bytes of the native binary that was packed. */
 function checkoutProvenance(root: string) {
-  // A checkout from before the v2 naming retired keeps its binary in
-  // crates/extract-v2, named animus-extract-v2.
-  const [dir, prefix] = existsSync(
-    join(root, 'packages/extract/crates/extractor')
-  )
+  const [dir, prefix] = renamedCheckout(root)
     ? [join(root, 'packages/extract/crates/extractor'), 'animus-extractor']
     : [join(root, 'packages/extract/crates/extract-v2'), 'animus-extract-v2'];
   const binary = readdirSync(dir).find((name) =>

@@ -47,7 +47,7 @@ require_fresh_napi() {
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   napi_binary=$(bun "$script_dir/napi-target.ts" 2>/dev/null || true)
   if [ -z "$napi_binary" ]; then
-    echo "ERROR: unsupported host for extractor NAPI freshness (no released target for this platform/arch/libc). Run: vp run build:extractor" >&2
+    echo "ERROR: unsupported host for extractor binary freshness (no released target for this platform/arch/libc). Run: vp run build:extractor" >&2
     return 1
   fi
   if [ ! -f "$napi_binary" ]; then
