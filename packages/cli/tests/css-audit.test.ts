@@ -418,8 +418,9 @@ test('unlayered output is audited with a warning, never refused or silently trus
 /** Contract: a kept option with a dynamic site is never ranked. Where a
  *  site passes a value no literal spells (a wrapper's own prop, a local, a
  *  value its component's parameters reach), the audit cannot prove which
- *  options it passes, so the finding stays below the floor; where every site
- *  is literal there is no finding, since the engine prunes what none writes. */
+ *  options it passes, so the finding is never ranked and no saving total
+ *  counts it; where every site is literal there is no finding, since the
+ *  engine prunes what none writes. */
 test('a kept option with a dynamic site is never ranked, and no saving total counts it', async () => {
   const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
   try {

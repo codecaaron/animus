@@ -37,8 +37,9 @@ type AtRule = Extract<SheetNode, { type: 'at' }>;
 /** Bytes a change saves, each file compressed on its own; negative where
  *  it costs bytes. A compressed size is `null` where it was not measured:
  *  gzip where the raw saving stays under the floor, Brotli where the gzip
- *  saving does or the finding ranks too low to measure. A finding without
- *  a Brotli measurement ranks below the floor. */
+ *  saving does or the finding ranks too low to measure. A measured finding
+ *  without a Brotli measurement ranks below the floor; an unproven one is
+ *  never ranked, nor below it. */
 export interface Saving {
   raw: number;
   gzip: number | null;
@@ -1366,7 +1367,7 @@ function keptOptions(
       continue;
     }
     const caveats: string[] = [
-      `${keptByCount(where.length)}; the audit cannot prove which values ${where.length === 1 ? 'it passes' : 'they pass'}, so this stays below the floor`,
+      `${keptByCount(where.length)}; the audit cannot prove which values ${where.length === 1 ? 'it passes' : 'they pass'}, so it is never ranked and no saving total counts it`,
     ];
     const hidden = owners.filter(({ rule }) => rule !== 'not-module-confined');
     if (hidden.length > 0) {
@@ -1739,7 +1740,8 @@ async function measureCandidates(
           'brotli'
         );
       }
-      // Ranked on Brotli alone: one not measured stays below the floor.
+      // Ranked on Brotli alone: one not measured stays below the floor, and
+      // an unproven one is neither ranked nor below it.
       return {
         ...candidate.finding,
         saving: final,
@@ -1994,7 +1996,7 @@ export function formatCssAudit(report: CssAuditReport): string {
           `Other CSS, left out of the totals and the floor: ${css.others.slice(0, 5).join(', ')}${css.others.length > 5 ? `, +${css.others.length - 5} more` : ''}`,
         ]
       : []),
-    `Savings are measured: each edits the shipped CSS and recompresses each file alone (gzip -9, Brotli q11 lgwin 22); Brotli ranks them, measured for at most ${BROTLI_PER_KIND} findings of each kind whose gzip saving reaches the floor; a finding it does not measure stays below the floor.`,
+    `Savings are measured: each edits the shipped CSS and recompresses each file alone (gzip -9, Brotli q11 lgwin 22); Brotli ranks them, measured for at most ${BROTLI_PER_KIND} findings of each kind whose gzip saving reaches the floor; a finding it does not measure stays below the floor, except one a dynamic site holds back, which is listed as kept with no saving.`,
     '',
     '1. Delivery',
     ...deliveryLines(delivery, report.components),
@@ -2094,7 +2096,7 @@ export function formatCssAudit(report: CssAuditReport): string {
     lines.push(
       `  Left out: ${removed.length} findings on components removeUnbundledComponents removes, which the delivery verdict turns on and whose saving counts their CSS; e.g. ${removed
         .slice(0, BELOW_SHOWN)
-        .map(({ title }) => title)
+        .map(titleText)
         .join(' | ')}`
     );
   }
