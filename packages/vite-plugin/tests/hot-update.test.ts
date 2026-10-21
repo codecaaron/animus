@@ -74,6 +74,7 @@ function makeContext(
     isSystemDependency(absFile: string) {
       return absFile === systemDependency;
     },
+    isConfigInput: () => false,
     ...extras,
   });
   return Object.assign(base, {

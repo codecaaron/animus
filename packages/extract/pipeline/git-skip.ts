@@ -1,6 +1,6 @@
 import { execFileSync } from 'child_process';
 import { existsSync, realpathSync } from 'fs';
-import { dirname, extname, join, resolve, sep } from 'path';
+import { basename, dirname, extname, join, resolve, sep } from 'path';
 
 import { matchesAnyPattern } from './core-options';
 import { specifierCandidates } from './native-resolution';
@@ -83,8 +83,11 @@ function gitIgnoresNow(rootDir: string, key: string): boolean {
 }
 
 /** The `.gitignore` files git reads for `rootDir` and the repository's
- *  exclude file, whose edits change what it ignores. */
-function gitIgnoreInputs(rootDir: string): string[] {
+ *  exclude file, whose edits change what it ignores, with the repository's
+ *  top and that exclude file; none outside a repository. */
+function gitIgnoreInputs(
+  rootDir: string
+): { inputs: string[]; top: string; exclude: string } | null {
   let real: string;
   let top: string;
   let exclude: string;
@@ -99,10 +102,11 @@ function gitIgnoreInputs(rootDir: string): string[] {
       .trim()
       .split('\n');
   } catch {
-    return [];
+    return null;
   }
   // A linked worktree's exclude file is absolute; a checkout's is relative.
-  const inputs = new Set([resolve(real, exclude)]);
+  const excludeFile = resolve(real, exclude);
+  const inputs = new Set([excludeFile]);
   // The root's own and its ancestors' up to the repository's top.
   for (let dir = real; ; dir = dirname(dir)) {
     inputs.add(join(dir, '.gitignore'));
@@ -125,7 +129,7 @@ function gitIgnoreInputs(rootDir: string): string[] {
   } catch {
     // The root's own and its ancestors' still hold.
   }
-  return [...inputs];
+  return { inputs: [...inputs], top, exclude: excludeFile };
 }
 
 /** Whether a directory path could hold one an `analyzeIgnored` pattern
@@ -168,8 +172,12 @@ export class GitSkip {
   /** Whether git decides anything: off where `analyzeIgnored` names
    *  everything. */
   private authority = false;
-  /** This pass analyses everything git keeps out: it failed open. */
-  private open = false;
+  /** Why this pass analyses everything git keeps out, where it failed
+   *  open. */
+  private open: 'rounds' | 'load' | null = null;
+  /** The repository's top and exclude file, where a repository holds the
+   *  root. */
+  private repository: { top: string; exclude: string } | null = null;
   private rootDir = '';
   private ignored: ((key: string) => boolean) | null = null;
   /** The files the last walk found; null while git's listing is current. */
@@ -201,23 +209,29 @@ export class GitSkip {
     this.everything = (analyzeIgnored ?? []).includes('**');
   }
 
-  /** Starts a full pass with `pulled` already let back in. True where a
-   *  repository holds the root. */
+  /** Starts a full pass with `pulled` already let back in. Git decides
+   *  only where it answers: with no repository, or a git that fails, nothing
+   *  is kept out, a nested checkout included. False then, unless
+   *  `analyzeIgnored` names everything. */
   beginPass(rootDir: string, pulled: Iterable<string> = []): boolean {
     this.rootDir = rootDir;
-    this.authority = !this.everything;
-    this.open = false;
+    this.open = null;
     this.pulled = new Set(pulled);
-    this.ignored = this.authority ? readGitIgnored(rootDir) : null;
     this.walked = null;
-    this.inputs = this.ignored === null ? [] : gitIgnoreInputs(rootDir);
-    return this.ignored !== null;
+    this.ignored = this.everything ? null : readGitIgnored(rootDir);
+    this.authority = this.ignored !== null;
+    const inputs = this.authority ? gitIgnoreInputs(rootDir) : null;
+    this.inputs = inputs?.inputs ?? [];
+    this.repository = inputs && { top: inputs.top, exclude: inputs.exclude };
+    return this.authority || this.everything;
   }
 
-  /** Before a walk: git's listing covers every path that exists now. */
+  /** Before a walk: git's listing covers every path that exists now. A git
+   *  that fails now keeps nothing out. */
   beginWalk(): void {
     if (this.walked !== null && this.ignored !== null) {
       this.ignored = readGitIgnored(this.rootDir);
+      if (this.ignored === null) this.authority = false;
     }
     this.walked = null;
     this.checkouts = new Map();
@@ -239,13 +253,27 @@ export class GitSkip {
     return [...this.pulled].sort();
   }
 
-  /** The rest of this pass analyses everything git keeps out. */
-  failOpen(): void {
-    this.open = true;
+  /** The rest of this pass analyses everything git keeps out: past the
+   *  round bound, or for a load the host cannot list. */
+  failOpen(why: 'rounds' | 'load'): void {
+    this.open = why;
   }
 
   private get deciding(): boolean {
-    return this.authority && !this.open;
+    return this.authority && this.open === null;
+  }
+
+  /** Whether `path` is a file whose creation, edit or removal changes what
+   *  git ignores: a `.gitignore` in the repository, or its exclude file. */
+  isIgnoreInput(path: string): boolean {
+    const repository = this.repository;
+    if (repository === null) return false;
+    return (
+      (basename(path) === '.gitignore' &&
+        (isPathWithinRoot(this.rootDir, path) ||
+          isPathWithinRoot(repository.top, path))) ||
+      resolve(path) === repository.exclude
+    );
   }
 
   /** Whether `analyzeIgnored` lets a path back in: a file it names, or a
@@ -347,10 +375,16 @@ export class GitSkip {
   /** The verbose account of a full pass that took `rounds`, the earlier
    *  ones `earlierMs`; null where git kept nothing out. */
   summary(rounds: number, earlierMs: number): string | null {
-    if (this.open) {
+    if (this.open === 'rounds') {
       return (
         `git: files git keeps out were still imported after ${rounds - 1} ` +
         `rounds, so this pass analysed every file git ignores`
+      );
+    }
+    if (this.open === 'load') {
+      return (
+        `git: a computed load the host cannot list exactly may load a file ` +
+        `git keeps out, so this pass analysed every file git ignores`
       );
     }
     if (!this.authority) return null;

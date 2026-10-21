@@ -54,8 +54,17 @@ beforeEach(() => {
         posix.join(posix.dirname(path), match[1])
       )
     );
+    // Each `import.meta.glob` call, listed as the computed load it is.
+    const loads = files.flatMap(({ path, source }) =>
+      [...source.matchAll(/import\.meta\.glob\(/g)].map((match) => ({
+        importer: path,
+        start: match.index ?? 0,
+        kind: 'glob' as const,
+        args: null,
+      }))
+    );
     // `probeEvidence`, the last of `AnalyzeProjectArgs`.
-    args[25]?.(bases, 'identity');
+    args[25]?.(bases, 'identity', loads);
     return buildManifest({});
   });
 });
@@ -236,6 +245,89 @@ describe('an ignored, never-imported file is not analysed; an ignored, imported 
       "import { route } from '../gen/route';\nexport const App = [route];\n"
     );
     expect(analysed()).toContain('gen/route.ts');
+    session.close();
+  });
+
+  test('a computed load the host cannot list fails the pass open', async () => {
+    const root = gitProject({
+      '.gitignore': 'gen/\n',
+      'gen/Widget.tsx': 'export default 1;\n',
+      'src/App.tsx':
+        "const modules = import.meta.glob('../gen/[W]*.tsx', { eager: true });\nexport const App = modules;\n",
+    });
+    const session = makeSession(root);
+    await session.runFullPipeline();
+    expect(analysed()).toContain('gen/Widget.tsx');
+    session.close();
+  });
+
+  test('without a repository, a checkout of its own is analysed too', async () => {
+    const root = gitProject(
+      {
+        'nested/.git/HEAD': 'ref: refs/heads/main\n',
+        'nested/Widget.tsx': 'export const Widget = 1;\n',
+      },
+      { repository: false }
+    );
+    const session = makeSession(root);
+    await session.runFullPipeline();
+    expect(analysed()).toContain('nested/Widget.tsx');
+    session.close();
+  });
+
+  test('a git that fails keeps nothing out', async () => {
+    const root = gitProject({
+      '.gitignore': 'gen/\n',
+      'gen/unused.ts': 'export const unused = 1;\n',
+      'nested/.git/HEAD': 'ref: refs/heads/main\n',
+      'nested/Widget.tsx': 'export const Widget = 1;\n',
+    });
+    const session = makeSession(root);
+    const path = process.env.PATH;
+    process.env.PATH = '';
+    try {
+      await session.runFullPipeline();
+    } finally {
+      process.env.PATH = path;
+    }
+    expect(analysed()).toContain('gen/unused.ts');
+    expect(analysed()).toContain('nested/Widget.tsx');
+    session.close();
+  });
+
+  test('a .gitignore created under the root re-runs the full pass', async () => {
+    const root = gitProject({
+      '.gitignore': 'gen/*\n',
+      'gen/Widget.tsx': 'export const Widget = 1;\n',
+    });
+    const session = makeSession(root);
+    await session.runFullPipeline();
+    expect(analysed()).not.toContain('gen/Widget.tsx');
+    writeFileSync(join(root, 'gen', '.gitignore'), '!Widget.tsx\n');
+    expect(session.isConfigInput(join(root, 'gen', '.gitignore'))).toBe(true);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([join(root, 'gen', '.gitignore')]),
+      removedFiles: new Set(),
+    });
+    expect(analysed()).toContain('gen/Widget.tsx');
+    session.close();
+  });
+
+  test('a pass run again for an ignored import still reports what it found', async () => {
+    const root = gitProject({
+      '.gitignore': 'gen/\n',
+      'gen/Widget.tsx': 'export const Widget = 1;\n',
+      'src/App.tsx':
+        "import { Widget } from '../gen/Widget';\nexport const App = Widget;\n",
+    });
+    const session = makeSession(root, {
+      strict: true,
+      exclude: ['definitely-not-found'],
+      diagnostics: { 'animus.discovery.exclude-unmatched': 'error' },
+    });
+    await expect(session.runFullPipeline()).rejects.toThrow(
+      /definitely-not-found/
+    );
     session.close();
   });
 

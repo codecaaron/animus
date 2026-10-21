@@ -786,6 +786,16 @@ export class ExtractionSession {
     return toWatchKeys(path).some((key) => this.systemDependencyKeys.has(key));
   }
 
+  /** Whether `path` is a configuration input, a change to which re-runs the
+   *  full pass: package.json, the tsconfig chain, or a file that changes what
+   *  git ignores, created, edited or removed. */
+  isConfigInput(path: string): boolean {
+    return (
+      toWatchKeys(path).some((key) => this.configInputKeys.has(key)) ||
+      this.scanConfig.git.isIgnoreInput(path)
+    );
+  }
+
   /** Loader-reported dependency paths for bundler watch registration. */
   systemDependencyPaths: string[] = [];
   /** Paths the system load looked for and found absent: a host registers
@@ -905,8 +915,7 @@ export class ExtractionSession {
    *  levels and strictness, as it makes them: an error-severity record
    *  fails a strict build. */
   private surfaceHostDiagnostics(diagnostics: ManifestDiagnostic[]): void {
-    if (this.heldHostReports !== null) {
-      this.heldHostReports.push(() => this.surfaceHostDiagnostics(diagnostics));
+    if (this.reportedThisPass(`diagnostics:${JSON.stringify(diagnostics)}`)) {
       return;
     }
     surfaceManifestDiagnostics(
@@ -986,10 +995,7 @@ export class ExtractionSession {
   }
 
   private warn(msg: string): void {
-    if (this.heldHostReports !== null) {
-      this.heldHostReports.push(() => this.warn(msg));
-      return;
-    }
+    if (this.reportedThisPass(`warn:${msg}`)) return;
     this.logger.warn(`[animus] ${msg}`);
   }
 
@@ -1055,9 +1061,10 @@ export class ExtractionSession {
     excluded: (fullPath: string, relativePath: string) => boolean;
   } | null = null;
 
-  /** Reports a full-pass round holds until it completes (`holdHostReports`);
-   *  null where nothing holds them. */
-  private heldHostReports: Array<() => void> | null = null;
+  /** What this full pass has reported so far, where a pass is running: a
+   *  round run again for files git kept out reports nothing a round before
+   *  it reported. */
+  private passReports: Set<string> | null = null;
 
   /** Files git keeps out that the next full pass starts with let back in:
    *  an incremental pass found them imported. */
@@ -1326,9 +1333,7 @@ export class ExtractionSession {
       this.warn(`HMR system-reload check failed: ${String(err)}`);
     }
 
-    configHit ??= changed.find((path) =>
-      toWatchKeys(path).some((key) => this.configInputKeys.has(key))
-    );
+    configHit ??= changed.find((path) => this.isConfigInput(path));
     const debtRetry = this.systemReloadOwed && this.heldRejection === null;
     if (systemHit || configHit || debtRetry) {
       this.log(
@@ -1973,52 +1978,57 @@ export class ExtractionSession {
     hostSources: ReadonlyMap<string, string>
   ): Promise<void> {
     const { git } = this.scanConfig;
-    const repository = git.beginPass(this.rootDir!, this.pullOnNextPass);
+    const deciding = git.beginPass(this.rootDir!, this.pullOnNextPass);
     this.pullOnNextPass = [];
-    if (!repository) {
+    if (!deciding) {
       this.log(
-        `no git repository holds the root, so nothing under it is skipped ` +
-          `as ignored: a build without .git analyses every file a ` +
-          `checkout's build skips as ignored, and its output can differ`
+        `git does not answer for the root (no repository holds it, or git ` +
+          `fails), so nothing under it is skipped: a build without .git ` +
+          `analyses every file a checkout's build skips, and its output can ` +
+          `differ`
       );
     }
     const started = this.now();
+    const outerReports = this.passReports;
+    this.passReports = new Set();
+    try {
+      return await this.runRounds(pending, hostSources, git, started);
+    } finally {
+      this.passReports = outerReports;
+    }
+  }
+
+  private async runRounds(
+    pending: Array<[string, string]>,
+    hostSources: ReadonlyMap<string, string>,
+    git: GitSkip,
+    started: number
+  ): Promise<void> {
     for (let round = 1; ; round += 1) {
       const roundStarted = this.now();
-      const held = this.holdHostReports();
       try {
         await this.runPipelineRound(pending, hostSources);
       } catch (error) {
-        if (!(error instanceof SkippedSourcesWanted)) {
-          held.release();
-          throw error;
+        if (!(error instanceof SkippedSourcesWanted)) throw error;
+        if (error.open) git.failOpen('load');
+        else {
+          git.pull(this.withSkippedImports(error.paths, hostSources));
+          if (round + 1 >= GIT_SKIP_ROUNDS) git.failOpen('rounds');
         }
-        git.pull(this.withSkippedImports(error.paths, hostSources));
-        if (round + 1 >= GIT_SKIP_ROUNDS) git.failOpen();
         continue;
       }
-      held.release();
       const note = git.summary(round, roundStarted - started);
       if (note !== null) this.log(note);
       return;
     }
   }
 
-  /** Holds the warnings and host diagnostics reported until `release`, which
-   *  reports them; dropped where the holder never releases them. */
-  private holdHostReports() {
-    const outer = this.heldHostReports;
-    const held: Array<() => void> = [];
-    this.heldHostReports = held;
-    return {
-      release: () => {
-        this.heldHostReports = outer;
-        for (const report of held) {
-          if (outer === null) report();
-          else outer.push(report);
-        }
-      },
-    };
+  /** Whether this pass already reported `key`, noting it if not. */
+  private reportedThisPass(key: string): boolean {
+    if (this.passReports === null) return false;
+    if (this.passReports.has(key)) return true;
+    this.passReports.add(key);
+    return false;
   }
 
   /** `paths` and each file git keeps out that they import, transitively, as

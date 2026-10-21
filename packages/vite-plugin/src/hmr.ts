@@ -40,7 +40,7 @@ export async function handleHotUpdate(
     `hotUpdate ${type} ${relative(ctx.rootDir, absFile)} env=${environment.name} owns=${ownsEvent}`
   );
 
-  if (ctx.isSystemDependency(absFile)) {
+  if (ctx.isSystemDependency(absFile) || ctx.isConfigInput(absFile)) {
     if (ownsEvent) requestSystemReload(ctx, absFile, type);
     return [];
   }

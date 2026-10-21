@@ -48,10 +48,19 @@ export interface HostReadings {
 }
 
 /** Files git kept out of the analysis that an analysed file imports or
- *  loads: the analysis is run again with them. */
+ *  loads: the analysis is run again with them, or, where a computed load the
+ *  host cannot list exactly may load any (`open`), with everything git keeps
+ *  out. */
 export class SkippedSourcesWanted extends Error {
-  constructor(readonly paths: readonly string[]) {
-    super(`imported files git keeps out of the analysis: ${paths.join(', ')}`);
+  constructor(
+    readonly paths: readonly string[],
+    readonly open = false
+  ) {
+    super(
+      open
+        ? 'a computed load the host cannot list may load files git keeps out'
+        : `imported files git keeps out of the analysis: ${paths.join(', ')}`
+    );
   }
 }
 
@@ -185,6 +194,9 @@ export function gatherProbeEvidence(
             readings.isAsset
           );
     if (readings.skipped !== undefined) {
+      // A load the host lists no exact expansion of may load any file.
+      const listed = readings.expander === undefined ? 0 : expansions.length;
+      if (loads.length > listed) throw new SkippedSourcesWanted([], true);
       const wanted = new Set<string>();
       for (const host of Object.values(byBase)) {
         if (host.reading !== 'unanalysed') continue;

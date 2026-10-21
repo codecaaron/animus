@@ -802,6 +802,12 @@ export class PluginContext {
     return this.session?.isSystemDependency(absFile) ?? false;
   }
 
+  /** Whether a change to `absFile` re-reads the configuration: the Session
+   *  runs a full pass for it, as for a system change. */
+  isConfigInput(absFile: string): boolean {
+    return this.session?.isConfigInput(absFile) ?? false;
+  }
+
   /** Registers the Session's watch plan with Vite's watcher, each path
    *  once per watcher. Vite also watches its packages' own directories beside the
    *  plan's canonical roots, and an absent path either covers (or the root
