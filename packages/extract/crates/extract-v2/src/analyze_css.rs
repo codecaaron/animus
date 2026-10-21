@@ -15564,6 +15564,18 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             let kept = (out.sheets.variants.contains("--size-lg"), out.sheets.states.contains("color: blue"));
             assert_eq!(kept, (keeps, keeps), "{patch}{other}");
         }
+        // A declaration with no body is erased: a callable sharing its name
+        // is whatever the caller gives, which may render with any option.
+        let sizes = "const Btn = ds.styles({ display: 'inline' }).variant({ prop: 'size', defaultVariant: 'md', variants: { md: { gap: '2px' }, lg: { gap: '3px' } } }).asElement('button');\n";
+        for (program, keeps) in [
+            ("function make(p) {\n  declare function p(element: any): any;\n  return p(<Btn />);\n}\nexport const App = () => make(cloneToLarge);\n", true),
+            ("function make() {\n  declare function p(element: any): any;\n  var p = factory();\n  return p(<Btn />);\n}\nexport const App = () => make();\n", true),
+            ("function make(p) {\n  return p(<Btn />);\n}\nexport const App = () => make(cloneToLarge);\n", true),
+            ("function make(p) {\n  return <Btn />;\n}\nexport const App = () => make(cloneToLarge);\n", false),
+        ] {
+            let source = format!("import {{ cloneToLarge, factory }} from 'outside';\n{sizes}{program}");
+            assert_eq!(analyze(&[("a.tsx", &source)], &test_inputs()).sheets.variants.contains("3px"), keeps, "{program}");
+        }
         // A number key writes its `String(n)` (`p[0x10]` writes `16`); one
         // whose text the walk cannot prove may write any key.
         let numbered = |prop: &str| {

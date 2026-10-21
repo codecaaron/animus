@@ -2809,7 +2809,9 @@ impl<'a> Visit<'a> for Declarations<'a> {
     fn visit_function(&mut self, function: &Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
         if let Some(scope) = function.scope_id.get() {
             self.declare_params(scope, &function.params);
-            if let Some(symbol) = function.id.as_ref().and_then(|id| id.symbol_id.get()) {
+            // A declaration with no body (`declare`, an overload's signature)
+            // is erased: it is no function the module wrote.
+            if let Some(symbol) = function.id.as_ref().and_then(|id| id.symbol_id.get()).filter(|_| function.body.is_some()) {
                 self.functions.insert(symbol, scope);
             }
         }
