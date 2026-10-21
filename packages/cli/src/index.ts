@@ -355,6 +355,7 @@ async function runCssAuditCommand(
     const report = await runCssAudit({
       manifest: resolve(root, values.manifest ?? join(outDir, MANIFEST_FILE)),
       dist: resolve(root, values.dist ?? 'dist'),
+      root,
     });
     if (values.json) console.log(JSON.stringify(report, null, 2));
     else process.stderr.write(formatCssAudit(report));

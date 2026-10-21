@@ -10,10 +10,11 @@ import {
   unbundledComponents,
 } from '@animus-ui/extract/pipeline';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, join, relative } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 
 import { UsageFailure } from './build';
 import {
+  addNamedClasses,
   addSelectedClasses,
   brotliSize,
   eachStyleRule,
@@ -146,6 +147,9 @@ export interface Refusal {
 export interface CssAuditReport {
   manifest: string;
   dist: string;
+  /** What the audit could not confirm: output without Animus's layers,
+   *  whose classes it cannot tell from the app's. */
+  warnings: string[];
   /** Animus's CSS: the files holding an `@layer anm-…` block, or every CSS
    *  file where none does. */
   css: { files: number; sizes: Sizes; others: string[] };
@@ -192,6 +196,9 @@ interface UsageAttr {
   enumerableValues?: Literal[];
   dynamic: boolean;
   skip: boolean;
+  /** Where a dynamic value is written, in UTF-8 bytes of its file; `null`
+   *  for a static one. */
+  dynamicSpan?: { start: number; end: number } | null;
 }
 
 interface UsageFact {
@@ -241,19 +248,21 @@ type JsonValue =
   | { [key: string]: JsonValue };
 type JsonRecord = { [key: string]: JsonValue };
 
-// A JSON value's kind, without `typeof`: a string and an object are each
-// the only JSON values equal to their own conversion.
+// A JSON value's kind, without `typeof`: an object is the only JSON value
+// equal to its own conversion to an object, and a string the only other one
+// equal to its own conversion to a string. An object is never converted to
+// a string, since that runs whatever it holds under `toString`.
+const isObject = (value: JsonValue | undefined): boolean =>
+  Object(value) === value;
 const isText = (value: JsonValue | undefined): value is string =>
-  String(value) === value;
+  !isObject(value) && String(value) === value;
 const isRecord = (value: JsonValue | undefined): value is JsonRecord =>
-  Object(value) === value && !Array.isArray(value);
+  isObject(value) && !Array.isArray(value);
 const isList = (value: JsonValue | undefined): value is JsonValue[] =>
   Array.isArray(value);
-const isFlag = (value: JsonValue | undefined): value is boolean =>
-  value === true || value === false;
 /** A string, number, boolean or null: what a literal attribute value is. */
 const isLiteral = (value: JsonValue | undefined): value is Literal =>
-  value === null || isText(value) || isFlag(value) || Number(value) === value;
+  value !== undefined && !isObject(value);
 /** Absent, or a list of literals. */
 const literalList = (value: JsonValue | undefined): boolean =>
   value === undefined || (isList(value) && value.every(isLiteral));
@@ -276,6 +285,16 @@ const recordOf = (value: JsonValue | undefined): JsonRecord =>
 /** Each value of a record, or `null` where `value` is no record. */
 const recordValues = (value: JsonValue | undefined): JsonValue[] | null =>
   isRecord(value) ? Object.values(value) : null;
+
+/** A record each of whose values is a record of `isEntry` values: a table
+ *  the audit looks up by file or binding, then by tag or axis. */
+const tableOf = (
+  value: JsonValue | undefined,
+  isEntry: (entry: JsonValue) => boolean
+): boolean =>
+  recordValues(value)?.every(
+    (inner) => recordValues(inner)?.every(isEntry) ?? false
+  ) ?? false;
 
 /** A slot opening the audit reads: its rule, as text. */
 const isOpening = (value: JsonValue): boolean =>
@@ -300,7 +319,11 @@ function isUsageFact(fact: JsonValue): boolean {
         (attr) =>
           isRecord(attr) &&
           isText(attr.name) &&
-          literalList(attr.enumerableValues)
+          literalList(attr.enumerableValues) &&
+          (attr.dynamicSpan === undefined ||
+            attr.dynamicSpan === null ||
+            (isRecord(attr.dynamicSpan) &&
+              Number.isInteger(attr.dynamicSpan.start)))
       )
     );
   }
@@ -357,6 +380,35 @@ function manifestProblem(raw: JsonRecord): string | null {
     if (raw[section] !== undefined && !isRecord(raw[section])) {
       return `its ${section} section is no object`;
     }
+  }
+  const crossFile = recordOf(raw.crossFile);
+  const tables: Array<
+    [string, JsonValue | undefined, (entry: JsonValue) => boolean]
+  > = [
+    ['system_prop_map', raw.system_prop_map, isText],
+    ['tag_components', raw.tag_components, isText],
+    ['crossFile.memberBindings', crossFile.memberBindings, isText],
+    [
+      'crossFile.variantOptions',
+      crossFile.variantOptions,
+      (options) => isList(options) && options.every(isText),
+    ],
+  ];
+  for (const [name, table, isEntry] of tables) {
+    if (table !== undefined && !tableOf(table, isEntry)) {
+      return `its ${name} is not a table of records this audit reads`;
+    }
+  }
+  if (
+    !(
+      recordValues(raw.dynamic_props)?.every(
+        (meta) =>
+          isRecord(meta) &&
+          (meta.slotClass === undefined || isText(meta.slotClass))
+      ) ?? true
+    )
+  ) {
+    return 'its dynamic_props are no record of prop records';
   }
   if (raw.css !== undefined && !isText(raw.css)) return 'its css is no text';
   if (
@@ -670,8 +722,26 @@ const coApplies = (site: Site): boolean =>
 
 // ------------------------------------------------------------ delivery
 
-/** A block of one of Animus's layers: what marks a file as its output. */
-const ANIMUS_LAYER_BLOCK = /@layer\s+anm-[\w-]+\s*\{/;
+/** Whether an `@layer` prelude names one of Animus's layers, or a layer
+ *  inside one (`anm-base.inner`), comments aside. */
+function namesAnimusLayer(prelude: string): boolean {
+  return prelude
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split(',')
+    .some((name) => /^anm-[\w-]*(?:\.|$)/i.test(name.trim()));
+}
+
+/** Whether `nodes` hold a block of one of Animus's layers, at any depth:
+ *  what marks a file as its output. */
+function hasAnimusLayer(nodes: readonly SheetNode[]): boolean {
+  return nodes.some(
+    (node) =>
+      (node.type === 'at' &&
+        node.name === 'layer' &&
+        namesAnimusLayer(node.prelude)) ||
+      hasAnimusLayer(node.children)
+  );
+}
 
 /** The entry script Vite writes into a page it builds, or a split
  *  stylesheet link the Vite plugin writes, whatever `build.assetsDir`. */
@@ -1156,8 +1226,14 @@ function variantsOf(
  */
 interface SiteLiterals {
   values: Set<string>;
-  /** Sites passing a value no literal spells. */
-  dynamic: number;
+  /** Sites passing a value no literal spells, each with where the value is
+   *  written, where the facts say. */
+  dynamic: DynamicSite[];
+}
+
+interface DynamicSite {
+  site: Site;
+  start: number | null;
 }
 
 function literalsOf(
@@ -1166,13 +1242,13 @@ function literalsOf(
   omitted: Literal
 ): SiteLiterals {
   const values = new Set<string>();
-  let dynamic = 0;
+  const dynamic: DynamicSite[] = [];
   const add = (value: Literal) => {
     if (value !== null) values.add(String(value));
   };
   for (const site of sites) {
     const attr = site.attrs?.findLast((written) => written.name === name);
-    if (site.attrs === null) dynamic += 1;
+    if (site.attrs === null) dynamic.push({ site, start: null });
     else if (attr === undefined || attr.skip) add(omitted);
     else if (isLiteral(attr.staticValue ?? null) && attr.staticValue != null) {
       add(attr.staticValue);
@@ -1180,7 +1256,9 @@ function literalsOf(
       for (const value of attr.enumerableValues ?? []) add(value);
       // A breakpoint object, or any value no literal spells, may pass any
       // option.
-      if (attr.dynamic || attr.staticValue != null) dynamic += 1;
+      if (attr.dynamic || attr.staticValue != null) {
+        dynamic.push({ site, start: attr.dynamicSpan?.start ?? null });
+      }
     }
   }
   return { values, dynamic };
@@ -1190,6 +1268,7 @@ function keptOptions(
   manifest: FullProjectManifest,
   classes: ReadonlySet<string>,
   { sites }: ComponentSites,
+  locate: (dynamic: DynamicSite) => string,
   refused: Refusal[]
 ): Candidate[] {
   const candidates: Candidate[] = [];
@@ -1199,8 +1278,11 @@ function keptOptions(
     const used = sites.get(id) ?? [];
     const axes = variantsOf(manifest, component);
     if (axes.size === 0 || used.length === 0) continue;
-    const kept: Array<{ axis: string; options: string[]; dynamic: number }> =
-      [];
+    const kept: Array<{
+      axis: string;
+      options: string[];
+      dynamic: DynamicSite[];
+    }> = [];
     for (const [axis, config] of axes) {
       // Only an option that ships and is no default can be saved.
       const shipped = config.options.filter(
@@ -1211,7 +1293,7 @@ function keptOptions(
       if (shipped.length === 0) continue;
       const { values, dynamic } = literalsOf(axis, used, config.default);
       // Every site literal: the engine prunes what none writes itself.
-      if (dynamic === 0) continue;
+      if (dynamic.length === 0) continue;
       const options = shipped.filter((option) => !values.has(option));
       if (options.length > 0) kept.push({ axis, options, dynamic });
     }
@@ -1220,8 +1302,14 @@ function keptOptions(
       .map(({ axis, options }) => `${axis}: ${options.join(', ')}`)
       .join('; ');
     const count = kept.reduce((n, { options }) => n + options.length, 0);
-    const dynamic = kept.reduce((n, axis) => n + axis.dynamic, 0);
-    const title = `${name(id)}: ${count} options no site the audit sees writes literally (${listed})`;
+    // A site is counted once, however many axes it leaves unproven.
+    const bySite = new Map<Site, DynamicSite>();
+    for (const dynamic of kept.flatMap((axis) => axis.dynamic)) {
+      if (!bySite.has(dynamic.site)) bySite.set(dynamic.site, dynamic);
+    }
+    const where = [...bySite.values()].map(locate);
+    const keptBy = `kept by ${where.length} dynamic ${where.length === 1 ? 'site' : 'sites'}`;
+    const title = `${name(id)}: ${count} options unproven, ${keptBy} (${where.slice(0, 3).join(', ')}${where.length > 3 ? `, +${where.length - 3} more` : ''}), which no site the audit sees writes literally (${listed})`;
     const owners = provenance?.owners[id] ?? [];
     const unseen = owners.filter(
       ({ rule }) => rule === 'spread' || rule === 'create-element'
@@ -1258,7 +1346,7 @@ function keptOptions(
       continue;
     }
     const caveats: string[] = [
-      `kept by ${dynamic} dynamic sites; the audit cannot prove which values they pass, so this stays below the floor`,
+      `${keptBy}; the audit cannot prove which values ${where.length === 1 ? 'it passes' : 'they pass'}, so this stays below the floor`,
     ];
     const hidden = owners.filter(({ rule }) => rule !== 'not-module-confined');
     if (hidden.length > 0) {
@@ -1690,6 +1778,41 @@ function withoutRemoved(
 export interface CssAuditOptions {
   manifest: string;
   dist: string;
+  /** The project root the manifest's file paths are relative to, for the
+   *  lines of the sites it names; without it a site is named by byte. */
+  root?: string;
+}
+
+/** Names a dynamic site `file:line`, reading its file under `root`, or
+ *  `file@byte` where the file cannot be read; a site whose value has no
+ *  position (a `createElement` call's) by its file. */
+function siteLocator(
+  root: string | undefined
+): (dynamic: DynamicSite) => string {
+  const sources = new Map<string, Buffer | null>();
+  const read = (file: string): Buffer | null => {
+    if (!sources.has(file)) {
+      let source: Buffer | null = null;
+      try {
+        source = root === undefined ? null : readFileSync(resolve(root, file));
+      } catch {
+        source = null;
+      }
+      sources.set(file, source);
+    }
+    return sources.get(file) ?? null;
+  };
+  return ({ site, start }) => {
+    if (start === null) {
+      return site.attrs === null ? `${site.file} (createElement)` : site.file;
+    }
+    const source = read(site.file);
+    if (source === null || start > source.length)
+      return `${site.file}@${start}`;
+    let line = 1;
+    for (let at = 0; at < start; at++) if (source[at] === 0x0a) line++;
+    return `${site.file}:${line}`;
+  };
 }
 
 /** Reads a build's full manifest and its built output, and measures what
@@ -1710,7 +1833,7 @@ export async function runCssAudit(
   // The totals and the floor are Animus's CSS alone: another stylesheet
   // the app ships (an editor's, a library's) changes with none of these.
   const layered = [...measured.files.keys()].filter((file) =>
-    ANIMUS_LAYER_BLOCK.test(measured.files.get(file)!)
+    hasAnimusLayer(measured.sheet(file).rules)
   );
   const counted = layered.length > 0 ? layered : [...measured.files.keys()];
   const total = await measured.sizes(
@@ -1719,40 +1842,69 @@ export async function runCssAudit(
   );
   const floor = Math.round(total.brotli! * FLOOR_SHARE);
   const classes = new Set<string>();
-  // The classes rules of Animus's layers select, for the mismatch check.
+  // The classes rules of Animus's layers name, for the mismatch check, and
+  // the files with classes but none of Animus's layers.
   const layerClasses = new Set<string>();
   const inLayer = (rule: StyleRule) =>
-    rule.context.some((at) => /^@layer anm-/.test(at));
+    rule.context.some(
+      (at) => at.startsWith('@layer ') && namesAnimusLayer(at.slice(7))
+    );
+  const unlayered: string[] = [];
   for (const file of measured.files.keys()) {
     const { rules } = measured.sheet(file);
     addSelectedClasses(rules, classes);
-    addSelectedClasses(rules, layerClasses, inLayer);
+    addNamedClasses(rules, layerClasses, inLayer);
+    if (!layered.includes(file) && addNamedClasses(rules, new Set()).size > 0) {
+      unlayered.push(file);
+    }
   }
   // A component ships where a rule names its class or one derived from it.
   const stems = new Set([...classes].map(classStem));
   const shipped = (className: string) => stems.has(className);
   const emitted = new Set<string>();
+  // The classes the manifest emits outside its layers (a global block
+  // registered unlayered).
+  const emittedUnlayered = new Set<string>();
   for (const css of [manifest.css, ...Object.values(manifest.sheets ?? {})]) {
-    addSelectedClasses(parseSheet(css).rules, emitted);
+    const { rules } = parseSheet(css);
+    addNamedClasses(rules, emitted);
+    addNamedClasses(rules, emittedUnlayered, (rule) => !inLayer(rule));
   }
-  // The classes the manifest names for components and their utilities: its
-  // css holds those sheets, and never the global one, whose classes (a
-  // color-mode scope) any naming setting shares.
-  const owned = addSelectedClasses(parseSheet(manifest.css).rules, new Set());
-  // Some such class ships: a component may ship only shared utilities, but
-  // none at all means other naming settings.
-  if (owned.size > 0 && ![...owned].some((name) => classes.has(name))) {
-    throw new UsageFailure(
-      `css audit: none of the ${owned.size} component and utility classes the manifest's CSS selects occurs in the CSS under ${options.dist}, so the two come from different builds or settings (shortClassNames, a prefix, other sources); write the manifest with \`animus build --verbose\` from the configuration that built the output`
+  // Every class the manifest can emit: its CSS's and sheets', and its
+  // components', utilities' and dynamic slots' by name.
+  const owned = new Set([
+    ...emitted,
+    ...Object.values(manifest.components).map((leaf) => leaf.class_name),
+    ...Object.values(manifest.system_prop_map ?? {}).flatMap((byValue) =>
+      Object.values(byValue)
+    ),
+    ...Object.values(manifest.dynamic_props).flatMap(
+      (meta) => meta.slotClass ?? []
+    ),
+  ]);
+  // Only Animus's layers tell its classes from the app's: without them a
+  // class name alone cannot. A file with classes and no Animus layer is
+  // audited with a warning that names it where it may hold this build's
+  // output: no file has the layers, or the manifest emits classes outside
+  // them. Beside layered output from a manifest that emits none, it is
+  // another stylesheet the app ships (an editor's, a library's).
+  const warnings: string[] = [];
+  if (
+    unlayered.length > 0 &&
+    (layered.length === 0 || emittedUnlayered.size > 0)
+  ) {
+    const files = unlayered.sort();
+    warnings.push(
+      `css audit: ${files.slice(0, 3).join(', ')}${files.length > 3 ? `, +${files.length - 3} more` : ''} ${files.length === 1 ? 'has' : 'have'} classes and no Animus layers, so the audit cannot confirm this manifest comes from the same build as ${files.length === 1 ? 'it' : 'them'}`
     );
   }
   // Every class a rule of Animus's layers selects in the shipped CSS is one
-  // the manifest's CSS selects: a build that read a source differently (a
+  // the manifest can emit: a build that read a source differently (a
   // transform it could not resolve, other sources) names that component's
   // class from another fingerprint. Class names are what this compares: a
   // build that differs only in a declaration's value, or in a global rule
   // that selects no class, passes.
-  const foreign = [...layerClasses].filter((name) => !emitted.has(name));
+  const foreign = [...layerClasses].filter((name) => !owned.has(name));
   if (foreign.length > 0) {
     const named = foreign.sort();
     throw new UsageFailure(
@@ -1763,7 +1915,13 @@ export async function runCssAudit(
   const { sites, evidence } = located;
   const refused: Refusal[] = [];
   const candidates = [
-    ...keptOptions(manifest, classes, located, refused),
+    ...keptOptions(
+      manifest,
+      classes,
+      located,
+      siteLocator(options.root),
+      refused
+    ),
     ...defaultsOnlyExtensions(manifest, sites, shipped, refused),
     ...repeatedBaseBlocks(manifest, measured, sites, refused),
   ];
@@ -1776,6 +1934,7 @@ export async function runCssAudit(
   return {
     manifest: options.manifest,
     dist: options.dist,
+    warnings,
     css: {
       files: counted.length,
       sizes: { raw: total.raw, gzip: total.gzip!, brotli: total.brotli! },
@@ -1808,6 +1967,7 @@ const savingText = (saving: Saving): string =>
 export function formatCssAudit(report: CssAuditReport): string {
   const { css, delivery, slots, restructures } = report;
   const lines: string[] = [
+    ...report.warnings.map((warning) => `warning: ${warning}`),
     `animus css audit: ${report.dist}`,
     `Animus CSS ${css.files} files: raw ${bytes(css.sizes.raw)}, gzip ${bytes(css.sizes.gzip)}, Brotli ${bytes(css.sizes.brotli)}; ${report.components} components`,
     ...(css.others.length > 0

@@ -13,7 +13,7 @@ import { brotliCompressSync, constants } from 'node:zlib';
 import { expect, test } from 'vitest';
 
 import { UsageFailure } from '../src/build';
-import { runCssAudit } from '../src/css-audit';
+import { formatCssAudit, runCssAudit } from '../src/css-audit';
 import { EXIT_USAGE, exitCodeFor } from '../src/index';
 
 import type {
@@ -178,6 +178,25 @@ test('an input the audit cannot read fails as a usage error, never a crash', asy
   const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
   try {
     const { manifest, manifestPath, dist } = writeProject(root);
+    // The manifest with one site of `A` that writes `size` as `attr` adds.
+    interface SizeExtra {
+      enumerableValues?: Array<{ toString: number; valueOf: number }>;
+    }
+    const usingA = (attr: SizeExtra) => ({
+      ...manifest,
+      fileFacts: {
+        'src/ui.tsx': {
+          usage: [
+            {
+              element: {
+                tag: { ident: 'A' },
+                attrs: [{ name: 'size', dynamic: false, skip: false, ...attr }],
+              },
+            },
+          ],
+        },
+      },
+    });
     const broken = [
       {
         ...manifest,
@@ -208,6 +227,17 @@ test('an input the audit cannot read fails as a usage error, never a crash', asy
         },
       },
       { ...manifest, component_fragments: { 'src/ui.tsx::A': null } },
+      // A literal list entry that is an object, however it converts.
+      usingA({ enumerableValues: [{ toString: 0, valueOf: 0 }] }),
+      // A lookup table whose file holds no record.
+      { ...usingA({}), tag_components: { 'src/ui.tsx': null } },
+      {
+        ...usingA({}),
+        crossFile: {
+          ...manifest.crossFile,
+          memberBindings: { 'src/ui.tsx': null },
+        },
+      },
       {
         ...manifest,
         components: {
@@ -227,36 +257,92 @@ test('an input the audit cannot read fails as a usage error, never a crash', asy
 });
 
 /** Contract: a manifest that does not match the dist exits 2. A rule of
- *  Animus's layers in the shipped CSS that selects a class the manifest's
- *  CSS or sheets do not is another build's; a class only a sheet holds
- *  (the color-mode scope of the global sheet) is still the manifest's. */
+ *  Animus's layers in the shipped CSS that selects a class the manifest
+ *  cannot emit is another build's; a class only a sheet holds (the
+ *  color-mode scope of the global sheet) is still the manifest's. */
 test('a manifest that does not match the dist exits 2', async () => {
   const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
   try {
     const { css, manifest, manifestPath, dist } = writeProject(root);
     const global = '@layer anm-global{.dark{--tone:1}}';
-    writeFileSync(
-      manifestPath,
-      JSON.stringify({ ...manifest, sheets: { ...manifest.sheets, global } })
-    );
+    // A manifest of no component, one dynamic slot.
+    interface SlotOnly {
+      components: Record<string, never>;
+      files: Record<string, never>;
+      component_fragments: Record<string, never>;
+      dynamic_props: Record<string, { slotClass: string }>;
+    }
+    const write = (
+      manifestCss: string,
+      extra?: SlotOnly,
+      manifestGlobal = global
+    ) =>
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          ...manifest,
+          css: manifestCss,
+          sheets: { ...manifest.sheets, global: manifestGlobal },
+          ...extra,
+        })
+      );
     const shipped = join(dist, 'assets', 'index.css');
-    writeFileSync(shipped, css + global);
-    await expect(
-      runCssAudit({ manifest: manifestPath, dist })
-    ).resolves.toBeDefined();
+    const accepts = async (output: string) => {
+      writeFileSync(shipped, output);
+      await expect(
+        runCssAudit({ manifest: manifestPath, dist })
+      ).resolves.toBeDefined();
+    };
+    const refuses = async (output: string) => {
+      writeFileSync(shipped, output);
+      await expect(
+        runCssAudit({ manifest: manifestPath, dist })
+      ).rejects.toBeInstanceOf(UsageFailure);
+    };
+    write(css);
+    await accepts(css + global);
     // Components that ship only a shared utility (every one unbundled but
-    // `.animus-x`) are still this manifest's build.
-    writeFileSync(shipped, '@layer anm-system{.animus-x{margin:var(--space)}}');
-    await expect(
-      runCssAudit({ manifest: manifestPath, dist })
-    ).resolves.toBeDefined();
-    // Unlayered output of another naming setting, sharing only the global
-    // color-mode class: another build.
-    writeFileSync(shipped, '.dark{--tone:1}.z-1{display:flex}');
-    await expect(
-      runCssAudit({ manifest: manifestPath, dist })
-    ).rejects.toBeInstanceOf(UsageFailure);
+    // `.animus-x`), or none beside the global sheet and the app's own CSS,
+    // are still this manifest's build.
+    await accepts('@layer anm-system{.animus-x{margin:var(--space)}}');
+    await accepts(global);
+    await accepts(`${global}.app{color:red}`);
+    // A class inside a selector function's argument is compared too, on
+    // either side: a global the build writes `:is(.theme)` ships minified.
+    await refuses(`${css}@layer anm-base{:is(.animus-A-b518d794){color:red}}`);
+    await refuses(`${css}@layer anm-base{:where(.foreign){color:red}}`);
+    write(css, undefined, '@layer anm-global{:is(.theme){--x:1}}');
+    await accepts(`${css}@layer anm-global{.theme{--x:1}}`);
+    write(css);
+    // An Animus layer however its prelude is written: comments, case, or a
+    // layer nested in one.
+    for (const prelude of [
+      '/**/anm-base',
+      ' /* c */ anm-base',
+      ' ANM-BASE',
+      ' anm-base.inner',
+    ]) {
+      await refuses(`${css}@layer${prelude}{.animus-Z-1{color:red}}`);
+    }
+    // A component's color-mode scope selects the shared class: the component
+    // named from another fingerprint is another build's.
+    write(`${css}@layer anm-states{.dark .animus-A{color:red}}`);
+    await refuses(
+      `${global}@layer anm-states{.dark .animus-A-c3f8ffdb{color:blue}}`
+    );
+    // So is another configuration's dynamic slot class, though no component
+    // or utility is named.
+    write('@layer anm-system{.animus-dyn-p_{padding:var(--animus-dyn-p)}}', {
+      components: {},
+      files: {},
+      component_fragments: {},
+      dynamic_props: { p: { slotClass: 'animus-dyn-p_' } },
+    });
+    await refuses(
+      '@layer anm-system{.animus-dyn-pad_{padding:var(--animus-dyn-pad)}}'
+    );
 
+    write(css);
     writeFileSync(
       shipped,
       css.replace('.animus-A{', '.animus-A-0f47f1e2{') + global
@@ -268,6 +354,61 @@ test('a manifest that does not match the dist exits 2', async () => {
         exitCodeFor(failure) === EXIT_USAGE &&
         failure.message.includes('animus-A-0f47f1e2')
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** Contract: unlayered output is audited with a warning, never refused or
+ *  silently trusted. Without Animus's layers a class name alone cannot tell
+ *  another build's classes from the app's. */
+test('unlayered output is audited with a warning, never refused or silently trusted', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
+  try {
+    const { css, manifest, manifestPath, dist } = writeProject(root);
+    const shipped = join(dist, 'assets', 'index.css');
+    const warned = async (files: Record<string, string>) => {
+      rmSync(join(dist, 'assets'), { recursive: true, force: true });
+      mkdirSync(join(dist, 'assets'), { recursive: true });
+      for (const [file, text] of Object.entries(files)) {
+        writeFileSync(join(dist, 'assets', file), text);
+      }
+      return (await runCssAudit({ manifest: manifestPath, dist })).warnings;
+    };
+    const warning = (files: string, verb = 'has', them = 'it') =>
+      `css audit: ${files} ${verb} classes and no Animus layers, so the audit cannot confirm this manifest comes from the same build as ${them}`;
+    writeFileSync(shipped, '.dark{--tone:1}.animus-A-c3f8ffdb{color:blue}');
+    const unlayered = await runCssAudit({ manifest: manifestPath, dist });
+    expect(unlayered.warnings).toEqual([warning('assets/index.css')]);
+    expect(formatCssAudit(unlayered)).toContain(
+      `warning: ${warning('assets/index.css')}`
+    );
+    expect(await warned({ 'index.css': css })).toEqual([]);
+    // Layers are read from the parsed rules: one written only in a comment
+    // or a string is none, and an upper-case at-keyword is one.
+    expect(
+      await warned({ 'index.css': '/* @layer anm-base{} */.x{color:red}' })
+    ).toEqual([warning('assets/index.css')]);
+    expect(
+      await warned({ 'index.css': '.x{content:"@layer anm-base{"}' })
+    ).toEqual([warning('assets/index.css')]);
+    expect(
+      await warned({ 'index.css': css.replaceAll('@layer', '@LAYER') })
+    ).toEqual([]);
+    // Beside layered output, a file with classes and no layers is another
+    // stylesheet the app ships, unless the manifest emits classes outside
+    // its layers (a global registered unlayered): then a layered file does
+    // not vouch for it.
+    const mixed = { 'index.css': css, 'theme.css': '.new-global{--x:1}' };
+    expect(await warned(mixed)).toEqual([]);
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        ...manifest,
+        sheets: { ...manifest.sheets, global: '.old-global{--x:1}' },
+      })
+    );
+    expect(await warned(mixed)).toEqual([warning('assets/theme.css')]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -291,9 +432,10 @@ test('a kept option with a dynamic site is never ranked', async () => {
       .join('')}}`;
     interface SizeAttr {
       name: string;
-      staticValue: string | null;
+      staticValue: string | null | object;
       dynamic: boolean;
       skip: boolean;
+      dynamicSpan?: { start: number; end: number };
     }
     const literal = (value: string): SizeAttr => ({
       name: 'size',
@@ -301,12 +443,19 @@ test('a kept option with a dynamic site is never ranked', async () => {
       dynamic: false,
       skip: false,
     });
+    // Written on the second line of the site's file.
     const dynamic: SizeAttr = {
       name: 'size',
       staticValue: null,
       dynamic: true,
       skip: false,
+      dynamicSpan: { start: 9, end: 13 },
     };
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(
+      join(root, 'src', 'app.tsx'),
+      '// sites\n<Chip size={size} />\n'
+    );
     const write = (sites: SizeAttr[][]) => {
       writeFileSync(
         manifestPath,
@@ -331,7 +480,7 @@ test('a kept option with a dynamic site is never ranked', async () => {
     };
     const chipFinding = async () =>
       (
-        await runCssAudit({ manifest: manifestPath, dist })
+        await runCssAudit({ manifest: manifestPath, dist, root })
       ).restructures.findings.find(
         (finding) => finding.components[0] === 'src/ui.tsx::Chip'
       );
@@ -341,9 +490,19 @@ test('a kept option with a dynamic site is never ranked', async () => {
     // component's): `sm` is listed, never ranked.
     write([[literal('lg')], [dynamic]]);
     const kept = await chipFinding();
+    expect(kept?.title).toContain(
+      'unproven, kept by 1 dynamic site (src/app.tsx:2)'
+    );
     expect(kept?.title).toContain('(size: sm)');
     expect(kept?.belowFloor).toBe(true);
-    expect(kept?.caveats[0]).toContain('kept by 1 dynamic sites');
+    expect(kept?.caveats[0]).toContain('kept by 1 dynamic site;');
+    // A static value that is no literal (a `style` object), however it
+    // converts, is a value no literal spells.
+    write([
+      [literal('lg')],
+      [{ ...literal(''), staticValue: { toString: 0, valueOf: 0 } }],
+    ]);
+    expect((await chipFinding())?.belowFloor).toBe(true);
 
     // Every site literal: the engine prunes, so there is nothing to list.
     // The `constructor` axis, which lists no options, reads no inherited one.

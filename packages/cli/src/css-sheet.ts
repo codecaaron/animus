@@ -13,6 +13,9 @@ export interface SheetSelector {
    *  pseudo-class's argument, and, for a nested rule, those every selector
    *  of the rule it nests in needs. */
   classes: string[];
+  /** Every class it names, inside a function's argument too (`:is(.a)`,
+   *  `:not(.b)`): what it says about which classes a build emits. */
+  named: string[];
 }
 
 /** A style rule, or an at-rule with a block (`@media`, `@layer`, …). */
@@ -79,6 +82,19 @@ function ownClasses(values: ComponentValue[]): string[] {
   return classes;
 }
 
+/** Every class `values` names, inside a function's or bracket's argument
+ *  too. */
+function namedClasses(values: ComponentValue[]): string[] {
+  return [
+    ...ownClasses(values),
+    ...values.flatMap((value) =>
+      isBlock(value) && value.open.type !== '{'
+        ? namedClasses(value.children)
+        : []
+    ),
+  ];
+}
+
 /** Whether a nested selector stands inside its parent: it writes `&`
  *  outside an argument, or no `&` at all. */
 function nestsInParent(
@@ -114,7 +130,13 @@ function selectorsOf(
     if (parent !== null && nestsInParent(values, css, start, end)) {
       classes.push(...parent);
     }
-    selectors.push({ text: css.slice(start, end), start, end, classes });
+    selectors.push({
+      text: css.slice(start, end),
+      start,
+      end,
+      classes,
+      named: namedClasses(values),
+    });
   };
   for (const value of prelude) {
     if (isToken(value, ',')) flush();
@@ -224,6 +246,23 @@ export function addSelectedClasses(
     if (!keep(rule)) return;
     for (const selector of rule.selectors) {
       for (const name of selector.classes) into.add(name);
+    }
+  });
+  return into;
+}
+
+/** Adds to `into` each class the selectors of `nodes`' style rules name
+ *  anywhere, inside a function's argument too, nested rules included, of
+ *  the rules `keep` admits. */
+export function addNamedClasses(
+  nodes: readonly SheetNode[],
+  into: Set<string>,
+  keep: (rule: Extract<SheetNode, { type: 'style' }>) => boolean = () => true
+): Set<string> {
+  eachStyleRule(nodes, (rule) => {
+    if (!keep(rule)) return;
+    for (const selector of rule.selectors) {
+      for (const name of selector.named) into.add(name);
     }
   });
   return into;

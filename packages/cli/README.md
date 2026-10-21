@@ -65,12 +65,20 @@ the artifact directory `animus build` uses, so `--out-dir`, `cli.outDir`,
 `--config` and `--root` apply as they do there) and the built output
 (`--dist`, default `<root>/dist`), and writes nothing. The manifest must
 come from the build that produced the output: `animus build --verbose`
-with the same settings, or one a host captured. A manifest whose CSS
-selects none of the shipped classes, or whose CSS lacks a class a rule of
-Animus's layers in the shipped CSS selects, fails with exit 2. The check
-compares class names only: a manifest from a build that differs only in a
-declaration's value or in a global rule that selects no class is not
-caught. Pass the bundler's export conditions to `animus build` with
+with the same settings, or one a host captured. The audit checks this
+best-effort: it refuses only on positive evidence of a mismatch and never
+proves a match. Where the shipped CSS has Animus's layers (`@layer anm-…`),
+a class a rule inside them names (inside `:is()`, `:where()` and other
+selector functions too) that the manifest cannot emit fails with exit 2.
+The check compares class names only: a manifest from a build that differs
+only in a declaration's value or in a global rule that selects no class is
+not caught. A CSS file with classes and no Animus layers is audited with a
+warning that names it, in the text report and in `--json`'s `warnings`,
+since a class name alone cannot tell another build's classes from the
+app's: where no file has the layers, or where the manifest emits classes
+outside them (a global registered unlayered). Beside layered output from a
+manifest that emits none, such a file is another stylesheet the app ships
+and is not compared. Pass the bundler's export conditions to `animus build` with
 `--condition` (or `cli.conditions`), as Vite's `resolve.conditions`, so it
 reads the files the bundler does. Each estimate edits the shipped CSS and
 recompresses each file on its own (gzip level 9, Brotli quality 11 with a
