@@ -179,19 +179,16 @@ test('an input the audit cannot read fails as a usage error, never a crash', asy
   const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
   try {
     const { manifest, manifestPath, dist } = writeProject(root);
-    // The manifest with one site of `A` that writes `size` as `attr` adds.
-    interface SizeExtra {
-      enumerableValues?: Array<{ toString: number; valueOf: number }>;
-    }
-    const usingA = (attr: SizeExtra) => ({
+    // The manifest with one site of `A` that writes `size`.
+    const usingA = () => ({
       ...manifest,
       fileFacts: {
         'src/ui.tsx': {
-          usage: [
+          proven: [
             {
               element: {
                 tag: { ident: 'A' },
-                attrs: [{ name: 'size', dynamic: false, skip: false, ...attr }],
+                attrs: [{ name: 'size', values: [], proven: true }],
               },
             },
           ],
@@ -209,31 +206,27 @@ test('an input the audit cannot read fails as a usage error, never a crash', asy
         ...manifest,
         fileFacts: {
           'src/ui.tsx': {
-            usage: [
+            proven: [
               {
                 element: {
                   tag: { ident: 'A' },
-                  attrs: [
-                    {
-                      name: 'size',
-                      dynamic: true,
-                      skip: false,
-                      enumerableValues: {},
-                    },
-                  ],
+                  attrs: [{ name: 'size', values: {}, proven: false }],
                 },
               },
             ],
           },
         },
       },
-      { ...manifest, component_fragments: { 'src/ui.tsx::A': null } },
-      // A literal list entry that is an object, however it converts.
-      usingA({ enumerableValues: [{ toString: 0, valueOf: 0 }] }),
-      // A lookup table whose file holds no record.
-      { ...usingA({}), tag_components: { 'src/ui.tsx': null } },
+      // Raw usage with no proven usage beside it.
       {
-        ...usingA({}),
+        ...manifest,
+        fileFacts: { 'src/ui.tsx': { usage: [] } },
+      },
+      { ...manifest, component_fragments: { 'src/ui.tsx::A': null } },
+      // A lookup table whose file holds no record.
+      { ...usingA(), tag_components: { 'src/ui.tsx': null } },
+      {
+        ...usingA(),
         crossFile: {
           ...manifest.crossFile,
           memberBindings: { 'src/ui.tsx': null },
@@ -434,23 +427,20 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
       .join('')}}`;
     interface SizeAttr {
       name: string;
-      staticValue: string | null | object;
-      dynamic: boolean;
-      skip: boolean;
+      values: Array<string | object>;
+      proven: boolean;
       dynamicSpan?: { start: number; end: number };
     }
     const literal = (value: string): SizeAttr => ({
       name: 'size',
-      staticValue: value,
-      dynamic: false,
-      skip: false,
+      values: [value],
+      proven: true,
     });
     // Written on the second line of the site's file.
     const dynamic: SizeAttr = {
       name: 'size',
-      staticValue: null,
-      dynamic: true,
-      skip: false,
+      values: [],
+      proven: false,
       dynamicSpan: { start: 9, end: 13 },
     };
     mkdirSync(join(root, 'src'), { recursive: true });
@@ -470,7 +460,7 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
           tag_components: { 'src/app.tsx': { Chip: 'src/ui.tsx::Chip' } },
           fileFacts: {
             'src/app.tsx': {
-              usage: sites.map((attrs) => ({
+              proven: sites.map((attrs) => ({
                 element: { tag: { ident: 'Chip' }, attrs },
               })),
             },
@@ -498,7 +488,13 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
     expect(kept?.belowFloor).toBe(false);
     expect(kept?.caveats[0]).toContain('kept by 1 dynamic site;');
     // The JSON says so too, with every site, not only its caveat's text.
-    expect(kept?.unproven).toEqual({ dynamicSites: ['src/app.tsx:2'] });
+    expect(kept?.unproven).toEqual({
+      dynamicSites: ['src/app.tsx:2'],
+      forwards: [],
+      reachedByCallers: null,
+      notPassedByMatchedCallers: null,
+      savingMeans: 'removed-if-proven-unreached',
+    });
     // The text names it as kept, with its site, and no total or saving
     // counts its bytes: only a measured finding's do.
     const { unproven: _, ...measured } = kept!;
@@ -517,7 +513,7 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
         ],
       },
     });
-    expect(text).toContain('Below the floor: 1 findings, 7 B raw together');
+    expect(text).toContain('Below the floor: 1 finding, 7 B raw together');
     const named = text.split('\n').filter((line) => line.includes('Chip:'));
     expect(named).toEqual([
       expect.stringContaining('kept by 1 dynamic site: src/app.tsx:2'),
@@ -527,7 +523,7 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
     // converts, is a value no literal spells.
     write([
       [literal('lg')],
-      [{ ...literal(''), staticValue: { toString: 0, valueOf: 0 } }],
+      [{ ...literal(''), values: [{ toString: 0, valueOf: 0 }] }],
     ]);
     expect((await chipFinding())?.unproven).toBeDefined();
 
@@ -535,6 +531,145 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
     // The `constructor` axis, which lists no options, reads no inherited one.
     write([[literal('lg')], [literal('sm')]]);
     expect(await chipFinding()).toBeUndefined();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** Contract: a forward's callers are evidence, never a verdict. The audit
+ *  says which listed options the callers matched to the forwarding
+ *  component through the module graph pass, and which none of them passes,
+ *  with a caveat that unmatched callers or a branch before the render can
+ *  differ; it never concludes that pruning would remove nothing, since a
+ *  branch (`if (size !== 'sm') return null`) may keep a passed value from
+ *  the render. A caller whose spread may replace the prop passes a value
+ *  it cannot read; one of that name declared elsewhere is no caller. */
+test("a forward's callers are evidence, never a verdict", async () => {
+  const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
+  try {
+    const { manifest, manifestPath, dist } = writeProject(root);
+    const chip: ManifestComponentDescriptor = {
+      ...component('Chip'),
+      replacement: `createComponent('div', 'animus-Chip', {"variants":{"size":{"options":["sm","md","lg"],"default":"md"}}})`,
+    };
+    const css = `@layer anm-variants{${['sm', 'md', 'lg']
+      .map((size) => `.animus-Chip--size-${size}{${WIDE};font-size:${size}}`)
+      .join('')}}`;
+    const size = (value: string) => ({
+      name: 'size',
+      values: [value],
+      proven: true,
+    });
+    const forward = {
+      name: 'size',
+      values: [],
+      proven: false,
+      dynamicSpan: { start: 0, end: 4 },
+      forwarded: { component: 'Wrap', prop: 'size' },
+    };
+    interface Caller {
+      tag: string;
+      attrs: Array<
+        | ReturnType<typeof size>
+        | { name: string; values: never[]; proven: false }
+      >;
+      spread?: number;
+    }
+    const element = ({ tag, attrs, spread }: Caller) => ({
+      element: { tag: { ident: tag }, attrs, spread },
+    });
+    const audit = async (
+      files: Record<string, Caller[]>,
+      declarations: Record<string, Record<string, string>>
+    ) => {
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          ...manifest,
+          css,
+          components: { 'src/ui.tsx::Chip': chip },
+          files: { 'src/ui.tsx': ['src/ui.tsx::Chip'] },
+          component_fragments: { 'src/ui.tsx::Chip': { variants: '' } },
+          tag_components: { 'src/wrap.tsx': { Chip: 'src/ui.tsx::Chip' } },
+          tag_declarations: declarations,
+          fileFacts: {
+            'src/wrap.tsx': {
+              proven: [
+                { element: { tag: { ident: 'Chip' }, attrs: [forward] } },
+              ],
+            },
+            ...Object.fromEntries(
+              Object.entries(files).map(([file, callers]) => [
+                file,
+                { proven: callers.map(element) },
+              ])
+            ),
+          },
+        })
+      );
+      writeFileSync(join(dist, 'assets', 'index.css'), css);
+      writeFileSync(join(dist, 'assets', 'index.js'), '"animus-Chip"');
+      const report = await runCssAudit({ manifest: manifestPath, dist, root });
+      const finding = report.restructures.findings.find(
+        (found) => found.components[0] === 'src/ui.tsx::Chip'
+      );
+      const text = formatCssAudit(report);
+      return { ...finding?.unproven, suggestion: finding?.suggestion, text };
+    };
+    const wrap = { 'src/app.tsx': { Wrap: 'src/wrap.tsx::Wrap' } };
+    const callers = (...values: string[]) =>
+      values.map((value) => ({ tag: 'Wrap', attrs: [size(value)] }));
+
+    // Every matched caller passes a listed option, as where Wrap returns
+    // early unless `size` is 'sm': the evidence is named, and no verdict.
+    const all = await audit({ 'src/app.tsx': callers('sm', 'md', 'lg') }, wrap);
+    expect(all.reachedByCallers).toEqual([
+      { axis: 'size', options: ['sm', 'lg'] },
+    ]);
+    expect(all.notPassedByMatchedCallers).toEqual([]);
+    expect(all.text).toContain(
+      'callers matched through imports pass size: sm, lg. A caller the audit cannot match, or a branch before this render, can differ.'
+    );
+    expect(all.text).not.toMatch(/nothing to narrow|would remove none/i);
+    // An option no matched caller passes is a candidate.
+    const one = await audit({ 'src/app.tsx': callers('sm') }, wrap);
+    expect(one.notPassedByMatchedCallers).toEqual(['size: lg']);
+    expect(one.text).toContain('options no matched caller passes: size: lg');
+
+    // A spread after the attribute may replace it; one before it cannot.
+    const spread = (at: number) =>
+      callers('sm', 'lg').map((caller) => ({ ...caller, spread: at }));
+    const replaced = await audit({ 'src/app.tsx': spread(1) }, wrap);
+    expect(replaced.notPassedByMatchedCallers).toBeNull();
+    expect(replaced.text).toContain(
+      'a matched caller passes a value the audit cannot read'
+    );
+    expect(
+      (await audit({ 'src/app.tsx': spread(0) }, wrap))
+        .notPassedByMatchedCallers
+    ).toEqual([]);
+
+    // Callers of that name the engine resolves nowhere are not counted.
+    const unresolved = await audit(
+      { 'src/app.tsx': callers('sm'), 'src/other.tsx': callers('lg') },
+      wrap
+    );
+    expect(unresolved.reachedByCallers).toEqual([
+      { axis: 'size', options: ['sm'] },
+    ]);
+
+    // An alias of the import is a caller; another module's own `Wrap` is not.
+    const elsewhere = await audit(
+      {
+        'src/app.tsx': [{ tag: 'Alias', attrs: [size('sm')] }],
+        'src/other.tsx': callers('sm', 'md', 'lg'),
+      },
+      {
+        'src/app.tsx': { Alias: 'src/wrap.tsx::Wrap' },
+        'src/other.tsx': { Wrap: 'src/other.tsx::Wrap' },
+      }
+    );
+    expect(elsewhere.notPassedByMatchedCallers).toEqual(['size: lg']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

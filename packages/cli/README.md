@@ -95,14 +95,25 @@ recompresses each file on its own (gzip level 9, Brotli quality 11 with a
    variant options a dynamic site keeps, extensions that only change
    defaults, and base blocks several components repeat. Each has a
    confidence and the cases it refuses; the rest are listed collapsed.
-   Unused options are always low confidence: the manifest records no
-   spread at a site and no value forwarded from a parameter, so a wrapper
-   may still reach them.
+   Unused options are always low confidence: a wrapper may still reach
+   them through callers the audit cannot see or read.
 
 The text report goes to stderr; `--json` prints the report as one JSON
 document on stdout. A kept-option finding held back by a site that passes a
-value no literal spells carries `unproven.dynamicSites` there, each site as
-`file:line`. It is never ranked and has `belowFloor: false`: no saving
+value no literal spells carries `unproven` there: `dynamicSites`, each site
+as `file:line`; `forwards`, the sites among them that pass on their
+component's own prop unchanged, which its callers write;
+`reachedByCallers`, evidence: the listed options that the callers the
+engine matches to that component through its imports pass, as values the
+analysis proves (`null` where a site computes its value or no caller is
+matched); `notPassedByMatchedCallers`, candidates, not a promise: the
+listed options no matched caller passes (`null` where a matched caller's
+value cannot be read, as where a spread after the prop may replace it). A
+caller the audit cannot match, or a branch before the render, can differ,
+so the audit draws no conclusion from them; and
+`savingMeans: "removed-if-proven-unreached"`. Its `saving` is what pruning
+would remove if no dynamic site reached those options, which the audit
+cannot prove. It is never ranked and has `belowFloor: false`: no saving
 total counts it. It exits 0 unless its input
 cannot be read: a missing or partial manifest, one whose classes the
 output's CSS never names, or an output file it cannot read, each exit 2

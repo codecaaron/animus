@@ -151,6 +151,22 @@ export interface Restructure {
  *  read, `file (createElement)` for a call). */
 export interface Unproven {
   dynamicSites: string[];
+  /** The sites among them that pass on their component's own prop, which
+   *  the component's callers write. */
+  forwards: Array<{ site: string; component: string; prop: string }>;
+  /** Evidence, where every dynamic site forwards: the listed options, by
+   *  axis, that the callers the engine matches to the forwarding component
+   *  through the module graph pass, as values the analysis proves. A caller
+   *  the audit cannot match, or a branch before the render, can differ.
+   *  `null` where a site computes its value, or no caller is matched. */
+  reachedByCallers: Array<{ axis: string; options: string[] }> | null;
+  /** Candidates, not a promise: the listed options no matched caller
+   *  passes, as `axis: option`. `null` with `reachedByCallers`, or where a
+   *  matched caller passes a value the audit cannot read. */
+  notPassedByMatchedCallers: string[] | null;
+  /** What the finding's `saving` measures: the CSS pruning would remove if
+   *  no dynamic site reached these options, which the audit cannot prove. */
+  savingMeans: 'removed-if-proven-unreached';
 }
 
 export interface Refusal {
@@ -200,8 +216,7 @@ const MIN_SHARED_DECLARATIONS = 3;
 /** Findings under the floor the text names. */
 const BELOW_SHOWN = 3;
 
-/** Unproven findings the text names, and dynamic sites per finding. */
-const UNPROVEN_SHOWN = 10;
+/** Dynamic sites a finding's text names. */
 const SITES_SHOWN = 3;
 
 /** Owners listed per slot group, and sites per owner. */
@@ -212,19 +227,33 @@ const SITES_PER_OWNER = 2;
 
 type Literal = string | number | boolean | null;
 
+/** An attribute as the manifest's `proven` usage reports it. */
 interface UsageAttr {
   name: string;
-  staticValue?: Literal;
-  enumerableValues?: Literal[];
-  dynamic: boolean;
-  skip: boolean;
-  /** Where a dynamic value is written, in UTF-8 bytes of its file; `null`
-   *  for a static one. */
-  dynamicSpan?: { start: number; end: number } | null;
+  /** Every value it can write that is known: literals, or breakpoint
+   *  objects of them. */
+  values: JsonValue[];
+  /** The analysis proves `values` are all it writes; otherwise it may
+   *  write another. */
+  proven: boolean;
+  skip?: boolean;
+  /** Written by only some branches of a spread, so it may be left out. */
+  optional?: boolean;
+  /** Where a runtime value is written, in UTF-8 bytes of its file. */
+  dynamicSpan?: { start: number; end: number };
+  /** The enclosing component's own prop a runtime value passes on
+   *  unchanged. */
+  forwarded?: { component: string; prop: string; default?: Literal };
 }
 
 interface UsageFact {
-  element?: { tag: { ident?: string; member?: string }; attrs: UsageAttr[] };
+  element?: {
+    tag: { ident?: string; member?: string };
+    attrs: UsageAttr[];
+    /** A spread that can deliver any prop follows the first `spread`
+     *  attrs, so it can replace them. */
+    spread?: number;
+  };
   createElement?: { ident: string | null; member: string | null };
 }
 
@@ -285,9 +314,6 @@ const isList = (value: JsonValue | undefined): value is JsonValue[] =>
 /** A string, number, boolean or null: what a literal attribute value is. */
 const isLiteral = (value: JsonValue | undefined): value is Literal =>
   value !== undefined && !isObject(value);
-/** Absent, or a list of literals. */
-const literalList = (value: JsonValue | undefined): boolean =>
-  value === undefined || (isList(value) && value.every(isLiteral));
 
 /** The value `record` holds under `key` itself, never one it inherits
  *  (a prop or tag named `constructor`). */
@@ -337,13 +363,14 @@ function isUsageFact(fact: JsonValue): boolean {
       isRecord(element) &&
       isRecord(element.tag) &&
       isList(element.attrs) &&
+      (element.spread === undefined || Number.isInteger(element.spread)) &&
       element.attrs.every(
         (attr) =>
           isRecord(attr) &&
           isText(attr.name) &&
-          literalList(attr.enumerableValues) &&
+          isList(attr.values) &&
+          (attr.proven === true || attr.proven === false) &&
           (attr.dynamicSpan === undefined ||
-            attr.dynamicSpan === null ||
             (isRecord(attr.dynamicSpan) &&
               Number.isInteger(attr.dynamicSpan.start)))
       )
@@ -387,15 +414,19 @@ function manifestProblem(raw: JsonRecord): string | null {
   }
   for (const [file, facts] of Object.entries(recordOf(raw.fileFacts))) {
     if (!isRecord(facts)) return `the facts of ${file} are no object`;
-    const usage = facts.usage;
+    const usage = facts.proven;
+    if (usage === undefined && facts.usage !== undefined) {
+      return `the facts of ${file} carry no proven usage`;
+    }
     if (usage !== undefined && !(isList(usage) && usage.every(isUsageFact))) {
-      return `the usage facts of ${file} are not in the form this audit reads`;
+      return `the proven usage of ${file} is not in the form this audit reads`;
     }
   }
   for (const section of [
     'reverse_provenance',
     'dynamic_props',
     'tag_components',
+    'tag_declarations',
     'crossFile',
     'sheets',
   ]) {
@@ -409,6 +440,7 @@ function manifestProblem(raw: JsonRecord): string | null {
   > = [
     ['system_prop_map', raw.system_prop_map, isText],
     ['tag_components', raw.tag_components, isText],
+    ['tag_declarations', raw.tag_declarations, isText],
     ['crossFile.memberBindings', crossFile.memberBindings, isText],
     [
       'crossFile.variantOptions',
@@ -468,7 +500,7 @@ function manifestProblem(raw: JsonRecord): string | null {
 /** A manifest the audit has checked, with its usage facts. */
 interface AuditedManifest {
   manifest: FullProjectManifest;
-  usage: Record<string, { usage?: UsageFact[] }>;
+  usage: Record<string, { proven?: UsageFact[] }>;
 }
 
 function readManifest(path: string): AuditedManifest {
@@ -500,8 +532,8 @@ function readManifest(path: string): AuditedManifest {
     // SAFETY: `manifestProblem` checked every section and field the audit
     // reads, and the optional ones it reads are filled in above.
     manifest: raw as FullProjectManifest & JsonRecord,
-    // SAFETY: each file's usage facts were checked by `isUsageFact`.
-    usage: raw.fileFacts as Record<string, { usage?: UsageFact[] }> &
+    // SAFETY: each file's proven usage was checked by `isUsageFact`.
+    usage: raw.fileFacts as Record<string, { proven?: UsageFact[] }> &
       JsonRecord,
   };
 }
@@ -685,6 +717,8 @@ function familyOf(property: string): string {
 interface Site {
   file: string;
   attrs: UsageAttr[] | null;
+  /** As `UsageFact.element.spread`. */
+  spread?: number;
   /** Matched by binding name, not by the engine's tag table. */
   byName: boolean;
 }
@@ -695,9 +729,14 @@ interface Site {
 interface ComponentSites {
   sites: Map<string, Site[]>;
   evidence: 'component-id' | 'binding-name';
+  /** Every element's site by the declaration its tag names, `file::binding`,
+   *  where the engine resolves it (`tag_declarations`): the callers of a
+   *  component a forward names. */
+  byDeclaration: Map<string, Site[]>;
 }
 
 function componentSites(audited: AuditedManifest): ComponentSites {
+  const byDeclaration = new Map<string, Site[]>();
   const { manifest } = audited;
   const tables = manifest.tag_components;
   const evidence =
@@ -709,32 +748,40 @@ function componentSites(audited: AuditedManifest): ComponentSites {
     byBinding.set(component.binding, ids);
   }
   const sites = new Map<string, Site[]>();
-  const add = (id: string, site: Site) => {
-    const list = sites.get(id) ?? [];
+  const push = (map: Map<string, Site[]>, key: string, site: Site) => {
+    const list = map.get(key) ?? [];
     list.push(site);
-    sites.set(id, list);
+    map.set(key, list);
   };
   for (const [file, facts] of Object.entries(audited.usage)) {
-    const usage = facts.usage;
-    for (const fact of usage ?? []) {
+    for (const fact of facts.proven ?? []) {
       const tag = fact.element
         ? (fact.element.tag.ident ?? fact.element.tag.member)
         : (fact.createElement?.ident ?? fact.createElement?.member);
       if (!tag || /^[a-z][^.]*$/.test(tag)) continue;
       const attrs = fact.element?.attrs ?? null;
+      const spread = fact.element?.spread;
+      const declaration = fact.element
+        ? ownEntry(ownEntry(manifest.tag_declarations, file), tag)
+        : undefined;
+      const site: Site = {
+        file,
+        attrs,
+        byName: true,
+        ...(spread !== undefined && { spread }),
+      };
+      if (declaration !== undefined) push(byDeclaration, declaration, site);
       const resolved =
         ownEntry(ownEntry(tables, file), tag) ??
         ownEntry(ownEntry(manifest.crossFile?.memberBindings, file), tag);
       if (resolved !== undefined) {
-        add(resolved, { file, attrs, byName: false });
+        push(sites, resolved, { ...site, byName: false });
         continue;
       }
-      for (const id of byBinding.get(tag) ?? []) {
-        add(id, { file, attrs, byName: true });
-      }
+      for (const id of byBinding.get(tag) ?? []) push(sites, id, site);
     }
   }
-  return { sites, evidence };
+  return { sites, evidence, byDeclaration };
 }
 
 const coApplies = (site: Site): boolean =>
@@ -1253,6 +1300,8 @@ interface SiteLiterals {
 interface DynamicSite {
   site: Site;
   start: number | null;
+  /** The component's own prop the site passes on, where it does. */
+  forwarded?: { component: string; prop: string; default?: Literal };
 }
 
 function literalsOf(
@@ -1269,14 +1318,16 @@ function literalsOf(
     const attr = site.attrs?.findLast((written) => written.name === name);
     if (site.attrs === null) dynamic.push({ site, start: null });
     else if (attr === undefined || attr.skip) add(omitted);
-    else if (isLiteral(attr.staticValue ?? null) && attr.staticValue != null) {
-      add(attr.staticValue);
-    } else {
-      for (const value of attr.enumerableValues ?? []) add(value);
-      // A breakpoint object, or any value no literal spells, may pass any
-      // option.
-      if (attr.dynamic || attr.staticValue != null) {
-        dynamic.push({ site, start: attr.dynamicSpan?.start ?? null });
+    else {
+      for (const value of attr.values) if (isLiteral(value)) add(value);
+      // A value the analysis does not prove, a breakpoint object, or any
+      // value no literal spells may pass any option.
+      if (!attr.proven || !attr.values.every(isLiteral)) {
+        dynamic.push({
+          site,
+          start: attr.dynamicSpan?.start ?? null,
+          ...(attr.forwarded && { forwarded: attr.forwarded }),
+        });
       }
     }
   }
@@ -1286,7 +1337,7 @@ function literalsOf(
 function keptOptions(
   manifest: FullProjectManifest,
   classes: ReadonlySet<string>,
-  { sites }: ComponentSites,
+  { sites, byDeclaration }: ComponentSites,
   locate: (dynamic: DynamicSite) => string,
   refused: Refusal[]
 ): Candidate[] {
@@ -1326,8 +1377,22 @@ function keptOptions(
     for (const dynamic of kept.flatMap((axis) => axis.dynamic)) {
       if (!bySite.has(dynamic.site)) bySite.set(dynamic.site, dynamic);
     }
-    const where = [...bySite.values()].map(locate);
-    const unproven: Unproven = { dynamicSites: where };
+    const where: string[] = [];
+    const forwards: Unproven['forwards'] = [];
+    for (const dynamic of bySite.values()) {
+      const site = locate(dynamic);
+      where.push(site);
+      if (dynamic.forwarded) {
+        const { component: owner, prop } = dynamic.forwarded;
+        forwards.push({ site, component: owner, prop });
+      }
+    }
+    const unproven: Unproven = {
+      dynamicSites: where,
+      forwards,
+      ...reachedByCallers(kept, byDeclaration),
+      savingMeans: 'removed-if-proven-unreached',
+    };
     const title = `${name(id)}: ${count} ${count === 1 ? 'option' : 'options'} unproven (${listed})`;
     const owners = provenance?.owners[id] ?? [];
     const unseen = owners.filter(
@@ -1392,8 +1457,7 @@ function keptOptions(
         kind: 'kept-options',
         title,
         components: [id],
-        suggestion:
-          'If the dynamic values can only be some of these options, narrow them to literals the engine can enumerate (a ternary of literals, a lookup object), following them through any wrapper that forwards them; the engine then prunes the options no site reaches. The saving is what that pruning would remove if none is reached.',
+        suggestion: keptSuggestion(unproven),
         confidence: 'low',
         caveats,
         unproven,
@@ -1403,6 +1467,137 @@ function keptOptions(
     });
   }
   return candidates;
+}
+
+/** Where every dynamic site of `kept` passes on its component's own prop:
+ *  the listed options its matched callers pass, by axis, and those none of
+ *  them passes (`Unproven`). A caller is matched to that component through
+ *  the module graph (`tag_declarations`). */
+function reachedByCallers(
+  kept: ReadonlyArray<{
+    axis: string;
+    options: string[];
+    dynamic: DynamicSite[];
+  }>,
+  byDeclaration: ReadonlyMap<string, readonly Site[]>
+): Pick<Unproven, 'reachedByCallers' | 'notPassedByMatchedCallers'> {
+  const none = { reachedByCallers: null, notPassedByMatchedCallers: null };
+  const reached: Array<{ axis: string; options: string[] }> = [];
+  let matched = false;
+  let unread = false;
+  for (const { axis, options, dynamic } of kept) {
+    const passed = new Set<string>();
+    for (const { site, forwarded } of dynamic) {
+      if (forwarded === undefined) return none;
+      const callers =
+        byDeclaration.get(`${site.file}::${forwarded.component}`) ?? [];
+      matched ||= callers.length > 0;
+      for (const caller of callers) {
+        const values = callerValues(caller, forwarded.prop, forwarded.default);
+        if (values === null) unread = true;
+        for (const value of values ?? []) passed.add(value);
+      }
+    }
+    reached.push({
+      axis,
+      options: options.filter((option) => passed.has(option)),
+    });
+  }
+  if (!matched) return none;
+  return {
+    reachedByCallers: reached,
+    notPassedByMatchedCallers: unread ? null : unreachedOptions(kept, reached),
+  };
+}
+
+/** Every value `site` passes as `prop`, or `null` where one may be a value
+ *  the audit cannot read: no proven literal, or a spread that can replace
+ *  the attribute or deliver the prop. Left out, the prop is `omitted`. */
+function callerValues(
+  site: Site,
+  prop: string,
+  omitted: Literal | undefined
+): Set<string> | null {
+  if (site.attrs === null) return null;
+  const values = new Set<string>();
+  // Walking back, an attribute settles the prop unless a branch of a
+  // spread may leave it out, when the one before it may take its place.
+  for (let index = site.attrs.length - 1; index >= 0; index--) {
+    const attr = site.attrs[index]!;
+    if (attr.name !== prop || attr.skip) continue;
+    if (site.spread !== undefined && index < site.spread) return null;
+    if (!attr.proven || !attr.values.every(isLiteral)) return null;
+    for (const value of attr.values) {
+      if (value !== null) values.add(String(value));
+    }
+    if (!attr.optional) return values;
+  }
+  if (site.spread !== undefined) return null;
+  if (omitted != null) values.add(String(omitted));
+  return values;
+}
+
+/** What would let a kept finding's options prune: narrowing a forward at
+ *  its component's callers, and a computed value at its site. */
+function keptSuggestion(unproven: Unproven): string {
+  const sites = unproven.dynamicSites.length;
+  const components = [
+    ...new Set(unproven.forwards.map(({ component }) => component)),
+  ];
+  const parts: string[] = [];
+  if (unproven.forwards.length > 0) {
+    const props = unproven.forwards.map(
+      ({ component, prop }) => `${component}'s ${prop}`
+    );
+    parts.push(
+      `${[...new Set(props)].join(' and ')} ${props.length === 1 ? 'passes' : 'pass'} on what ${components.length === 1 ? 'its callers write' : 'their callers write'}: have the callers pass literals, and the options none of them passes prune.`
+    );
+  }
+  const computed = sites - unproven.forwards.length;
+  if (computed > 0) {
+    parts.push(
+      `${computed === sites ? 'At the site' : `At the other ${computed === 1 ? 'site' : `${computed} sites`}`}, pass a literal, or a conditional of literals the engine can enumerate, in place of the value it cannot read; the options no site reaches then prune.`
+    );
+  }
+  return parts.join(' ');
+}
+
+/** What a kept finding's matched callers pass, as evidence, never a
+ *  verdict: `null` where it has none. */
+function callerEvidence(unproven: Unproven | undefined): string | null {
+  const reached = unproven?.reachedByCallers;
+  if (!reached) return null;
+  const passed = reached
+    .filter(({ options }) => options.length > 0)
+    .map(({ axis, options }) => `${axis}: ${options.join(', ')}`);
+  const notPassed = unproven.notPassedByMatchedCallers;
+  return [
+    `callers matched through imports pass ${passed.length > 0 ? passed.join('; ') : 'none of the options listed'}`,
+    notPassed === null
+      ? 'a matched caller passes a value the audit cannot read'
+      : notPassed.length > 0 &&
+        `options no matched caller passes: ${notPassed.join(', ')}`,
+  ]
+    .filter(Boolean)
+    .join('; ')
+    .concat(
+      '. A caller the audit cannot match, or a branch before this render, can differ.'
+    );
+}
+
+/** The kept options no matched caller passes, as `axis: option`. */
+function unreachedOptions(
+  kept: ReadonlyArray<{ axis: string; options: string[] }>,
+  reached: ReadonlyArray<{ axis: string; options: string[] }>
+): string[] {
+  return kept.flatMap(({ axis, options }) => {
+    const passed = new Set(
+      reached.find((entry) => entry.axis === axis)?.options ?? []
+    );
+    return options
+      .filter((option) => !passed.has(option))
+      .map((option) => `${axis}: ${option}`);
+  });
 }
 
 /** High without caveats; low where a caveat changes what the rewrite
@@ -1653,11 +1848,11 @@ function repeatedBaseBlocks(
     }
     const names = (ids: string[]) => ids.map(name);
     const title = (ids: string[]) =>
-      `${ids.length} components repeat the base block ${truncate(block, 90)} (${names(ids).join(', ')})`;
+      `${ids.length} components repeat the base block ${block} (${names(ids).join(', ')})`;
     for (const [reason, ids] of reasons) {
       refused.push({
         kind: 'repeated-base-block',
-        title: `${names(ids).join(', ')}, of ${members.length} components repeating the base block ${truncate(block, 90)}`,
+        title: `${names(ids).join(', ')}, of ${members.length} components repeating the base block ${block}`,
         components: ids,
         rule: reason,
       });
@@ -1699,10 +1894,6 @@ function repeatedBaseBlocks(
     });
   }
   return candidates;
-}
-
-function truncate(text: string, length: number): string {
-  return text.length <= length ? text : `${text.slice(0, length - 1)}…`;
 }
 
 /**
@@ -1994,7 +2185,7 @@ export function formatCssAudit(report: CssAuditReport): string {
           `Other CSS, left out of the totals and the floor: ${css.others.slice(0, 5).join(', ')}${css.others.length > 5 ? `, +${css.others.length - 5} more` : ''}`,
         ]
       : []),
-    `Savings are measured: each edits the shipped CSS and recompresses each file alone (gzip -9, Brotli q11 lgwin 22); Brotli ranks them, measured for at most ${BROTLI_PER_KIND} findings of each kind whose gzip saving reaches the floor; a finding it does not measure stays below the floor, except one a dynamic site holds back, which is listed as kept with no saving.`,
+    `Savings are measured: each edits the shipped CSS and recompresses each file alone (gzip -9, Brotli q11 lgwin 22); Brotli ranks them, measured for at most ${BROTLI_PER_KIND} findings of each kind whose gzip saving reaches the floor; a finding it does not measure stays below the floor, except one a dynamic site holds back, which is listed as kept with no saving. Long paths show their last three segments, and a finding names its first ${SITES_SHOWN} dynamic sites, then how many more.`,
     '',
     '1. Delivery',
     ...deliveryLines(delivery, report.components),
@@ -2069,7 +2260,7 @@ export function formatCssAudit(report: CssAuditReport): string {
   if (below.length > 0) {
     const raw = below.reduce((n, finding) => n + finding.saving.raw, 0);
     lines.push(
-      `  Below the floor: ${below.length} findings, ${bytes(raw)} raw together (${countBy(below.map(({ kind }) => kind))}); the largest:`
+      `  Below the floor: ${findings(below.length)}, ${bytes(raw)} raw together (${countBy(below.map(({ kind }) => kind))}); the largest:`
     );
     for (const finding of below.slice(0, BELOW_SHOWN)) {
       lines.push(
@@ -2079,23 +2270,21 @@ export function formatCssAudit(report: CssAuditReport): string {
   }
   if (unproven.length > 0) {
     lines.push(
-      `  Kept (unproven): ${unproven.length} findings, whose options a dynamic site may pass, so the audit counts no saving for them:`
+      `  Kept (unproven): ${findings(unproven.length)}, whose options a dynamic site may pass, so the audit counts no saving for them:`
     );
-    for (const finding of unproven.slice(0, UNPROVEN_SHOWN)) {
+    for (const finding of unproven) {
       lines.push(
         `    [${finding.kind}] ${finding.confidence}: ${titleText(finding)}`
       );
-    }
-    if (unproven.length > UNPROVEN_SHOWN) {
-      lines.push(`    +${unproven.length - UNPROVEN_SHOWN} more`);
+      const evidence = callerEvidence(finding.unproven);
+      if (evidence !== null) lines.push(`      ${evidence}`);
+      lines.push(`      next: ${finding.suggestion}`);
     }
   }
   if (removed.length > 0) {
     lines.push(
-      `  Left out: ${removed.length} findings on components removeUnbundledComponents removes, which the delivery verdict turns on and whose saving counts their CSS; e.g. ${removed
-        .slice(0, BELOW_SHOWN)
-        .map(titleText)
-        .join(' | ')}`
+      `  Left out: ${findings(removed.length)} on components removeUnbundledComponents removes, which the delivery verdict turns on and whose saving counts their CSS:`,
+      ...removed.map((finding) => `    ${titleText(finding)}`)
     );
   }
   if (restructures.refused.length > 0) {
@@ -2115,21 +2304,29 @@ export function formatCssAudit(report: CssAuditReport): string {
 const keptByCount = (sites: number): string =>
   `kept by ${sites} dynamic ${sites === 1 ? 'site' : 'sites'}`;
 
+const findings = (n: number): string =>
+  `${n} ${n === 1 ? 'finding' : 'findings'}`;
+
 /** A finding's title, and the dynamic sites that keep its options where
  *  any do, the first few named: a `file:line` in the file before it as its
  *  line alone, a long path by its last segments. */
 function titleText({ title, unproven }: Restructure | Refusal): string {
   if (unproven === undefined) return title;
   const { dynamicSites } = unproven;
+  const forwarded = new Map(
+    unproven.forwards.map(({ site, component, prop }) => [
+      site,
+      `forwarded from ${component}'s ${prop}`,
+    ])
+  );
   let previous: string | null = null;
   const named = dynamicSites.slice(0, SITES_SHOWN).map((site) => {
+    const note = forwarded.has(site) ? ` (${forwarded.get(site)})` : '';
     const line = /^(.+)(:\d+)$/.exec(site);
-    if (line !== null && line[1] === previous) return line[2];
+    if (line !== null && line[1] === previous) return `${line[2]}${note}`;
     previous = line?.[1] ?? null;
     const segments = site.split('/');
-    return site.length > 40 && segments.length > 3
-      ? `…/${segments.slice(-3).join('/')}`
-      : site;
+    return `${site.length > 40 && segments.length > 3 ? `…/${segments.slice(-3).join('/')}` : site}${note}`;
   });
   const more = dynamicSites.length - named.length;
   return `${title}, ${keptByCount(dynamicSites.length)}: ${named.join(', ')}${more > 0 ? `, +${more} more` : ''}`;
