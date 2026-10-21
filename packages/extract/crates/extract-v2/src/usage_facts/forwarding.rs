@@ -1339,10 +1339,16 @@ impl<'r> Declarations<'r> {
     }
 
     /// Whether the intrinsic prototype at `span`, a child of the last
-    /// ancestor, is used other than to read a member of it, unwritten.
+    /// ancestor, is used other than to read a member of it, unwritten, or
+    /// to compare it strictly.
     fn reshapes(&self, span: Span) -> bool {
         let mut up = self.ancestors.iter().rev();
         match super::peel_wrappers(span, &mut up) {
+            (_, Some(AstKind::BinaryExpression(binary)))
+                if matches!(binary.operator, BinaryOperator::StrictEquality | BinaryOperator::StrictInequality) =>
+            {
+                false
+            }
             (current, Some(AstKind::StaticMemberExpression(member))) if member.object.span() == current => {
                 matches!(super::member_effect(member.span, up), Some(MemberEffect::Assigned | MemberEffect::Deleted))
             }
@@ -1354,7 +1360,8 @@ impl<'r> Declarations<'r> {
     }
 
     /// The member `name` (`None` when the code computes it) of `object`, at
-    /// `span`, its key `computed` in brackets. A prototype reached by name
+    /// `span`, its key `computed` in brackets but for a number, an index
+    /// judged as a static key. A prototype reached by name
     /// (`Array.prototype`) or through a value (`[].__proto__`, or read by a
     /// key the code computes, which may be `__proto__`) is changed
     /// by any use but a member's read, and `getPrototypeOf` let go as a
@@ -1480,17 +1487,19 @@ impl<'r> Declarations<'r> {
 
     /// Whether `expression` is a new array a built-in builds, whose methods
     /// are the built-in ones and whose elements no module put a prototype
-    /// in: an array literal, `Object.keys`, `values` or `entries`,
-    /// `Array.from` or `Array.of`, or a built-in array method that returns
-    /// a new array called on one.
+    /// in: an array literal, `new Array(…)`, `Object.keys`, `values` or
+    /// `entries`, `Array.from` or `Array.of`, or a built-in array method
+    /// that returns a new array or, as `fill` does, its receiver, called on
+    /// one.
     fn fresh_array(&self, expression: &Expression<'_>) -> bool {
         match unwrap_type_assertions(expression) {
             Expression::ArrayExpression(_) => true,
+            Expression::NewExpression(new) => self.named_global(&new.callee, "Array"),
             Expression::CallExpression(call) => match unwrap_type_assertions(&call.callee) {
                 Expression::StaticMemberExpression(member) => match member.property.name.as_str() {
                     "keys" | "values" | "entries" => self.named_global(&member.object, "Object"),
                     "from" | "of" => self.named_global(&member.object, "Array"),
-                    "filter" | "map" | "slice" | "concat" | "flat" | "flatMap" | "toSorted" | "toReversed" => self.fresh_array(&member.object),
+                    "filter" | "map" | "slice" | "concat" | "flat" | "flatMap" | "toSorted" | "toReversed" | "fill" => self.fresh_array(&member.object),
                     _ => false,
                 },
                 _ => false,
@@ -1718,9 +1727,14 @@ impl<'r> Declarations<'r> {
     /// The import a call that gets the reference at `span` as an argument
     /// is rooted at (`z` in `z.string().transform(String)`): code the
     /// analysis may not read, which `FileFacts::outside_let_goes` decides.
+    /// A bare reference reaches the call too through what is written inline
+    /// as its argument (`inline_argument_of`).
     fn import_receiver(&self, span: Span) -> Option<SymbolId> {
-        let (_, _, _, parent) = self.chain(span);
-        let Some(AstKind::CallExpression(call)) = parent else { return None };
+        let call = match self.chain(span) {
+            (_, _, _, Some(AstKind::CallExpression(call))) => call,
+            (0, _, false, _) => self.inline_argument_of(span)?,
+            _ => return None,
+        };
         let mut root = &call.callee;
         loop {
             root = match unwrap_type_assertions(root) {
@@ -1730,6 +1744,33 @@ impl<'r> Declarations<'r> {
                     let symbol = self.symbol(id)?;
                     return self.scoping.symbol_flags(symbol).intersects(SymbolFlags::Import).then_some(symbol);
                 }
+                _ => return None,
+            };
+        }
+    }
+
+    /// The call that gets the value at `span` only through what is written
+    /// inline as its argument: a property's value of an object literal, or
+    /// the result of a function or arrow, at any depth. Nothing
+    /// but the call's callee, and what it hands them to, can read the value
+    /// there, as nothing else can read an argument.
+    fn inline_argument_of(&self, span: Span) -> Option<&'r CallExpression<'r>> {
+        let mut up = self.ancestors.iter().rev();
+        let mut current = span;
+        loop {
+            current = match super::peel_wrappers(current, &mut up).1? {
+                AstKind::CallExpression(call) => return Some(*call),
+                AstKind::ObjectProperty(_) => up.next()?.span(),
+                // An arrow's expression body is its result.
+                AstKind::ArrowFunctionExpression(arrow) => arrow.span,
+                // A return is its function's result.
+                AstKind::ReturnStatement(_) => loop {
+                    match up.next()? {
+                        AstKind::ArrowFunctionExpression(arrow) => break arrow.span,
+                        AstKind::Function(function) => break function.span,
+                        _ => {}
+                    }
+                },
                 _ => return None,
             };
         }
@@ -2273,12 +2314,13 @@ impl<'a> Visit<'a> for Declarations<'a> {
     }
 
     fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
-        // A number key names an index, never `__proto__`.
-        let name = match &member.expression {
-            Expression::NumericLiteral(number) => number.raw.as_ref().map(|raw| raw.as_str()),
-            _ => member.static_property_name().map(|name| name.as_str()),
+        // A number key names an index: never `__proto__`, a built-in's
+        // method or a hook, so it is judged as a static key.
+        let (name, computed) = match &member.expression {
+            Expression::NumericLiteral(number) => (number.raw.as_ref().map(|raw| raw.as_str()), false),
+            _ => (member.static_property_name().map(|name| name.as_str()), true),
         };
-        self.member(member.span, &member.object, name, true);
+        self.member(member.span, &member.object, name, computed);
         oxc::ast_visit::walk::walk_computed_member_expression(self, member);
     }
 

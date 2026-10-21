@@ -14826,6 +14826,29 @@ const Render = ({ children }) => { document.body.onclick = t; return <div>{child
             // are the module's own.
             ("const Render = ({ children }) => { const byKey = Object.keys(document.body.dataset).filter(Boolean).reduce((acc, key) => { acc[key] = { label: key }; return acc; }, {}); return <div>{children}</div>; };", "", "", false),
             ("const Render = ({ children }) => { const all = ['a'].reduceRight(function (acc, key) { acc[key] = pad; return acc; }, []); const rows = Array.from(document.body.children); rows[document.body.id] = pad; return <div>{children}</div>; };", "", "", false),
+            // So is a const declared to `new Array(…)` or an array method that
+            // returns its receiver, called on a fresh array.
+            ("const Render = ({ children }) => { const occupied = new Array(3).fill(false); occupied[document.body.id] = pad; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const occupied = useSlot().fill(false); occupied[document.body.id] = pad; return <div>{children}</div>; };", "", "", true),
+            ("const Array = useSlot;\nconst Render = ({ children }) => { const occupied = new Array(3); occupied[document.body.id] = pad; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { let occupied = new Array(3); occupied = useSlot(); occupied[document.body.id] = pad; return <div>{children}</div>; };", "", "", true),
+            // A number key names no built-in's method, hook or prototype: a
+            // store by one into a binding the module declares is judged as
+            // one by a static key.
+            ("const Render = ({ children }) => { let next = null; if (document.body.id) next = [0, 1]; next[1] = pad; return <div>{children}</div>; };", "", "", false),
+            ("[].constructor.prototype[0] = pad;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const Render = ({ children }) => { useSlot()[1] = pad; return <div>{children}</div>; };", "", "", true),
+            // A prototype compared strictly is read for nothing.
+            ("const plain = (v) => Object.getPrototypeOf(v) !== Object.prototype;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", false),
+            ("const plain = (v) => Object.getPrototypeOf(v) == pad;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const Render = ({ children }) => { (Object.getPrototypeOf(children) === pad ? Object.prototype : {}).p = 12; return <div>{children}</div>; };", "", "", true),
+            // The global object a function or an object literal written inline
+            // hands an outside call is that call's, as an argument is.
+            ("const Render = ({ children }) => { useSlot({ getElement: () => window }); return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { useSlot({ getElement() { return window; } }); return <div>{children}</div>; };", "", "", false),
+            ("import { take } from './other';\nconst Render = ({ children }) => { take({ getElement: () => window }); return <div>{children}</div>; };", "", "export const take = (o) => { o.getElement().p = 12; };\n", true),
+            ("const options = { getElement: () => window };\nconst Render = ({ children }) => { useSlot(options); options.getElement().p = 12; return <div>{children}</div>; };", "", "", true),
+            ("function get() { return window; }\nconst Render = ({ children }) => { useSlot({ getElement: get }); return <div>{children}</div>; };", "", "", true),
             ("const Render = ({ children }) => { useSlot().reduce((acc, key) => { acc[key] = pad; return acc; }, {}); return <div>{children}</div>; };", "", "", true),
             ("const Render = ({ children }) => { [1].reduce((acc, key) => { acc[key] = pad; return acc; }, useSlot()); return <div>{children}</div>; };", "", "", true),
             ("const Render = ({ children }) => { [1].reduce((acc, key) => { acc[key] = pad; return useSlot(); }, {}); return <div>{children}</div>; };", "", "", true),
