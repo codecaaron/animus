@@ -20,13 +20,26 @@ pub struct AstStore {
 impl AstStore {
     /// Parallel parse fan-out: one arena per task.
     pub fn build(entries: Vec<FileEntry>) -> Self {
+        Self::build_with(entries, |_| ()).0
+    }
+
+    /// `build`, with `step` run on each module in the task that parsed it,
+    /// straight after its parse; its results come back in store order.
+    pub(crate) fn build_with<R: Send>(
+        entries: Vec<FileEntry>,
+        step: impl Fn(&OwnedAst) -> R + Sync + Send,
+    ) -> (Self, Vec<R>) {
         let counter = ParseCounter::new(0);
-        let asts: Vec<OwnedAst> = entries
+        let (asts, results): (Vec<OwnedAst>, Vec<R>) = entries
             .into_par_iter()
-            .map(|e| OwnedAst::parse(e.path, e.source, &counter))
-            .collect();
+            .map(|e| {
+                let ast = OwnedAst::parse(e.path, e.source, &counter);
+                let result = step(&ast);
+                (ast, result)
+            })
+            .unzip();
         let parse_count = counter.into_inner();
-        AstStore { asts, parse_count }
+        (AstStore { asts, parse_count }, results)
     }
 
     pub fn parse_count(&self) -> usize {

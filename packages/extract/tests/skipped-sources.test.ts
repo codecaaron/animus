@@ -38,7 +38,6 @@ function nativeApiServing(failing = false): () => object {
   let driftWarned = false;
   const native = createV2EngineApi({
     label: 'skipped-sources-test',
-    isV2: () => true,
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     loadNativeEngine: () => require(NATIVE),
     store: {

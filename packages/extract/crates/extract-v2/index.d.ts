@@ -18,6 +18,12 @@ export declare class ExtractEngine {
    */
   analyze(fileEntriesJson: string, probeEvidenceJson?: string | undefined | null): string
   /**
+   * `analyze` of the files the last `prepare` read, so a host that
+   * prepares sends them once. The preparation is consumed; without one,
+   * it fails.
+   */
+  analyzePrepared(probeEvidenceJson?: string | undefined | null): string
+  /**
    * What each phase of the last `analyze` took, in milliseconds, as a JSON
    * object in phase order, with a `prepare` that lent its parse first:
    * `cssResolution` is the CSS resolution `rust-extract` holds. Hosts

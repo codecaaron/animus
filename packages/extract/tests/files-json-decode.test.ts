@@ -85,13 +85,24 @@ describe('engine adapter analyzeProject', () => {
     let constructed = 0;
     const api = createV2EngineApi({
       label: 'adapter-policy-test',
-      isV2: () => true,
       loadNativeEngine: () => ({
+        loadSystemModule: () => {
+          throw new Error('a refused corpus loads no system');
+        },
         ExtractEngine: class {
           constructor() {
             constructed += 1;
           }
+          prepare() {
+            return '{}';
+          }
           analyze() {
+            return '{}';
+          }
+          fullManifestJson() {
+            return '{}';
+          }
+          analysisTimings() {
             return '{}';
           }
           transformFile() {

@@ -355,12 +355,14 @@ describe('the map reaches the extractor', () => {
     const constructed: EngineOptions[] = [];
     const engineApi = createV2EngineApi({
       label: 'property-names-test',
-      isV2: () => true,
       loadNativeEngine: () => ({
-        loadSystemModule: () => SYSTEM,
+        loadSystemModule: () => ({ ...SYSTEM, dependencies: [] }),
         ExtractEngine: class {
           constructor(options: EngineOptions) {
             constructed.push(options);
+          }
+          prepare() {
+            return '{}';
           }
           analyze() {
             return JSON.stringify({
@@ -370,6 +372,16 @@ describe('the map reaches the extractor', () => {
               components: {},
             });
           }
+          fullManifestJson() {
+            return '{}';
+          }
+          analysisTimings() {
+            return '{}';
+          }
+          transformFile() {
+            return '{}';
+          }
+          clearCache() {}
         },
       }),
       store: {

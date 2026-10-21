@@ -16,7 +16,11 @@ const { config, files, evidence } = JSON.parse(readFileSync(inputPath, 'utf8'));
 const engine = new native.ExtractEngine(config);
 const start = process.hrtime.bigint();
 if ('prepare' in engine) engine.prepare(files);
-const hostManifestJson = engine.analyze(files, evidence ?? undefined);
+// An engine that analyzes its preparation takes the files once.
+const hostManifestJson =
+  'analyzePrepared' in engine
+    ? engine.analyzePrepared(evidence ?? undefined)
+    : engine.analyze(files, evidence ?? undefined);
 const ms = Number(process.hrtime.bigint() - start) / 1e6;
 const manifestJson =
   'fullManifestJson' in engine ? engine.fullManifestJson() : hostManifestJson;

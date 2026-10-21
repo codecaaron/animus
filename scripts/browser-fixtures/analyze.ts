@@ -39,7 +39,6 @@ export function analyzeFixture({
   let driftWarned = false;
   const engineApi = createV2EngineApi({
     label: 'browser-fixtures',
-    isV2: () => true,
     loadNativeEngine: () =>
       require(resolve(ROOT, 'packages', 'extract', 'index-v2.js')),
     store: {

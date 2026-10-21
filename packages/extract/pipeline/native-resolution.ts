@@ -6,6 +6,8 @@
  * caller.
  */
 
+import type { NativeModule } from '@animus-ui/extract';
+
 /** An extension order: what a specifier's base is tried with, in order. */
 export interface ExtensionOrder {
   /** Appended to the base, then to `{base}/index`. */
@@ -40,43 +42,19 @@ export type ProbedFile =
   | { kind: 'case-mismatch'; candidate: string; actual: string }
   | { kind: 'absent' };
 
-/** The engine functions read here, as `crates/extract-v2/index.d.ts`
- *  declares them; a published declaration cannot import that file, which
- *  lies outside `dist`. */
-interface NativeResolution {
-  builtInExtensionPolicy(): string;
-  specifierCandidates(
-    base: string,
-    extensionPolicyJson?: string | null,
-    sources?: string[] | null,
-    joinedIndex?: boolean | null
-  ): string[];
-  seeFile(
-    candidate: string,
-    within?: string | null
-  ): {
-    kind: string;
-    actual?: string;
-  };
-  probeFile(
-    candidates: string[],
-    within?: string | null
-  ): { kind: string; path?: string; candidate?: string; actual?: string };
-}
-
-let loaded: NativeResolution | undefined;
+let loaded: NativeModule | undefined;
 
 /** The native engine module, loaded once: the one place the pipeline and
  *  the session require it. */
-export function requireNativeEngine(): NativeResolution {
-  // SAFETY: the package's own native entry, whose generated `index.d.ts`
-  // declares these functions with these signatures.
+export function requireNativeEngine(): NativeModule {
+  // SAFETY: the package's own native entry, built with the generated
+  // `index.d.ts` that `NativeModule` names.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  loaded ??= require('@animus-ui/extract') as NativeResolution;
+  loaded ??= require('@animus-ui/extract') as NativeModule;
   return loaded;
 }
 
-function native(): NativeResolution {
+function native(): NativeModule {
   return requireNativeEngine();
 }
 

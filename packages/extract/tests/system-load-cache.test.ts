@@ -32,7 +32,6 @@ function nativeApi(): EngineApi {
   let driftWarned = false;
   return createV2EngineApi({
     label: 'system-load-cache-test',
-    isV2: () => true,
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     loadNativeEngine: () => require(NATIVE),
     store: {
@@ -153,7 +152,7 @@ function loader(root: string, cache?: string) {
   const engine: EngineApi = {
     ...native,
     engineBuildId: () => counter.buildId,
-    loadSystemModule: (...args: unknown[]) => {
+    loadSystemModule: (...args) => {
       counter.loads++;
       const result = native.loadSystemModule(...args);
       const during = counter.duringLoad;

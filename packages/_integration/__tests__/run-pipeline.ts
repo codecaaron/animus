@@ -36,7 +36,6 @@ let driftWarned = false;
 
 const engineApi = createV2EngineApi({
   label: 'animus-integration',
-  isV2: () => true,
   loadNativeEngine: () => native,
   store: {
     getEngine: () => engine,

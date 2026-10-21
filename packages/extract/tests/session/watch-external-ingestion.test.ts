@@ -25,7 +25,7 @@ import {
 import type { AnalysisSourceEntry, EngineApi } from '../../pipeline';
 
 const mocks = vi.hoisted(() => ({
-  loadSystemModule: vi.fn<EngineApi['loadSystemModule']>(),
+  loadSystemModule: vi.fn(),
   analyzeProject: vi.fn<EngineApi['analyzeProject']>(),
   clearAnalysisCache: vi.fn<EngineApi['clearAnalysisCache']>(),
 }));

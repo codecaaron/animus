@@ -145,11 +145,11 @@ function evaluateSystemModule(
     systemPath,
     rootDir,
     systemExport,
-    conditions,
+    conditions && [...conditions],
     workspaces,
     extensions && extensionPolicyJson(extensions),
     instances,
-  ];
+  ] satisfies Parameters<EngineApi['loadSystemModule']>;
   try {
     return cachedSystemLoad(
       engine.engineBuildId?.(),

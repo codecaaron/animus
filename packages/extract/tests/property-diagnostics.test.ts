@@ -26,7 +26,6 @@ function makeApi(): any {
   let driftWarned = false;
   return createV2EngineApi({
     label: 'property-diagnostics-test',
-    isV2: () => true,
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     loadNativeEngine: () => require(NATIVE),
     store: {

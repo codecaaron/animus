@@ -26,6 +26,8 @@ declare namespace engineV2 {
   export type ExtractEngine = ExtractV2.ExtractEngine;
   export type EngineOptions = ExtractV2.EngineOptions;
   export type NapiSystemConfig = ExtractV2.NapiSystemConfig;
+  /** The whole native module, as `require` returns it. */
+  export type NativeModule = typeof ExtractV2;
 }
 
 declare const engineV2: unknown;

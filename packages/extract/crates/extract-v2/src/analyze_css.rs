@@ -1172,6 +1172,7 @@ pub struct ShadowingProbe {
 }
 
 /// How a probe ends.
+#[derive(Clone)]
 enum ProbeOutcome {
     Found(String),
     Incomplete { candidate: String, opened: String, why: Opening },
@@ -1430,8 +1431,59 @@ thread_local! {
         const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
+/// The probes made for one `run`, by base. A probe reads only the analysed
+/// set's keys and the inputs (aliases, extensions, evidence, system modules),
+/// which `run` holds borrowed and unchanged throughout, so its outcome holds
+/// for the run; another set or inputs (by address) is probed afresh. What a
+/// probe records, `resolve_import_source` records on every call as before.
+struct RunProbes {
+    /// The addresses of the run's files and inputs.
+    run: (usize, usize),
+    outcomes: FxHashMap<String, ProbeOutcome>,
+}
+
+thread_local! {
+    static RUN_PROBES: std::cell::RefCell<Option<RunProbes>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Keeps `run`'s probes for `files` and `inputs` until dropped, restoring
+/// any outer run's.
+struct RunProbesGuard(Option<RunProbes>);
+
+impl RunProbesGuard {
+    fn enter<T>(files: &BTreeMap<String, T>, inputs: &CssInputs) -> Self {
+        let probes = RunProbes { run: run_of(files, inputs), outcomes: FxHashMap::default() };
+        Self(RUN_PROBES.replace(Some(probes)))
+    }
+}
+
+impl Drop for RunProbesGuard {
+    fn drop(&mut self) {
+        RUN_PROBES.set(self.0.take());
+    }
+}
+
+fn run_of<T>(files: &BTreeMap<String, T>, inputs: &CssInputs) -> (usize, usize) {
+    (std::ptr::from_ref(files).addr(), std::ptr::from_ref(inputs).addr())
+}
+
 /// The analyzed file `base` names, through the host's extension order.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> ProbeOutcome {
+    // The uncached probe never reads the run's probes, so the borrow holds.
+    RUN_PROBES.with_borrow_mut(|probes| match probes {
+        Some(probes) if probes.run == run_of(files, inputs) => {
+            if let Some(outcome) = probes.outcomes.get(base) {
+                return outcome.clone();
+            }
+            let outcome = probe_files_uncached(base, files, inputs);
+            probes.outcomes.insert(base.to_string(), outcome.clone());
+            outcome
+        }
+        _ => probe_files_uncached(base, files, inputs),
+    })
+}
+
+fn probe_files_uncached<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> ProbeOutcome {
     use animus_system_loader::resolution::{extension_policy, Probe, Seen};
     #[cfg(test)]
     PROBED.with(|probed| probed.borrow_mut().insert(base.to_string()));
@@ -3882,6 +3934,7 @@ pub fn run(
     inputs: &CssInputs,
     class_prefix: &str,
 ) -> CssOutput {
+    let _probes = RunProbesGuard::enter(files, inputs);
     run_with_system_floor(files, order, inputs, class_prefix, true)
 }
 

@@ -375,9 +375,9 @@ pub struct ExtractEngine {
     order: Vec<String>,
     css: Option<analyze_css::CssOutput>,
     parse_count: usize,
-    /// The files `prepare` parsed, by path and source, and their parse, which
-    /// the next `analyze` of the same files reads instead of parsing again.
-    prepared: Option<(Vec<(String, String)>, ast_store::AstStore)>,
+    /// What `prepare` read of its files, which the next `analyze` of the
+    /// same files reads instead of parsing them again.
+    prepared: Option<Prepared>,
     /// What each phase of the last `prepare` and `analyze` took, in order
     /// (`analysisTimings`): kept beside the manifest, never in it, so the
     /// manifest's bytes stay the same run to run.
@@ -400,6 +400,15 @@ impl PhaseClock {
         self.phases.push((phase, (now - self.last).as_secs_f64() * 1000.0));
         self.last = now;
     }
+}
+
+/// A `prepare`'s files: their identity and synthesized components, their
+/// parse, and each module's Lower output in store order.
+struct Prepared {
+    identity: String,
+    synthesized: BTreeMap<String, std::collections::BTreeSet<String>>,
+    store: ast_store::AstStore,
+    lowered: Vec<crate::link::Lowered>,
 }
 
 #[derive(serde::Deserialize)]
@@ -456,6 +465,15 @@ fn canonical_entries(file_entries_json: &str) -> napi::Result<Vec<InputEntry>> {
 /// NodeNext substitutions, aliases). Evidence gathered for one input is
 /// never read for another, even one with as many files, or the same files
 /// under another host's order.
+/// Each file's synthesized components, by path, where it has any.
+fn synthesized_of(entries: &[InputEntry]) -> BTreeMap<String, std::collections::BTreeSet<String>> {
+    entries
+        .iter()
+        .filter(|entry| !entry.synthesized_components.is_empty())
+        .map(|entry| (entry.path.clone(), entry.synthesized_components.iter().cloned().collect()))
+        .collect()
+}
+
 fn input_identity(entries: &[InputEntry], inputs: &analyze_css::CssInputs) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1100,17 +1118,19 @@ impl ExtractEngine {
         let mut clock = PhaseClock::start();
         let entries = canonical_entries(&file_entries_json)?;
         let identity = input_identity(&entries, &self.opts.css_inputs);
-        let kept: Vec<(String, String)> = entries.iter().map(|e| (e.path.clone(), e.source.clone())).collect();
-        let store = ast_store::AstStore::build(
+        let synthesized = synthesized_of(&entries);
+        let (store, lowered): (_, Vec<_>) = ast_store::AstStore::build_with(
             entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
+            crate::link::Lowered::of_listed,
         );
+        let (lowered, listed): (Vec<_>, Vec<_>) = lowered.into_iter().unzip();
         clock.mark("prepareParse");
         let mut bases = std::collections::BTreeSet::new();
         let mut loads = Vec::new();
         let mut packages = std::collections::BTreeSet::new();
-        let analysed: BTreeMap<String, ()> = kept.iter().map(|(path, _)| (path.clone(), ())).collect();
-        for ast in store.iter() {
-            let (all, listed) = crate::loads::collect_listed(ast.program());
+        let analysed: BTreeMap<String, ()> = store.iter().map(|ast| (ast.path.clone(), ())).collect();
+        for ((ast, lowered), listed) in store.iter().zip(&lowered).zip(listed) {
+            let all = &lowered.loads;
             loads.extend(listed.into_iter().map(|load| ListedLoad { importer: ast.path.clone(), load }));
             // A package a runtime load, a re-export or a namespace import
             // names may reach analysed modules: the host says which.
@@ -1135,7 +1155,7 @@ impl ExtractEngine {
                 }
             }
         }
-        self.prepared = Some((kept, store));
+        self.prepared = Some(Prepared { identity: identity.clone(), synthesized, store, lowered });
         clock.mark("prepareProbes");
         self.timings = clock.phases;
         serde_json::to_string(
@@ -1149,8 +1169,39 @@ impl ExtractEngine {
     /// given. A `prepare` of the same files lends its parse.
     #[napi]
     pub fn analyze(&mut self, file_entries_json: String, probe_evidence_json: Option<String>) -> napi::Result<String> {
+        self.analyze_files(Some(file_entries_json), probe_evidence_json)
+    }
+
+    /// `analyze` of the files the last `prepare` read, so a host that
+    /// prepares sends them once. The preparation is consumed; without one,
+    /// it fails.
+    #[napi]
+    pub fn analyze_prepared(&mut self, probe_evidence_json: Option<String>) -> napi::Result<String> {
+        self.analyze_files(None, probe_evidence_json)
+    }
+
+    fn analyze_files(&mut self, file_entries_json: Option<String>, probe_evidence_json: Option<String>) -> napi::Result<String> {
         let mut clock = PhaseClock::start();
-        let entries = canonical_entries(&file_entries_json)?;
+        // A preparation of the same paths and sources lends its parse.
+        let (entries, mut synthesized, prepared) = match file_entries_json {
+            Some(json) => {
+                let entries = canonical_entries(&json)?;
+                let prepared = self.prepared.take().filter(|prepared| {
+                    prepared.store.len() == entries.len()
+                        && prepared.store.iter().zip(&entries).all(|(ast, e)| ast.path == e.path && ast.source() == e.source)
+                });
+                let synthesized = synthesized_of(&entries);
+                (entries, synthesized, prepared)
+            }
+            None => {
+                let mut prepared = self
+                    .prepared
+                    .take()
+                    .ok_or_else(|| napi::Error::from_reason("analyzePrepared needs a prepare first, once per analysis"))?;
+                let synthesized = std::mem::take(&mut prepared.synthesized);
+                (Vec::new(), synthesized, Some(prepared))
+            }
+        };
         if let Ok(mut shadowing) = self.opts.css_inputs.shadowing_probes.lock() {
             shadowing.clear();
         }
@@ -1181,7 +1232,10 @@ impl ExtractEngine {
         }
         // Evidence gathered for other files (a same-count edit since the
         // `prepare`) is not this input's, so the probes ask the file set.
-        let identity = input_identity(&entries, &self.opts.css_inputs);
+        let identity = match &prepared {
+            Some(prepared) => prepared.identity.clone(),
+            None => input_identity(&entries, &self.opts.css_inputs),
+        };
         self.opts.css_inputs.probe_evidence = match probe_evidence_json {
             Some(json) => Some(
                 serde_json::from_str::<analyze_css::ProbeEvidence>(&json)
@@ -1194,30 +1248,16 @@ impl ExtractEngine {
         self.sources.clear();
         self.order.clear();
 
-        let mut synthesized: BTreeMap<String, std::collections::BTreeSet<String>> = entries
-            .iter()
-            .filter(|entry| !entry.synthesized_components.is_empty())
-            .map(|entry| (entry.path.clone(), entry.synthesized_components.iter().cloned().collect()))
-            .collect();
-        let prepared = self.prepared.take().filter(|(kept, _)| {
-            kept.len() == entries.len()
-                && kept.iter().zip(&entries).all(|((path, source), e)| *path == e.path && *source == e.source)
-        });
         // A `prepare` that lent its parse lends its phases too.
         if prepared.is_some() {
             clock.phases = std::mem::take(&mut self.timings);
         }
         clock.mark("input");
-        let store = match prepared {
-            Some((_, store)) => store,
-            None => ast_store::AstStore::build(
-                entries
-                    .into_iter()
-                    .map(|e| ast_store::FileEntry {
-                        path: e.path,
-                        source: e.source,
-                    })
-                    .collect(),
+        let (store, lowered) = match prepared {
+            Some(prepared) => (prepared.store, prepared.lowered),
+            None => ast_store::AstStore::build_with(
+                entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
+                crate::link::Lowered::of,
             ),
         };
         self.parse_count = store.parse_count();
@@ -1236,7 +1276,7 @@ impl ExtractEngine {
         let mut style_modules: BTreeMap<String, StyleModule> = BTreeMap::new();
         // Each file's Lower output, before anything reads across files.
         let mut lowered_by_file: BTreeMap<String, crate::link::Lowered> =
-            store.iter().map(|ast| (ast.path.clone(), crate::link::Lowered::of(ast))).collect();
+            store.iter().map(|ast| ast.path.clone()).zip(lowered).collect();
         // What each module's parse and semantic build give alone, the object
         // facts the member tables follow among them, read before any static
         // value is evaluated; fact extraction completes them.

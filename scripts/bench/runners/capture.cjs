@@ -17,18 +17,33 @@ Module._load = function capture(request, parent, isMain) {
   if (out === undefined || Engine === undefined || wrapped.has(exports))
     return exports;
   wrapped.add(exports);
-  exports.ExtractEngine = class extends Engine {
+  const record = (engine, files, evidence) =>
+    writeFileSync(
+      out,
+      JSON.stringify({ config: engine.benchConfig, files, evidence })
+    );
+  const Captured = class extends Engine {
     constructor(config) {
       super(config);
       this.benchConfig = config;
     }
+    prepare(files) {
+      this.benchFiles = files;
+      return super.prepare(files);
+    }
     analyze(files, evidence) {
-      writeFileSync(
-        out,
-        JSON.stringify({ config: this.benchConfig, files, evidence })
-      );
+      record(this, files, evidence);
       return super.analyze(files, evidence);
     }
   };
+  // A host that prepares sends the files once, to `prepare`; only an engine
+  // that has `analyzePrepared` is offered it.
+  if ('analyzePrepared' in Engine.prototype) {
+    Captured.prototype.analyzePrepared = function analyzePrepared(evidence) {
+      record(this, this.benchFiles, evidence);
+      return Engine.prototype.analyzePrepared.call(this, evidence);
+    };
+  }
+  exports.ExtractEngine = Captured;
   return exports;
 };

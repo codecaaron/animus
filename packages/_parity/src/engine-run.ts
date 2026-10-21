@@ -19,6 +19,7 @@ import { enumerateUnits } from './corpus';
 
 import type { UnitSurface } from './types';
 import type { JsonObject, JsonValue } from '@animus-ui/assertions';
+import type { NativeModule } from '@animus-ui/extract';
 import type {
   EngineApi,
   ManifestDiagnostic,
@@ -44,20 +45,13 @@ interface ParityManifest extends Pick<
   dynamic_props: JsonObject;
 }
 
-type NativeEngineConstructor =
-  (typeof import('../../extract/crates/extract-v2'))['ExtractEngine'];
-
 interface NativeEngineModuleCandidate {
   ExtractEngine?: object | null;
 }
 
-interface NativeEngineModule {
-  ExtractEngine: NativeEngineConstructor;
-}
-
 function parseNativeEngineModule(
   candidate: NativeEngineModuleCandidate
-): NativeEngineModule {
+): NativeModule {
   if (
     Object.prototype.toString.call(candidate.ExtractEngine) !==
     '[object Function]'
@@ -66,7 +60,7 @@ function parseNativeEngineModule(
   }
   // SAFETY: the value comes from the repository-owned index-v2.js bridge, and
   // the function-tag check above fails loud before construction.
-  return candidate as NativeEngineModule;
+  return candidate as NativeModule;
 }
 
 function loadEngine(name: string): EngineApi {
@@ -79,7 +73,6 @@ function loadEngine(name: string): EngineApi {
     let driftWarned = false;
     return createV2EngineApi({
       label: 'animus-parity',
-      isV2: () => true,
       loadNativeEngine: () => native,
       store: {
         getEngine: () => instance,

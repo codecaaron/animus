@@ -12,6 +12,7 @@ import type {
   FontPreload,
   V2ExtractEngine,
 } from '../pipeline/index';
+import type { NativeModule } from '@animus-ui/extract';
 
 /**
  * A build's shared state lives in one registry on `globalThis`, keyed by its
@@ -304,10 +305,8 @@ export function setWatchTransaction(
   joined(key).watchTransaction = transaction;
 }
 
-/** Single choke-point for every native extraction call; the NAPI module's
- *  own `.d.ts` is the authoritative surface for what it returns. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function requireEngine(): any {
+/** Single choke-point for every native extraction call. */
+export function requireEngine(): NativeModule {
   return requireNativeEngine();
 }
 
@@ -399,7 +398,6 @@ export function engineHandle(
     let driftWarned = false;
     api = createV2EngineApi({
       ...options,
-      isV2: () => true,
       loadNativeEngine: engineFactory,
       store: {
         getEngine: () => engine,

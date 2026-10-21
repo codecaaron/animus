@@ -51,23 +51,34 @@ pub(crate) struct Lowered {
 
 impl Lowered {
     pub(crate) fn of(ast: &crate::owned_ast::OwnedAst) -> Self {
+        Self::of_listed(ast).0
+    }
+
+    /// `of`, with the computed loads a host expands, read in the same pass
+    /// as `loads` (`loads::collect_listed`).
+    pub(crate) fn of_listed(ast: &crate::owned_ast::OwnedAst) -> (Self, Vec<crate::loads::HostLoad>) {
         Self::from_parts(ModuleId::new(&ast.path), ast.program(), ast.module_record())
     }
 
     /// Lowers `program` with one semantic build. The table is read straight
     /// after it, while the program's reference cells hold its numbering.
-    pub(crate) fn from_parts(module: ModuleId, program: &Program<'_>, module_record: &ParsedRecord<'_>) -> Self {
+    fn from_parts(
+        module: ModuleId,
+        program: &Program<'_>,
+        module_record: &ParsedRecord<'_>,
+    ) -> (Self, Vec<crate::loads::HostLoad>) {
         let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
         let bindings = BindingTable::prepare(IdentityInput { module, program, module_record, scoping: &scoping });
         let record = copy_module_record(module_record, &bindings, program.source_text, program);
         let strings = crate::usage_facts::string_code(program, &scoping);
         let readings = std::sync::Arc::new(crate::usage_facts::function_param_readings(program, &scoping, strings.direct_eval));
         let loader_escape = crate::usage_facts::loader_escape(program, &scoping);
-        Self {
+        let (loads, listed) = crate::loads::collect_listed(program);
+        let lowered = Self {
             scoping,
             bindings: std::sync::Arc::new(bindings),
             record: std::sync::Arc::new(record),
-            loads: crate::loads::collect(program),
+            loads,
             readings,
             dynamic_code: strings.reads,
             direct_eval: strings.direct_eval,
@@ -75,7 +86,8 @@ impl Lowered {
             replaces_promise: strings.replaces_promise,
             global_let_goes: strings.global_let_goes,
             loader_escape,
-        }
+        };
+        (lowered, listed)
     }
 }
 

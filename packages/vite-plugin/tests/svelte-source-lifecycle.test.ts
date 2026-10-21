@@ -320,7 +320,9 @@ afterEach(() => {
 describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
   test('the context wires its corpus with the vite prefix and fails loud without extractFacts', async () => {
     const legacyEngine = {
-      loadSystemModule: () => ({}),
+      loadSystemModule: () => {
+        throw new Error('the corpus fails before the system loads');
+      },
       analyzeProject: () => '{}',
       transformFile: () => ({ code: '', hasComponents: false }),
       clearAnalysisCache: () => {},
