@@ -10630,6 +10630,11 @@ fn run_with_system_floor(
     for (id, at) in delivered_ids {
         escape(&mut escaped_ids, escape_reasons.as_mut(), [id], || delivered_tags[at].opening());
     }
+    // A direct `eval` can load any module and render what it exports with
+    // any props.
+    if let Some((file, _)) = files.iter().find(|(_, ff)| ff.direct_eval) {
+        escape(&mut escaped_ids, escape_reasons.as_mut(), evaluated_ids.iter().cloned(), || SlotOpening::rule("direct-eval").in_file(file));
+    }
     // A family built through `Object.assign` is followed only while no
     // module may make `Object.assign` something else.
     if files.values().any(|ff| ff.rewrites_object) {
@@ -18323,6 +18328,14 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("const Box = ds.styles({}).asElement('section');\nexport const S = ({ X }) => <Box as={X}><R size=\"sm\" /></Box>;", &every),
             ("const Box = ds.styles({}).asElement('section');\nexport const S = ({ Box }) => <Box><R size=\"sm\" /></Box>;", &every),
             ("const Root = ds.styles({}).asElement('section');\nexport const S = ({ Family }) => <Family.Root><R size=\"sm\" /></Family.Root>;", &every),
+            // The elements a component builds itself and puts in its own `as`
+            // reach whatever type a caller chose, a component outside the
+            // analysis included, as a literal foreign tag's children do.
+            ("import { Slot } from 'ui-lib';\nconst Poly = ({ as: Tag = 'span', ...rest }) => <Tag {...rest}><R size=\"sm\" /></Tag>;\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("import { Slot } from 'ui-lib';\nconst Poly = ({ as: Tag, ...rest }) => <Tag {...rest}><R size=\"sm\" /></Tag>;\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("import { Slot } from 'ui-lib';\nimport { createElement } from 'react';\nconst Poly = ({ as, ...rest }) => createElement(as ?? 'span', rest, <R size=\"sm\" />);\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("import { Slot } from 'ui-lib';\nconst Poly = ({ as: Tag = 'span' }) => <Tag icon={<R size=\"sm\" />} />;\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("const Poly = ({ as: Tag = 'span', ...rest }) => <Tag {...rest}><R size=\"sm\" /></Tag>;\nexport const S = () => <Poly as=\"div\" />;\neval('0');", &every),
             ("const W = (p) => <R {...p} />;\nexport const S = () => <W size=\"sm\" />;", &pruned),
             ("function Card({ children }) { return <section>{children}</section>; }\nexport const S = () => <Card><R size=\"sm\" /></Card>;", &pruned),
             ("const Box = ds.styles({}).asElement('section');\nexport const S = () => <Box><R size=\"sm\" /></Box>;", &pruned),
@@ -18331,6 +18344,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let app = format!("import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n");
             assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]), want, "{setup}");
         }
+        // A direct `eval` in any module can load any module and render what
+        // it exports with any props.
+        let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
+        let evil = "export const run = () => eval('0');\n";
+        assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app), ("evil.tsx", evil)]), &every);
         let app = "import { R } from './r';\nimport { Family } from './receivers';\n\
                    export const S = () => <Family.Root><R size=\"sm\" active /></Family.Root>;\n";
         for (receivers, want) in [

@@ -2758,11 +2758,19 @@ impl<'a> Walk<'_, '_, 'a> {
         self.module.symbol(id).is_some_and(|symbol| among.contains(&symbol) && !self.module.scoping.symbol_is_mutated(symbol))
     }
 
-    /// An element of the caller's type at `at` renders what reaches it there
-    /// or in a host element, and hands on only the `as` that chose it.
-    fn hands_on_as(&mut self, at: u32) {
+    /// An element of the caller's type at `at`, which `value` reaches, hands
+    /// on the `as` that chose it: what the caller writes there reaches its
+    /// own site's judgement. The elements the component builds itself and
+    /// puts there are no caller's, so no site judges them: they reach
+    /// whatever type a caller chose, a component outside the analysis
+    /// included, and are handed outside as a literal foreign tag hands its
+    /// children.
+    fn hands_on_as(&mut self, at: u32, value: &Held) {
         let as_input = Held { inputs: Inputs::named(BTreeSet::from([self.module.names.id("as")])), ..Held::default() };
         self.sink(at, None, &as_input);
+        if value.has_elements() {
+            self.sink(at, None, &value.elements());
+        }
     }
 
     /// Whether `call` is React's `cloneElement`, or Animus's `renderAsChild`.
@@ -2941,7 +2949,7 @@ impl<'a> Walk<'_, '_, 'a> {
             if position == 0 && self.creates_element(call) {
                 if let Some(caller_as) = self.caller_type(expression) {
                     if caller_as {
-                        self.hands_on_as(call.span.start);
+                        self.hands_on_as(call.span.start, value);
                     }
                     continue;
                 }
@@ -3409,7 +3417,7 @@ impl<'a> Walk<'_, '_, 'a> {
             return Place::Carry;
         }
         if matches!(&opening.name, JSXElementName::IdentifierReference(id) if self.unchanged(id, &self.module.as_types)) {
-            self.hands_on_as(element.span.start);
+            self.hands_on_as(element.span.start, value);
             return Place::Carry;
         }
         let provider = matches!(&opening.name, JSXElementName::MemberExpression(member) if member.property.name == "Provider");
