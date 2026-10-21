@@ -75,5 +75,12 @@
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
     "candidate": "3588e782cf9bd3aead1ec77b14b8fe68e306c77ebcfc9bb62d35575f22707059",
     "reason": "Beside the differences above, only diagnostic wording differs (the whole-component removal warning states what it keeps): the removal warning now names the 4 components no analysed code renders that it keeps (Alert, Badge, GroupItem, MetricGrid), and each of the 36 identity-uncertain-tag info lines ends \"which keeps whole-component removal off\" instead of \"so every extracted component is kept and none is removed as unused\". CSS (270,340 bytes), the 204 components and the 73 diagnostics are those of the candidate this entry follows (18488b4e…); the number-key index rule, the redeclared-var rule and git-ignored file skipping change nothing in this analysis."
+  },
+  {
+    "row": "analysis:showcase",
+    "fixture": "showcase-analysis",
+    "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
+    "candidate": "4853ea9cf08a1f3ac73051150c6b82097a98b6e0ac45e94bf0fa2a2ef8e5e1fe",
+    "reason": "Beside the differences above, only the whole-component removal warning's wording differs: it names its check, the 4 components the analysed source never renders (Alert, Badge, GroupItem, MetricGrid), counted from the source's renders, not from what a bundle includes. CSS (270,340 bytes), the 204 components and the 73 diagnostics are those of the candidate this entry follows (3588e782…)."
   }
 ]
