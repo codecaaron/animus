@@ -172,7 +172,14 @@ function buildRef(ref: string, work: string): BuiltRef {
   const steps: Array<[string, string[]]> = [
     ['sh', ['-c', `git -C "${REPO}" archive ${sha} | tar -x -C "${dir}"`]],
     ['bun', ['install', '--frozen-lockfile']],
-    ['bunx', ['vp', 'run', 'build:extract-v2']],
+    // A ref from before the v2 naming retired names its task build:extract-v2.
+    [
+      'sh',
+      [
+        '-c',
+        'if [ -d packages/extract/crates/extractor ]; then bunx vp run build:extractor; else bunx vp run build:extract-v2; fi',
+      ],
+    ],
     ['bunx', ['vp', 'run', 'build:ts']],
   ];
   for (const [command, args] of steps) {

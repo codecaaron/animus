@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds the v2 NAPI binary under an exactly-pinned Rust release.
+# Builds the extractor binary under an exactly-pinned Rust release.
 #
 # The channel read from rust-toolchain.toml is the single source of truth:
 # `rustc --version` must resolve to that exact release or this script aborts
@@ -15,7 +15,7 @@
 # regression suite can substitute doubles on PATH and assert: no network when
 # cargo is missing, bootstrap skipped when cargo is present, a release mismatch
 # aborting before the build, the installer removed after a bootstrap, and
-# delegation to exactly `bun run --filter @animus-ui/extract build:v2`.
+# delegation to exactly `bun run --filter @animus-ui/extract build:extractor`.
 
 set -euo pipefail
 
@@ -80,6 +80,6 @@ if [ "$rust_release" != "$rust_channel" ]; then
   echo "ERROR: Rust release mismatch: expected $rust_channel from $toolchain_file, resolved ${rust_release:-unknown} from $RUSTC_BIN. Install or select Rust $rust_channel and retry." >&2
   exit 1
 fi
-echo "[build:extract-v2] $rust_version (channel $rust_channel)"
+echo "[build:extractor] $rust_version (channel $rust_channel)"
 
-exec "$BUN_BIN" run --filter '@animus-ui/extract' build:v2
+exec "$BUN_BIN" run --filter '@animus-ui/extract' build:extractor

@@ -6,7 +6,7 @@
  * The showcase cases read the built showcase stylesheet, so they need
  * `packages/showcase/dist` (or `ANIMUS_SHOWCASE_DIST`). The runtime keyword and `@scope`
  * cases analyze a fixture through the native engine (`vp run
- * build:extract-v2`), and the runner imports the built `@animus-ui/assertions`
+ * build:extractor`), and the runner imports the built `@animus-ui/assertions`
  * package (`vp run build:ts`).
  */
 import { findCssFiles, readAllConcat } from '@animus-ui/assertions';

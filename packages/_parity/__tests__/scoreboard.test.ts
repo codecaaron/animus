@@ -18,7 +18,7 @@ function divergence(overrides: Partial<Divergence> = {}): Divergence {
 
 const BASE: ScoreboardInput = {
   mode: 'baseline',
-  engines: ['baseline:v2', 'v2'],
+  engines: ['baseline:extractor', 'extractor'],
   devMode: false,
   unitIds: [],
   divergences: [],
@@ -30,7 +30,7 @@ describe('renderScoreboard', () => {
   test('empty corpus reports 100% rather than dividing by zero', () => {
     expect(renderScoreboard(BASE)).toBe(
       [
-        'parity baseline — engines: baseline:v2 vs v2 — devMode: false',
+        'parity baseline — engines: baseline:extractor vs extractor — devMode: false',
         '',
         'Units passed: 0/0 (100.00%)',
         'Divergences: 0 (0 unregistered)',
@@ -52,7 +52,7 @@ describe('renderScoreboard', () => {
 
     expect(out).toBe(
       [
-        'parity baseline — engines: baseline:v2 vs v2 — devMode: false',
+        'parity baseline — engines: baseline:extractor vs extractor — devMode: false',
         '',
         'Units passed: 2/2 (100.00%)',
         'Divergences: 0 (0 unregistered)',
@@ -80,7 +80,7 @@ describe('renderScoreboard', () => {
 
     expect(out).toBe(
       [
-        'parity baseline — engines: baseline:v2 vs v2 — devMode: false',
+        'parity baseline — engines: baseline:extractor vs extractor — devMode: false',
         '',
         'Units passed: 1/2 (50.00%)',
         'Divergences: 1 (1 unregistered)',
@@ -124,7 +124,7 @@ describe('renderScoreboard', () => {
 
     expect(out).toBe(
       [
-        'parity baseline — engines: baseline:v2 vs v2 — devMode: false',
+        'parity baseline — engines: baseline:extractor vs extractor — devMode: false',
         '',
         'Units passed: 0/1 (0.00%)',
         'Divergences: 1 (0 unregistered)',
@@ -229,12 +229,12 @@ describe('renderScoreboard', () => {
     const out = renderScoreboard({
       ...BASE,
       mode: 'self-check',
-      engines: ['v2', 'v2'],
+      engines: ['extractor', 'extractor'],
       devMode: true,
     });
 
     expect(out.split('\n')[0]).toBe(
-      'parity self-check — engines: v2 vs v2 — devMode: true'
+      'parity self-check — engines: extractor vs extractor — devMode: true'
     );
   });
 });

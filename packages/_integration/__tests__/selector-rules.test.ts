@@ -92,7 +92,7 @@ describe('[Bug 1] createElement(bareIdent, ...) usage recognition', () => {
   });
 });
 
-describe('unresolvable token ref inside _alias — v2 drops the declaration', () => {
+describe('unresolvable token ref inside _alias — the extractor drops the declaration', () => {
   const entry = readFixtureFile(
     FIXTURES,
     'selector-rules-unresolvable-token.tsx'

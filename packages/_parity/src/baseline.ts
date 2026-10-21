@@ -46,7 +46,7 @@ export type BaselineMode = 'production' | 'development';
  *  A `type`, not an `interface`, so it stays assignable to the JSON domain. */
 export type BaselineEnvelope = {
   version: typeof BASELINE_VERSION;
-  engine: 'v2';
+  engine: 'extractor';
   mode: BaselineMode;
   surfaceSchemaSha256: string;
   corpusSha256: string;
@@ -89,7 +89,7 @@ export function createBaselineEnvelope(
 ): BaselineEnvelope {
   return {
     version: BASELINE_VERSION,
-    engine: 'v2',
+    engine: 'extractor',
     mode,
     surfaceSchemaSha256: SURFACE_SCHEMA_SHA256,
     corpusSha256: corpusDigest,
@@ -113,7 +113,8 @@ export function validateBaselineEnvelope(
       `baseline version differs (${document.version} vs ${BASELINE_VERSION})`
     );
   }
-  if (document.engine !== 'v2') errors.push('baseline engine must be v2');
+  if (document.engine !== 'extractor')
+    errors.push('baseline engine must be extractor');
   if (document.mode !== expected.mode) {
     errors.push(`baseline mode differs (${document.mode} vs ${expected.mode})`);
   }
@@ -252,10 +253,10 @@ export function writeBaselinePairAtomic(
   development: BaselineEnvelope
 ): void {
   mkdirSync(baselinesRoot, { recursive: true });
-  const live = join(baselinesRoot, 'v2');
+  const live = join(baselinesRoot, 'extractor');
   const nonce = `${process.pid}-${Date.now()}`;
-  const next = join(baselinesRoot, `.v2-next-${nonce}`);
-  const previous = join(baselinesRoot, `.v2-previous-${nonce}`);
+  const next = join(baselinesRoot, `.extractor-next-${nonce}`);
+  const previous = join(baselinesRoot, `.extractor-previous-${nonce}`);
   mkdirSync(next);
   writeFileSync(join(next, 'production.json'), canonicalPrettyJson(production));
   writeFileSync(

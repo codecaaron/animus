@@ -1,5 +1,5 @@
 /**
- * Type surface for the `@animus-ui/extract/engine-v2` subpath.
+ * Type surface for the `@animus-ui/extract` root entry, the extractor.
  *
  * The runtime entry (`extractor.js`) is a hand-written CJS loader that assigns
  * the whole napi binary to `module.exports` (`module.exports = loadNative()`)
@@ -12,10 +12,10 @@
  *
  * The napi-generated declarations at `crates/extractor/index.d.ts` describe
  * the real shape; they are re-exposed as *type-only* members so consumers can
- * still name the engine's types. The subpath is consumed via CJS `require`
+ * still name the engine's types. The entry is consumed via CJS `require`
  * (see vite-plugin's `requireEngine`), which returns the full binding object.
  *
- * No `types` export condition is used for `./engine-v2` (root CLAUDE.md § Key
+ * No `types` export condition is used for `.` (root CLAUDE.md § Key
  * Rules: bun's createRequire matches `types` as a runtime target and loads
  * `.d.ts` as JS); TypeScript sibling-declaration substitution supplies these
  * types from the `.js` entry instead.

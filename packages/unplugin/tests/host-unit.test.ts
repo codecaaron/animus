@@ -211,7 +211,7 @@ describe('transform delegation', () => {
         rootDir: '/app',
         manifestJson: '',
         transformFile: () => {
-          throw new Error('v2 transform before analyze');
+          throw new Error('extractor transform before analyze');
         },
       })
     ).toThrow(/transform before analyze/);

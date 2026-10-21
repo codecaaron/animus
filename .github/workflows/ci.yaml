@@ -158,16 +158,16 @@ jobs:
 
       - run: bun install
 
-      - name: Build v2 NAPI binary
+      - name: Build extractor NAPI binary
         working-directory: packages/extract/crates/extractor
         run: |
           unset RUSTUP_TOOLCHAIN
           bunx @napi-rs/cli build --platform --no-js --release --target ${{ matrix.target }}
 
-      - name: Upload v2 binary
+      - name: Upload extractor binary
         uses: actions/upload-artifact@v7
         with:
-          name: napi-v2-${{ matrix.target }}
+          name: napi-extractor-${{ matrix.target }}
           path: packages/extract/crates/extractor/*.node
           if-no-files-found: error
 
@@ -186,22 +186,22 @@ jobs:
         with:
           bun-version-file: .tool-versions
 
-      - name: Download v2 linux binary
-        # @animus-ui/showcase#verify:build runs on engine v2 (default since the
-        # 2026-07-13 flip) — the v2 binary is a hard precondition.
+      - name: Download extractor linux binary
+        # @animus-ui/showcase#verify:build runs on the extractor — its binary is
+        # a hard precondition.
         uses: actions/download-artifact@v8
         with:
-          name: napi-v2-x86_64-unknown-linux-gnu
+          name: napi-extractor-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extractor/
 
       - run: bun install
 
-      - name: Verify v2 NAPI binary (repo root context)
+      - name: Verify extractor NAPI binary (repo root context)
         run: |
           ls -la packages/extract/crates/extractor/*.node
-          bun -e "const m = require('./packages/extract/extractor.js'); if (typeof m.ExtractEngine !== 'function') { throw new Error('ExtractEngine missing — v2 NAPI load failed'); } console.log('v2 NAPI exports:', Object.keys(m));"
+          bun -e "const m = require('./packages/extract/extractor.js'); if (typeof m.ExtractEngine !== 'function') { throw new Error('ExtractEngine missing — extractor NAPI load failed'); } console.log('extractor NAPI exports:', Object.keys(m));"
 
-      - name: Verify v2 NAPI binary (_integration context)
+      - name: Verify extractor NAPI binary (_integration context)
         working-directory: packages/_integration/__tests__
         run: |
           bun -e "const m = require('../../extract/extractor.js'); if (typeof m.ExtractEngine !== 'function') { throw new Error('ExtractEngine not a function — NAPI loading contract violated'); } console.log('OK: ExtractEngine is a function from _integration context');"
@@ -259,10 +259,10 @@ jobs:
         with:
           bun-version-file: .tool-versions
 
-      - name: Download v2 linux binary
+      - name: Download extractor linux binary
         uses: actions/download-artifact@v8
         with:
-          name: napi-v2-x86_64-unknown-linux-gnu
+          name: napi-extractor-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extractor/
 
       - run: bun install
@@ -303,10 +303,10 @@ jobs:
         with:
           bun-version-file: .tool-versions
 
-      - name: Download v2 linux binary
+      - name: Download extractor linux binary
         uses: actions/download-artifact@v8
         with:
-          name: napi-v2-x86_64-unknown-linux-gnu
+          name: napi-extractor-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extractor/
 
       - run: bun install
@@ -354,10 +354,10 @@ jobs:
         with:
           bun-version-file: .tool-versions
 
-      - name: Download v2 linux binary
+      - name: Download extractor linux binary
         uses: actions/download-artifact@v8
         with:
-          name: napi-v2-x86_64-unknown-linux-gnu
+          name: napi-extractor-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extractor/
 
       - run: bun install
@@ -386,10 +386,10 @@ jobs:
         with:
           bun-version-file: .tool-versions
 
-      - name: Download v2 linux binary
+      - name: Download extractor linux binary
         uses: actions/download-artifact@v8
         with:
-          name: napi-v2-x86_64-unknown-linux-gnu
+          name: napi-extractor-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extractor/
 
       - run: bun install
@@ -434,10 +434,10 @@ jobs:
         with:
           bun-version-file: .tool-versions
 
-      - name: Download v2 linux binary
+      - name: Download extractor linux binary
         uses: actions/download-artifact@v8
         with:
-          name: napi-v2-x86_64-unknown-linux-gnu
+          name: napi-extractor-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extractor/
 
       - run: bun install
@@ -489,11 +489,11 @@ jobs:
         with:
           bun-version-file: .tool-versions
 
-      - name: Download v2 linux binary
+      - name: Download extractor linux binary
         if: env.ROWS != ''
         uses: actions/download-artifact@v8
         with:
-          name: napi-v2-x86_64-unknown-linux-gnu
+          name: napi-extractor-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extractor/
 
       - if: env.ROWS != ''
@@ -556,10 +556,10 @@ jobs:
         with:
           bun-version-file: .tool-versions
 
-      - name: Download v2 linux binary
+      - name: Download extractor linux binary
         uses: actions/download-artifact@v8
         with:
-          name: napi-v2-x86_64-unknown-linux-gnu
+          name: napi-extractor-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extractor/
 
       - name: Install dependencies
@@ -654,24 +654,24 @@ jobs:
         run: bunx vp run build:ts
 
       # ── Download all NAPI binaries ──
-      # A target missing its v2 binary fails the release job —
+      # A target missing its extractor binary fails the release job —
       # never publish a partial matrix (engine-release-packaging).
-      - name: Download darwin-arm64 v2 binary
+      - name: Download darwin-arm64 extractor binary
         uses: actions/download-artifact@v8
         with:
-          name: napi-v2-aarch64-apple-darwin
+          name: napi-extractor-aarch64-apple-darwin
           path: packages/extract/crates/extractor/
 
-      - name: Download linux-x64 v2 binary
+      - name: Download linux-x64 extractor binary
         uses: actions/download-artifact@v8
         with:
-          name: napi-v2-x86_64-unknown-linux-gnu
+          name: napi-extractor-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extractor/
 
-      - name: Download linux-arm64 v2 binary
+      - name: Download linux-arm64 extractor binary
         uses: actions/download-artifact@v8
         with:
-          name: napi-v2-aarch64-unknown-linux-gnu
+          name: napi-extractor-aarch64-unknown-linux-gnu
           path: packages/extract/crates/extractor/
 
       # ── Pack and verify one immutable release bundle ──

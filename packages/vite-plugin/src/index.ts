@@ -250,7 +250,7 @@ export interface AnimusExtractOptions {
    */
   layers?: string[];
   /**
-   * `'v2'` is the only engine. `engine: 'v1'` or `ANIMUS_ENGINE=v1` throws
+   * `'v2'` selects the extractor, the only engine. `engine: 'v1'` or `ANIMUS_ENGINE=v1` throws
    * rather than being silently upgraded.
    */
   engine?: 'v2';

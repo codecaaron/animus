@@ -141,7 +141,7 @@ list the Animus plugin before `rollup-plugin-esbuild`, `@rollup/plugin-babel`,
 The mis-ordering symptom is distinctive: a source-drift warning on stderr —
 
 ```
-v2: transform-time source for <file> differs from analyze-time source — an upstream transform may be reverted
+extractor: transform-time source for <file> differs from analyze-time source — an upstream transform may be reverted
 ```
 
 — followed by a parse error from the bundler (the transform's TSX output

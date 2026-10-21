@@ -60,11 +60,11 @@
     "access": "public"
   },
   "scripts": {
-    "build": "bun run build:v2 && bun run build:ts",
+    "build": "bun run build:extractor && bun run build:ts",
     "build:ts": "tsdown && tsc -p tsconfig.build.json",
     "compile": "bun check -p tsconfig.build.json && bun check -p tsconfig.json",
-    "build:v2": "cd crates/extractor && bunx napi build --platform --no-js --release",
-    "build:v2:debug": "cd crates/extractor && bunx napi build --platform --no-js"
+    "build:extractor": "cd crates/extractor && bunx napi build --platform --no-js --release",
+    "build:extractor:debug": "cd crates/extractor && bunx napi build --platform --no-js"
   },
   "dependencies": {
     "@animus-ui/properties": "workspace:*",

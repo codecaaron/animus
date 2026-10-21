@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# verify:parity after oracle inversion: committed v2 baselines vs fresh v2.
+# verify:parity after oracle inversion: committed extractor baselines vs a fresh extractor.
 # Ordinary verification never writes packages/_parity/baselines/**.
 set -euo pipefail
 cd "$(dirname "$0")/../.."

@@ -217,7 +217,7 @@ describe('withAnimus Turbopack wiring', () => {
     );
   });
 
-  /** Contract: v2 is the only engine, rejected before the native module
+  /** Contract: the extractor is the only engine; another selection is rejected before the native module
    *  loads (SA2): a Turbopack config naming another fails at withAnimus(). */
   test('a Turbopack config naming an engine other than v2 fails before native loads', () => {
     process.chdir(createProject());

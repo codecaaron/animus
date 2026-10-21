@@ -1,4 +1,4 @@
-parity baseline — engines: baseline:v2 vs v2 — devMode: false
+parity baseline — engines: baseline:extractor vs extractor — devMode: false
 
 Units passed: 64/66 (96.97%)
 Divergences: 6 (6 unregistered)
@@ -29,7 +29,7 @@ Usage-case families:
 
 ---
 
-parity baseline — engines: baseline:v2 vs v2 — devMode: true
+parity baseline — engines: baseline:extractor vs extractor — devMode: true
 
 Units passed: 63/66 (95.45%)
 Divergences: 9 (9 unregistered)

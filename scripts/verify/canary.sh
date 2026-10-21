@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# verify:canary — v2 NAPI boundary snapshot tests.
-# Preconditions: the v2 NAPI binary is fresh.
+# verify:canary — extractor NAPI boundary snapshot tests.
+# Preconditions: the extractor binary is fresh.
 # The assembleStylesheet cases additionally read packages/extract/dist/, which
-# the full build:extract composition (build:v2 && build:ts) materializes.
+# the full build:extract composition (build:extractor && build:ts) materializes.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -14,7 +14,7 @@ source "$ROOT/scripts/verify/_preconditions.sh"
 require_fresh_napi
 
 # static-css-overrides and property-diagnostics share the canary's precondition
-# (they drive the REAL v2 engine), so they run in this NAPI-gated lane, not
+# (they drive the REAL extractor), so they run in this NAPI-gated lane, not
 # verify:unit:ts. So does the external-package collector, which reads each
 # kit's source root from the native table; system membership, which the
 # engine reads from its own parse; and the alias comparison, whose aliased

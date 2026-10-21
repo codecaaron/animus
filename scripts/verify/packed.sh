@@ -179,7 +179,7 @@ echo "[verify:packed] recursive installed package graph ok"
   console.log('[verify:packed] ESM load ok');
 ")
 (cd "$STAGING" && node -e "
-  // The root entry is the v2 engine surface.
+  // The root entry is the extractor surface.
   const root = require('@animus-ui/extract');
   if (typeof root.ExtractEngine !== 'function') throw new Error('root entry: ExtractEngine missing from packed install');
   console.log('[verify:packed] CJS root engine ok');

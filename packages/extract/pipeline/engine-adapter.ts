@@ -281,7 +281,7 @@ export function createEngineApi(deps: EngineAdapterDeps): () => EngineApi {
         const engine = store.getEngine();
         if (!engine) {
           throw new Error(
-            `[${label}] v2 transform before analyze — engine instance not initialized`
+            `[${label}] extractor transform before analyze — engine instance not initialized`
           );
         }
         // Files outside the analysis universe: the stateful engine fails loud
@@ -296,7 +296,7 @@ export function createEngineApi(deps: EngineAdapterDeps): () => EngineApi {
           store.setDriftWarned(true);
           // eslint-disable-next-line no-console
           console.warn(
-            `[${label}] v2: transform-time source for ${path} differs from analyze-time source — an upstream transform may be reverted`
+            `[${label}] extractor: transform-time source for ${path} differs from analyze-time source — an upstream transform may be reverted`
           );
         }
         // SAFETY: serde output of the engine's own call on this line —
@@ -316,7 +316,7 @@ export function createEngineApi(deps: EngineAdapterDeps): () => EngineApi {
         const engine = store.getEngine();
         if (!engine) {
           throw new Error(
-            `[${label}] v2 fullManifestJson before analyze — engine instance not initialized`
+            `[${label}] extractor fullManifestJson before analyze — engine instance not initialized`
           );
         }
         return engine.fullManifestJson();

@@ -82,7 +82,7 @@ describe('parity CLI argument safety', () => {
     if (result.error) throw result.error;
 
     expect(result.status).toBe(EXIT_UNEXPECTED);
-    expect(result.stderr).toContain('engine v2 run failed');
+    expect(result.stderr).toContain('extractor run failed');
     expect(result.stderr).toMatch(STACK_FRAME);
     expect(result.stdout).not.toContain('PARITY GATE: PASS');
   });

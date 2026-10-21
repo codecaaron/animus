@@ -22,7 +22,7 @@
       "parity/duplicate-binding"
     ],
     "expectedVerdict": "identical",
-    "note": "Two same-named components in one universe (live pattern: Button/Card in showcase+test-ds). Cascade-order arbitration risk under v2 \u2014 divergence here must enter the register as ordering."
+    "note": "Two same-named components in one universe (live pattern: Button/Card in showcase+test-ds). Cascade-order arbitration risk under the extractor \u2014 divergence here must enter the register as ordering."
   },
   {
     "family": "bare-create-element",
@@ -46,7 +46,7 @@
       "parity/shadowed-local"
     ],
     "expectedVerdict": "identical",
-    "note": "A local that shadows an imported component resolves through its own binding: the committed v2 surface reports the tag as identity-uncertain instead of matching the import by name."
+    "note": "A local that shadows an imported component resolves through its own binding: the committed extractor surface reports the tag as identity-uncertain instead of matching the import by name."
   },
   {
     "family": "multiline-import",
@@ -54,7 +54,7 @@
       "parity/multiline-import"
     ],
     "expectedVerdict": "identical",
-    "note": "The committed v2 surface preserves the witnessed multi-line import behavior; no standing divergence license exists after oracle inversion."
+    "note": "The committed extractor surface preserves the witnessed multi-line import behavior; no standing divergence license exists after oracle inversion."
   },
   {
     "family": "use-client-comment",
@@ -62,7 +62,7 @@
       "parity/use-client-comment.tsx"
     ],
     "expectedVerdict": "identical",
-    "note": "Committed v2 baseline after the directive-trivia shed."
+    "note": "Committed extractor baseline after the directive-trivia shed."
   },
   {
     "family": "string-transforms-literal",
@@ -70,7 +70,7 @@
       "parity/string-transforms-literal.tsx"
     ],
     "expectedVerdict": "identical",
-    "note": "Committed v2 baseline after the structured-import shed."
+    "note": "Committed extractor baseline after the structured-import shed."
   },
   {
     "family": "cyclic-extension",
@@ -78,7 +78,7 @@
       "parity/cyclic-extension"
     ],
     "expectedVerdict": "identical",
-    "note": "An extension cycle bails each of its components with animus.extension.cycle naming the cycle\u2019s bindings; the committed v2 surface records those diagnostics, and the components stay unextracted."
+    "note": "An extension cycle bails each of its components with animus.extension.cycle naming the cycle\u2019s bindings; the committed extractor surface records those diagnostics, and the components stay unextracted."
   },
   {
     "family": "duplicate-compose-modules",

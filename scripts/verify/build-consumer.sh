@@ -44,7 +44,7 @@ recipe=()
 
 if ! require_fresh_napi; then
   failed=1
-  recipe+=("vp run build:extract-v2")
+  recipe+=("vp run build:extractor")
 fi
 
 needs_typescript_build=0

@@ -329,7 +329,7 @@ describe('root verification graph', () => {
 
     expect(full?.dependsOn).toBeUndefined();
     expect(commands).toEqual([
-      'vp run build:extract-v2',
+      'vp run build:extractor',
       'vp run build:ts',
       'vp run verify',
       "vp run --fail-if-no-match -F './e2e/*' -F '!animus-packed-app' -F './packages/showcase' verify",

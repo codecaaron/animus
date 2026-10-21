@@ -89,7 +89,7 @@ export interface AnimusNextOptions {
   /** Explicit emission mode, winning over the environment signal that
    *  otherwise decides minification and the dev-diagnostics define. */
   mode?: 'development' | 'production';
-  /** `'v2'` is the only engine and the default. `engine: 'v1'` or
+  /** `'v2'` selects the extractor, the only engine and the default. `engine: 'v1'` or
    *  `ANIMUS_ENGINE=v1` throws — the selection is never silently upgraded. */
   engine?: 'v2';
   /** `'auto'` (default) generates Turbopack wiring whenever the `TURBOPACK`

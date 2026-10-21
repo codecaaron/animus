@@ -29,17 +29,17 @@ describe('retired v1 engine selection', () => {
     );
   });
 
-  /** Contract: v2 is the only engine (SA2). Any other selection, from the
+  /** Contract: the extractor is the only engine (SA2), selected by `v2`. Any other selection, from the
    *  option or the environment, fails before the native module loads. */
   test('an engine other than v2 fails, from the option or ANIMUS_ENGINE', () => {
     const unknownEngineOptions = { system: 'x', engine: 'v3' };
     expect(
       // SAFETY: Crosses the typed option boundary as a JavaScript config may.
       () => animusExtract(unknownEngineOptions as AnimusExtractOptions)
-    ).toThrow(/"v3".*v2 is the only engine/);
+    ).toThrow(/"v3".*the extractor is the only engine/);
     process.env.ANIMUS_ENGINE = 'v3';
     expect(() => animusExtract({ system: 'x' })).toThrow(
-      /"v3".*v2 is the only engine/
+      /"v3".*the extractor is the only engine/
     );
     process.env.ANIMUS_ENGINE = 'v2';
     expect(() => animusExtract({ system: 'x' })).not.toThrow();

@@ -47,11 +47,11 @@ require_fresh_napi() {
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   napi_binary=$(bun "$script_dir/napi-target.ts" 2>/dev/null || true)
   if [ -z "$napi_binary" ]; then
-    echo "ERROR: unsupported host for v2 NAPI freshness (no released target for this platform/arch/libc). Run: vp run build:extract-v2" >&2
+    echo "ERROR: unsupported host for extractor NAPI freshness (no released target for this platform/arch/libc). Run: vp run build:extractor" >&2
     return 1
   fi
   if [ ! -f "$napi_binary" ]; then
-    echo "ERROR: v2 NAPI binary missing. Run: vp run build:extract-v2" >&2
+    echo "ERROR: extractor binary missing. Run: vp run build:extractor" >&2
     return 1
   fi
   # Fail closed: an input find cannot read leaves freshness unknown.
@@ -68,11 +68,11 @@ require_fresh_napi() {
     packages/extract/crates/system-loader/rust-toolchain.toml \
     -type f -newer "$napi_binary" -print -quit) || find_status=$?
   if [ "$find_status" -ne 0 ]; then
-    echo "ERROR: could not check the v2 NAPI binary's freshness: reading its Rust inputs failed (find exit $find_status). Run: vp run build:extract-v2" >&2
+    echo "ERROR: could not check the extractor binary's freshness: reading its Rust inputs failed (find exit $find_status). Run: vp run build:extractor" >&2
     return 1
   fi
   if [ -n "$newest_input" ]; then
-    echo "ERROR: host v2 NAPI binary stale: $napi_binary (Rust input newer: $newest_input). Run: vp run build:extract-v2" >&2
+    echo "ERROR: host extractor binary stale: $napi_binary (Rust input newer: $newest_input). Run: vp run build:extractor" >&2
     return 1
   fi
 }

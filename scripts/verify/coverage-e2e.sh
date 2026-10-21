@@ -26,7 +26,7 @@ failed=0
 recipe=()
 if ! require_fresh_napi; then
   failed=1
-  recipe+=("vp run build:extract-v2")
+  recipe+=("vp run build:extractor")
 fi
 if [ "$failed" -ne 0 ]; then
   recipe_text=""

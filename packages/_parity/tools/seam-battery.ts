@@ -217,7 +217,7 @@ for (const c of CASES) {
 if (record) {
   writeJsonFileAtomic(BASELINE, results);
   console.log(
-    `seam-battery: recorded ${CASES.length} v2 cases to seam-baseline.json (${intent})`
+    `seam-battery: recorded ${CASES.length} extractor cases to seam-baseline.json (${intent})`
   );
   process.exit(0);
 }
@@ -231,7 +231,7 @@ const failures = compareSeamResults(baseline, results);
 for (const failure of failures) console.log(`FAIL ${failure}`);
 console.log(
   failures.length
-    ? `seam-battery[v2]: ${failures.length} mismatch(es)`
-    : `seam-battery[v2]: ${CASES.length}/${CASES.length} match baseline`
+    ? `seam-battery[extractor]: ${failures.length} mismatch(es)`
+    : `seam-battery[extractor]: ${CASES.length}/${CASES.length} match baseline`
 );
 process.exit(failures.length ? 1 : 0);

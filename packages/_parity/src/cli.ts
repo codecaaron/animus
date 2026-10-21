@@ -72,7 +72,7 @@ function runExtractor(
   devMode: boolean,
   env: Record<string, string> = {}
 ): Record<string, UnitSurface> {
-  const args = [join(HERE, 'src/engine-run.ts'), '--engine', 'v2'];
+  const args = [join(HERE, 'src/engine-run.ts'), '--engine', 'extractor'];
   if (devMode) args.push('--dev');
   const result = spawnSync('bun', ['run', ...args], {
     cwd: HERE,
@@ -82,7 +82,7 @@ function runExtractor(
   });
   if (result.status !== 0) {
     throw new Error(
-      `engine v2 run failed (devMode=${devMode}):\n${result.stderr}`
+      `extractor run failed (devMode=${devMode}):\n${result.stderr}`
     );
   }
   return JSON.parse(result.stdout);
@@ -93,14 +93,14 @@ function modeOf(devMode: boolean): BaselineMode {
 }
 
 function baselinePath(mode: BaselineMode): string {
-  return join(BASELINES_ROOT, 'v2', `${mode}.json`);
+  return join(BASELINES_ROOT, 'extractor', `${mode}.json`);
 }
 
 function loadBaseline(mode: BaselineMode): BaselineEnvelope {
   const path = baselinePath(mode);
   if (!existsSync(path)) {
     throw new ParityRefusal(
-      `committed v2 baseline missing: ${path} — run: scripts/verify/refresh-parity-baseline.sh <checked-intent-id>`
+      `committed extractor baseline missing: ${path} — run: scripts/verify/refresh-parity-baseline.sh <checked-intent-id>`
     );
   }
   return JSON.parse(readFileSync(path, 'utf8'));
@@ -143,8 +143,8 @@ function parseBudgetDivergences(
         artifact: 'observables',
         detail:
           surface.parseCount == null
-            ? 'v2 parse budget missing'
-            : `v2 parse budget exceeded: ${surface.parseCount} parses for ${fileCount} files`,
+            ? 'extractor parse budget missing'
+            : `extractor parse budget exceeded: ${surface.parseCount} parses for ${fileCount} files`,
         baselineSha256: hash,
         candidateSha256: hash,
       });
@@ -182,7 +182,7 @@ async function selfCheckPass(
   return {
     scoreboard: renderScoreboard({
       mode: 'self-check',
-      engines: ['v2', 'v2'],
+      engines: ['extractor', 'extractor'],
       devMode,
       unitIds,
       divergences,
@@ -216,7 +216,7 @@ async function baselinePass(
   const familyErrors = familyViolations(families, divergences);
   let scoreboard = renderScoreboard({
     mode: 'baseline',
-    engines: ['baseline:v2', 'v2'],
+    engines: ['baseline:extractor', 'extractor'],
     devMode,
     unitIds,
     divergences,

@@ -127,7 +127,7 @@ describe('engineApi transformFile adapter', () => {
 
     expect(() =>
       engineApi(key).transformFile('src', 'src/analyzed.tsx', '{}')
-    ).toThrow(/v2 transform before analyze/);
+    ).toThrow(/extractor transform before analyze/);
   });
 });
 
@@ -171,6 +171,6 @@ describe('the one engine-handle store', () => {
 
     expect(() =>
       engineApi(key).transformFile('const a = 1;', 'src/analyzed.tsx', '{}')
-    ).toThrow(/v2 transform before analyze/);
+    ).toThrow(/extractor transform before analyze/);
   });
 });

@@ -2,7 +2,7 @@
   "name": "animus-extractor-binding",
   "version": "0.0.1",
   "private": true,
-  "description": "napi CLI config for the v2 engine crate (not a workspace member; the npm surface stays @animus-ui/extract)",
+  "description": "napi CLI config for the extractor crate (not a workspace member; the npm surface stays @animus-ui/extract)",
   "napi": {
     "binaryName": "animus-extractor"
   }

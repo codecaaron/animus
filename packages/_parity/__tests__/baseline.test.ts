@@ -38,7 +38,7 @@ function surface(css = '.a{color:red}'): UnitSurface {
   };
 }
 
-describe('committed v2 baseline comparison', () => {
+describe('committed extractor baseline comparison', () => {
   test('detects changed content with exact hashes', async () => {
     const divs = await compareUnitSets(
       { unit: surface() },
@@ -308,10 +308,12 @@ describe('baseline envelope and refresh protocol', () => {
     writeBaselinePairAtomic(root, production, development);
 
     expect(
-      JSON.parse(readFileSync(join(root, 'v2/production.json'), 'utf8')).mode
+      JSON.parse(readFileSync(join(root, 'extractor/production.json'), 'utf8'))
+        .mode
     ).toBe('production');
     expect(
-      JSON.parse(readFileSync(join(root, 'v2/development.json'), 'utf8')).mode
+      JSON.parse(readFileSync(join(root, 'extractor/development.json'), 'utf8'))
+        .mode
     ).toBe('development');
   });
 
@@ -336,11 +338,11 @@ describe('baseline envelope and refresh protocol', () => {
       );
       writeBaselinePairAtomic(root, oldProduction, oldDevelopment);
       const beforeProduction = readFileSync(
-        join(root, 'v2/production.json'),
+        join(root, 'extractor/production.json'),
         'utf8'
       );
       const beforeDevelopment = readFileSync(
-        join(root, 'v2/development.json'),
+        join(root, 'extractor/development.json'),
         'utf8'
       );
       const checks: BaselineModePair<BaselineRefreshChecks> = {
@@ -381,12 +383,12 @@ describe('baseline envelope and refresh protocol', () => {
           checks
         )
       ).toThrow(/not green/);
-      expect(readFileSync(join(root, 'v2/production.json'), 'utf8')).toBe(
-        beforeProduction
-      );
-      expect(readFileSync(join(root, 'v2/development.json'), 'utf8')).toBe(
-        beforeDevelopment
-      );
+      expect(
+        readFileSync(join(root, 'extractor/production.json'), 'utf8')
+      ).toBe(beforeProduction);
+      expect(
+        readFileSync(join(root, 'extractor/development.json'), 'utf8')
+      ).toBe(beforeDevelopment);
     }
   );
 
@@ -406,11 +408,11 @@ describe('baseline envelope and refresh protocol', () => {
     );
     writeBaselinePairAtomic(root, oldProduction, oldDevelopment);
     const beforeProduction = readFileSync(
-      join(root, 'v2/production.json'),
+      join(root, 'extractor/production.json'),
       'utf8'
     );
     const beforeDevelopment = readFileSync(
-      join(root, 'v2/development.json'),
+      join(root, 'extractor/development.json'),
       'utf8'
     );
     const green: BaselineModePair<BaselineRefreshChecks> = {
@@ -440,10 +442,10 @@ describe('baseline envelope and refresh protocol', () => {
         green
       )
     ).toThrow(/envelope/);
-    expect(readFileSync(join(root, 'v2/production.json'), 'utf8')).toBe(
+    expect(readFileSync(join(root, 'extractor/production.json'), 'utf8')).toBe(
       beforeProduction
     );
-    expect(readFileSync(join(root, 'v2/development.json'), 'utf8')).toBe(
+    expect(readFileSync(join(root, 'extractor/development.json'), 'utf8')).toBe(
       beforeDevelopment
     );
   });

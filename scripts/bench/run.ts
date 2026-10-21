@@ -173,7 +173,9 @@ function requireRelease(version: string): void {
  *  sources. */
 function requireFreshCheckout(root: string, packages: readonly string[]): void {
   const checks = [
-    'require_fresh_napi',
+    // A checkout from before the v2 naming retired names it
+    // require_fresh_napi_v2.
+    'if declare -F require_fresh_napi >/dev/null; then require_fresh_napi; else require_fresh_napi_v2; fi',
     ...packages.map((name) => `require_fresh_package_dist ${name}`),
   ];
   const result = sh(
@@ -485,9 +487,15 @@ function summarize(result: RowResult, budget: Budget) {
 /** Where the candidate checkout's timed binding came from: its commit and
  *  the bytes of the native binary that was packed. */
 function checkoutProvenance(root: string) {
-  const dir = join(root, 'packages/extract/crates/extractor');
+  // A checkout from before the v2 naming retired keeps its binary in
+  // crates/extract-v2, named animus-extract-v2.
+  const [dir, prefix] = existsSync(
+    join(root, 'packages/extract/crates/extractor')
+  )
+    ? [join(root, 'packages/extract/crates/extractor'), 'animus-extractor']
+    : [join(root, 'packages/extract/crates/extract-v2'), 'animus-extract-v2'];
   const binary = readdirSync(dir).find((name) =>
-    name.startsWith(`animus-extractor.${platform()}-${arch()}`)
+    name.startsWith(`${prefix}.${platform()}-${arch()}`)
   );
   return {
     checkout: root,

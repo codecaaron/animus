@@ -26,7 +26,7 @@ if [[ -z "${GITHUB_SHA:-}" ]]; then
 fi
 
 if [[ "$mode" == validate ]]; then
-  "$BUN_BIN" -e "const m=require('./packages/extract/crates/extractor/animus-extractor.linux-x64-gnu.node'); if (!Object.keys(m).length) throw new Error('V2 NAPI exports missing')"
+  "$BUN_BIN" -e "const m=require('./packages/extract/crates/extractor/animus-extractor.linux-x64-gnu.node'); if (!Object.keys(m).length) throw new Error('extractor NAPI exports missing')"
   "$BUNX_BIN" vp run build:ts
   for owner in "${owners[@]}"; do
     "$BUNX_BIN" vp run "${owner}#verify:build"

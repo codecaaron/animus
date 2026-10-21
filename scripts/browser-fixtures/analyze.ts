@@ -1,6 +1,6 @@
 /**
  * A fixture project analyzed by the built extraction engine (`vp run
- * build:extract-v2`), as a host runs it, for cases that render real output.
+ * build:extractor`), as a host runs it, for cases that render real output.
  */
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';

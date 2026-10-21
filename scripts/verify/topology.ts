@@ -38,7 +38,7 @@ const PRUNE_DIRS = new Set([
 ]);
 
 // Excluded by exact path or directory prefix: adversarial corpus fixtures, and
-// the extract-v2 typings, which `napi build` generates.
+// the extractor typings, which `napi build` generates.
 const EXCLUDE_PREFIXES = [
   'packages/_parity/corpus',
   'packages/extract/crates/extractor/index.d.ts',

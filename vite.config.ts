@@ -49,9 +49,9 @@ const typescriptTestTargets = [
 ] as const;
 const typescriptTestTargetArguments = typescriptTestTargets.join(' ');
 // Source ingestion and discovery probe files through the native engine, so
-// the TS targets need a fresh v2 NAPI binary, checked before they run.
-const requireNapiV2 = 'bash scripts/verify/with-fresh-napi.sh';
-const typescriptTestCommand = `${requireNapiV2} bunx vp test run ${typescriptTestTargetArguments}`;
+// the TS targets need a fresh extractor binary, checked before they run.
+const requireNapi = 'bash scripts/verify/with-fresh-napi.sh';
+const typescriptTestCommand = `${requireNapi} bunx vp test run ${typescriptTestTargetArguments}`;
 const typescriptCoverageExclusions = [
   '**/dist/**',
   'legacy/**',
@@ -380,7 +380,7 @@ export default defineConfig({
         cache: false,
       },
       'verify:coverage:ts': {
-        command: `${requireNapiV2} bunx vitest run ${typescriptTestTargetArguments} --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/ts ${typescriptCoverageExclusionArguments}`,
+        command: `${requireNapi} bunx vitest run ${typescriptTestTargetArguments} --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/ts ${typescriptCoverageExclusionArguments}`,
         cache: false,
       },
       'verify:coverage:e2e': {
@@ -412,14 +412,14 @@ export default defineConfig({
         cache: false,
       },
       'build:extract': {
-        // Routes through build:extract-v2, which gates the rustc channel on
+        // Routes through build:extractor, which gates the rustc channel on
         // rust-toolchain.toml; the package's own build reaches napi ungated.
         command:
-          "vp run build:extract-v2 && bun run --filter '@animus-ui/extract' build:ts",
+          "vp run build:extractor && bun run --filter '@animus-ui/extract' build:ts",
         cache: false,
       },
-      'build:extract-v2': {
-        command: 'bash scripts/cloudflare/build-extract-v2.sh',
+      'build:extractor': {
+        command: 'bash scripts/cloudflare/build-extractor.sh',
         cache: false,
       },
       'verify:parity': {
@@ -439,8 +439,8 @@ export default defineConfig({
         // Ordered on purpose: `dependsOn` has no ordering field, and naming
         // build:extract here would put two writers into extract's dist:
         // build:extract carries extract's own build:ts, and build:ts already
-        // fans out over every package. build:extract-v2 is the NAPI half only.
-        command: 'vp run build:extract-v2 && vp run build:ts',
+        // fans out over every package. build:extractor is the NAPI half only.
+        command: 'vp run build:extractor && vp run build:ts',
         cache: false,
       },
       build: {
@@ -469,7 +469,7 @@ export default defineConfig({
         // `verify` is the unordered fan-out gate `dependsOn` does model; the
         // two drift independently by design, so neither folds into the other.
         command:
-          "vp run build:extract-v2 && vp run build:ts && vp run verify && vp run --fail-if-no-match -F './e2e/*' -F '!animus-packed-app' -F './packages/showcase' verify && vp run verify:parity && vp run verify:integration && vp run verify:hygiene:rust && vp run verify:packed",
+          "vp run build:extractor && vp run build:ts && vp run verify && vp run --fail-if-no-match -F './e2e/*' -F '!animus-packed-app' -F './packages/showcase' verify && vp run verify:parity && vp run verify:integration && vp run verify:hygiene:rust && vp run verify:packed",
         cache: false,
       },
       hygiene: {

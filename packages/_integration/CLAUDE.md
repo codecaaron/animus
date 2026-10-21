@@ -10,7 +10,7 @@ Re-exported via `fixtures/setup.ts` → imports from `extract/tests/test-system.
 
 ## Pipeline Helper
 
-`__tests__/run-pipeline.ts` drives the stateful v2 `ExtractEngine` through the
+`__tests__/run-pipeline.ts` drives the stateful extractor `ExtractEngine` through the
 same adapter the production plugins use (`createEngineApi` from
 `extract/pipeline/engine-adapter.ts`, with the engine handle stored in closure
 variables):
@@ -33,10 +33,10 @@ real Vite build instead.
 
 ## NAPI Loading Contract
 
-Since retire-extract-v1, v2 is the only engine and `extractor.js` is the package
+Since retire-extract-v1, the extractor is the only engine and `extractor.js` is the package
 root entry. Test files reach the engine **through `__tests__/run-pipeline.ts`**;
 the one `require()` into the native binary lives there and MUST use the **direct
-file path** to the v2 loader:
+file path** to the extractor loader:
 
 ```ts
 const native = require('../../extract/extractor.js');
@@ -54,7 +54,7 @@ The direct-path pattern bypasses package resolution entirely, so it is immune to
 ```ts
 import { applyUnitFallback } from '@animus-ui/extract/pipeline';
 
-import { analyzeProject } from './run-pipeline'; // v2-backed shim
+import { analyzeProject } from './run-pipeline'; // extractor-backed shim
 ```
 
 CI enforces the contract via a grep check in the `lint` job (any `require('@animus-ui/extract')` in `packages/_integration/__tests__/` fails the build).
@@ -72,7 +72,7 @@ Covers color tokens only. Scale tokens (font, space) resolve to literals not var
 | `extraction.test.ts`         | Variant resolution, compound resolution, transforms, responsive, multi-file (system_prop_map content is pinned by `manifest-shape.test.ts`)                                                                                             |
 | `serialization.test.ts`      | Round-trip: serialize() → analyzeProject() → valid manifest                                                                                                                                                                             |
 | `composition.test.ts`        | compose() through full pipeline, slot CSS, shared variants                                                                                                                                                                              |
-| `post-processing.test.ts`    | applyUnitFallback, applyPrefix, assembleStylesheet coverage (v1-era resolveGlobalStyles/resolveTokenAliases/resolveTransformPlaceholders helpers were deleted with retire-extract-v1 cleanup — the Rust v2 engine owns that resolution) |
+| `post-processing.test.ts`    | applyUnitFallback, applyPrefix, assembleStylesheet coverage (v1-era resolveGlobalStyles/resolveTokenAliases/resolveTransformPlaceholders helpers were deleted with retire-extract-v1 cleanup — the Rust extractor owns that resolution) |
 | `plugin-self-verify.test.ts` | strict self-verification halts a real Vite build when no components are extracted                                                                                                                                                       |
 
 ## Fixtures

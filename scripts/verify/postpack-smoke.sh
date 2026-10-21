@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # verify: postpack smoke (G3, engine-release-packaging).
-# Packs @animus-ui/extract and proves the v2 engine (the package's only
+# Packs @animus-ui/extract and proves the extractor (the package's only
 # engine and root entry since retire-extract-v1) loads from the extracted
 # tarball via the package root entry.
 # --expect-full-matrix additionally asserts all three targets' binaries are
@@ -41,7 +41,7 @@ done
 
 if [ -z "$TARBALL" ]; then
   if ! compgen -G "packages/extract/crates/extractor/*.node" > /dev/null; then
-    echo "ERROR: v2 NAPI binary missing. Run: vp run build:extract-v2" >&2; exit 1
+    echo "ERROR: extractor binary missing. Run: vp run build:extractor" >&2; exit 1
   fi
 elif [ ! -f "$TARBALL" ]; then
   echo "ERROR: supplied extract tarball missing: $TARBALL" >&2
@@ -66,4 +66,4 @@ if [ "$EXPECT_FULL_MATRIX" = 1 ]; then
   fi
 fi
 
-(cd "$UNPACK_DIR/package" && bun -e "require('./extractor.js'); console.log('v2 engine loads (package root entry)')")
+(cd "$UNPACK_DIR/package" && bun -e "require('./extractor.js'); console.log('extractor loads (package root entry)')")

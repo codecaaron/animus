@@ -1,6 +1,6 @@
 # @animus-ui/extract — Rust NAPI Extraction Crate
 
-Static CSS extraction pipeline. Parses TS/TSX via OXC, walks builder chains, evaluates static styles, resolves theme scales, generates `@layer`-structured CSS, and emits source replacements. v2 is the only engine (v1 was retired — openspec: retire-extract-v1).
+Static CSS extraction pipeline. Parses TS/TSX via OXC, walks builder chains, evaluates static styles, resolves theme scales, generates `@layer`-structured CSS, and emits source replacements. The extractor is the only engine (v1 was retired — openspec: retire-extract-v1).
 
 ## Crate Structure
 
@@ -30,7 +30,7 @@ has its own `.cargo`. Do not delete it.
 ## NAPI Surface (`crates/extractor`, generated types at `crates/extractor/index.d.ts`)
 
 Loaded via the hand-written `extractor.js` loader (fail-loud on missing binary).
-`extractor.js` is the package root entry (the transitional `./engine-v2` alias was removed with the receipt-union cleanup).
+`extractor.js` is the package root entry (the transitional `./engine-v2` alias was removed with the receipt-union cleanup; the loader was `index-v2.js` until the v2 naming retired).
 Builds use `--no-js`: generate native declarations without an unused JavaScript
 wrapper or its loader-only metadata exports.
 
@@ -82,14 +82,14 @@ compile-time `{scale.path}` → `var(--name)` resolution.
 ## Build Commands
 
 ```bash
-# Production build (from repo root): v2 NAPI + TS dists
-vp run build:extract          # = build:extract-v2 && build:ts (this package only)
-vp run build:extract-v2       # v2 NAPI only — asserts rustc == rust-toolchain.toml
+# Production build (from repo root): extractor NAPI + TS dists
+vp run build:extract          # = build:extractor && build:ts (this package only)
+vp run build:extractor       # extractor NAPI only — asserts rustc == rust-toolchain.toml
                               # channel BEFORE building; aborts on mismatch
 
 # From this directory
-bun run build:v2              # release NAPI
-bun run build:v2:debug        # debug NAPI
+bun run build:extractor              # release NAPI
+bun run build:extractor:debug        # debug NAPI
 ```
 
 ## Cache & Artifacts
@@ -119,7 +119,7 @@ bun run build:v2:debug        # debug NAPI
 
 ## Known Failure Modes
 
-- **Stale `.node` binary after signature change:** adding/removing/reordering NAPI parameters silently accepts wrong arity or crashes. Fix: `rm crates/extractor/*.node && vp run build:extract-v2`.
+- **Stale `.node` binary after signature change:** adding/removing/reordering NAPI parameters silently accepts wrong arity or crashes. Fix: `rm crates/extractor/*.node && vp run build:extractor`.
 - **OXC version:** consumed via the `oxc` umbrella crate (pinned `0.155`), not individual `oxc_*` crates.
 - **Per-property bail diagnostics:** check `[skip]` markers in extraction errors for what was skipped.
 
@@ -129,8 +129,8 @@ bun run build:v2:debug        # debug NAPI
 | ------------------------------------ | ----------------------------------------------------- |
 | Styles not updating in dev           | Restart dev server                                    |
 | Transforms seem stale                | `vp run clean:light`                                  |
-| NAPI function errors / wrong arity   | `vp run build:extract-v2`                             |
-| `verify:canary` "NAPI stale" error   | `vp run build:extract-v2`                             |
+| NAPI function errors / wrong arity   | `vp run build:extractor`                              |
+| `verify:canary` "NAPI stale" error   | `vp run build:extractor`                              |
 | `verify:*` "dist missing" error      | `vp run build:ts` (or `vp run build:all`)             |
 | Showcase builds but styles missing   | Check `virtual:animus/styles.css` in browser devtools |
 | CSS has `__TRANSFORM__` placeholders | Transform subprocess failed — check terminal warnings |

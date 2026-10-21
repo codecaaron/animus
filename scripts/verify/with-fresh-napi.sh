@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs its arguments once the host's v2 NAPI binary is fresh: the
+# Runs its arguments once the host's extractor binary is fresh: the
 # TypeScript unit and coverage tiers probe files through the native engine.
 
 if [ "$#" -eq 0 ]; then

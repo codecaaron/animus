@@ -32,7 +32,7 @@ const require_ = createRequire(import.meta.url);
 
 const engine = process.argv.includes('--engine')
   ? process.argv[process.argv.indexOf('--engine') + 1]
-  : 'v2';
+  : 'extractor';
 const devMode = process.argv.includes('--dev');
 
 interface ParityManifest extends Pick<
@@ -56,7 +56,7 @@ function parseNativeEngineModule(
     Object.prototype.toString.call(candidate.ExtractEngine) !==
     '[object Function]'
   ) {
-    throw new TypeError('v2 NAPI module is missing ExtractEngine');
+    throw new TypeError('extractor NAPI module is missing ExtractEngine');
   }
   // SAFETY: the value comes from the repository-owned extractor.js bridge, and
   // the function-tag check above fails loud before construction.
@@ -64,7 +64,7 @@ function parseNativeEngineModule(
 }
 
 function loadEngine(name: string): EngineApi {
-  if (name === 'v2') {
+  if (name === 'extractor') {
     const native = parseNativeEngineModule(
       require_(join(ROOT, 'packages/extract/extractor.js'))
     );
@@ -90,7 +90,7 @@ function loadEngine(name: string): EngineApi {
       },
     })();
   }
-  throw new Error(`unknown engine '${name}' — supported: v2`);
+  throw new Error(`unknown engine '${name}' — supported: extractor`);
 }
 
 /** The test system exports no global blocks or keyframes; supplying them here

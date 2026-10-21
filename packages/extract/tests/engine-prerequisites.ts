@@ -10,7 +10,8 @@ const TESTS_DIR = dirname(fileURLToPath(import.meta.url));
 const EXTRACT_ROOT = join(TESTS_DIR, '..');
 export const REPO_ROOT = join(EXTRACT_ROOT, '../..');
 
-const BUILD_NAPI = "bun run --filter '@animus-ui/extract' build:v2:debug";
+const BUILD_NAPI =
+  "bun run --filter '@animus-ui/extract' build:extractor:debug";
 const BUILD_DISTS = 'vp run build:ts';
 
 export interface EnginePrerequisites {
@@ -40,7 +41,7 @@ export function probeEnginePrerequisites(): EnginePrerequisites {
   if (!hostNativeBinaryExists()) {
     return {
       ok: false,
-      reason: `v2 NAPI native binary not found for ${process.platform}-${process.arch} under packages/extract/crates/extractor/. Run: ${BUILD_NAPI}`,
+      reason: `extractor NAPI native binary not found for ${process.platform}-${process.arch} under packages/extract/crates/extractor/. Run: ${BUILD_NAPI}`,
     };
   }
 

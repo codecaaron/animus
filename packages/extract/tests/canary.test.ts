@@ -24,7 +24,7 @@ import { ingestSourceEntries } from '../pipeline/source-ingestion';
 
 const extractor = require('../extractor.js');
 
-describe('v2 system loader NAPI boundary', () => {
+describe('extractor system loader NAPI boundary', () => {
   const root = join(__dirname, '../../..');
   const systemPath = join(__dirname, 'test-system.ts');
 

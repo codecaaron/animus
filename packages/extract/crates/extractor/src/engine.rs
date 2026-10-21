@@ -1790,8 +1790,8 @@ impl ExtractEngine {
         )
         .map_err(|e| match e {
             assemble::AssembleError::NeedsConfig(msg) => napi::Error::from_reason(format!(
-                "engine v2: {msg} — system/custom payloads land with the config/theme \
-                 inputs (row 07); keep engine 'v1' for builds using those stages."
+                "extractor: {msg} — system/custom payloads land with the config/theme \
+                 inputs (row 07)."
             )),
         })?;
 

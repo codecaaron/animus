@@ -1,4 +1,4 @@
-//! animus extract v2 — NAPI entry points for the extraction spine.
+//! animus extractor — NAPI entry points for the extraction spine.
 
 #[macro_use]
 extern crate napi_derive;
@@ -10,7 +10,7 @@ pub fn engine_version() -> String {
     let counter = owned_ast::ParseCounter::new(0);
     let ast = owned_ast::OwnedAst::parse("probe.mjs".into(), "let x = 1;".into(), &counter);
     format!(
-        "v2/skeleton oxc-parse-ok:{}",
+        "extractor/skeleton oxc-parse-ok:{}",
         ast.diagnostics.is_empty() && ast.program().body.len() == 1
     )
 }
@@ -38,7 +38,7 @@ mod tests {
 
     #[test]
     fn oxc_umbrella_links_and_parses() {
-        assert_eq!(engine_version(), "v2/skeleton oxc-parse-ok:true");
+        assert_eq!(engine_version(), "extractor/skeleton oxc-parse-ok:true");
     }
 }
 

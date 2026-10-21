@@ -141,7 +141,7 @@ fi
 
 function expectedValidationCommands(): string[] {
   return [
-    "-e const m=require('./packages/extract/crates/extractor/animus-extractor.linux-x64-gnu.node'); if (!Object.keys(m).length) throw new Error('V2 NAPI exports missing')",
+    "-e const m=require('./packages/extract/crates/extractor/animus-extractor.linux-x64-gnu.node'); if (!Object.keys(m).length) throw new Error('extractor NAPI exports missing')",
     'vp run build:ts',
     ...workerTargets.map(
       (target) => `vp run ${workerOwners[target]}#verify:build`
@@ -170,7 +170,7 @@ describe('Workers deployment topology', () => {
   });
 
   it('keeps the crate Rust channels and the CI toolchain pin aligned', () => {
-    // The extract-v2 build script reads the channel out of rust-toolchain.toml
+    // The extractor build script reads the channel out of rust-toolchain.toml
     // and refuses any other release, so a mismatched CI pin builds nothing.
     const [extractChannel, loaderChannel] = [
       'packages/extract/crates/extractor/rust-toolchain.toml',

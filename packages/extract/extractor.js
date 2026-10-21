@@ -19,12 +19,12 @@ function loadNative() {
     }
   }
   throw new Error(
-    `@animus-ui/extract engine v2: native binary not found for ${platform}-${arch} ` +
+    `@animus-ui/extract: the extractor binary was not found for ${platform}-${arch} ` +
       `(looked for ${candidates.join(', ')} under crates/extractor/). ` +
       `Published releases ship this binary for darwin-arm64, linux-x64-gnu and ` +
-      `linux-arm64-gnu — reinstall the package to restore it (v2 is the only ` +
+      `linux-arm64-gnu — reinstall the package to restore it (the extractor is the only ` +
       `engine, so there is no other engine to fall back to). ` +
-      `In the animus workspace, build it with: vp run build:extract-v2.`
+      `In the animus workspace, build it with: vp run build:extractor.`
   );
 }
 

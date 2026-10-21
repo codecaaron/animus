@@ -14,7 +14,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# Kept in lockstep with extract-v2's table — see the rationale there. These are
+# Kept in lockstep with the extractor's table — see the rationale there. These are
 # two independent crates with no Cargo workspace between them (deliberate, per
 # packages/extract/CLAUDE.md), so `[workspace.lints]` inheritance is unavailable
 # and the posture is duplicated rather than shared. Edit both together.
