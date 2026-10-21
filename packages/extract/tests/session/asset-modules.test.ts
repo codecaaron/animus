@@ -8,6 +8,8 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../native-functions';
+
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
@@ -21,7 +23,8 @@ import {
 } from '../../session/singleton';
 
 setEngineApiOverride(() => ({
-  extractFacts: () => '{"files":{},"parseCount":0}',
+  ...nativeFunctions(),
+  extractModuleFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,

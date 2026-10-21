@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import { runBuildStart } from '../src/build-start';
 import { RESOLVED_CSS_ID } from '../src/constants';
 import { PluginContext } from '../src/context';
@@ -34,6 +35,7 @@ function makeContext(theme = { variableCss: '', componentCss: '' }) {
     },
   });
   const engine = {
+    ...nativeFunctions(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
@@ -42,7 +44,7 @@ function makeContext(theme = { variableCss: '', componentCss: '' }) {
       variableCss: theme.variableCss,
       dependencies: [],
     }),
-    extractFacts: () => JSON.stringify({ files: {}, parseCount: 0 }),
+    extractModuleFacts: () => JSON.stringify({ files: {}, parseCount: 0 }),
     analyzeProject: () => JSON.stringify(manifest),
   };
 

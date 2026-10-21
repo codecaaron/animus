@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { createV2EngineApi } from '../pipeline/engine-adapter';
 import { runProjectAnalysis } from '../pipeline/run-analysis';
 import { loadSystemConfig } from '../pipeline/system-config';
+import { nativeFunctions } from './native-functions';
 
 import type { V2ExtractEngine } from '../pipeline/engine-adapter';
 
@@ -89,6 +90,7 @@ function analyze(prefix?: string, prefixContextualVars?: boolean) {
   const config = ds.toConfig();
   const system = loadSystemConfig(
     () => ({
+      ...nativeFunctions(),
       loadSystemModule: () => ({
         ...serialized,
         propConfig: config.propConfig,

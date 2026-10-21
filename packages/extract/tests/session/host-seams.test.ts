@@ -6,6 +6,8 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../native-functions';
+
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
@@ -71,7 +73,8 @@ export const system = createSystem({}).extend(kit);
   const { parent, app, kit } = createKitWorkspace(systemSource);
   const systemPath = join(app, 'src', 'system.ts');
   setEngineApiOverride(() => ({
-    extractFacts: factsExtractor({
+    ...nativeFunctions(),
+    extractModuleFacts: factsExtractor({
       [systemPath]: {
         ...emptyFacts(systemPath),
         imports: systemImportFacts(systemSource),
@@ -186,7 +189,8 @@ describe('host-first discovery', () => {
 describe('a host runtime import', () => {
   test('reaches the emitter, and an override that cannot supply a terminal fails', async () => {
     setEngineApiOverride(() => ({
-      extractFacts: () => '{"files":{},"parseCount":0}',
+      ...nativeFunctions(),
+      extractModuleFacts: () => '{"files":{},"parseCount":0}',
       loadSystemModule: mocks.loadSystemModule,
       analyzeProject: mocks.analyzeProject,
       clearAnalysisCache: mocks.clearAnalysisCache,
@@ -217,7 +221,8 @@ describe('a host runtime import', () => {
 describe('a session that keeps its artifacts in memory', () => {
   test('publishes every result and writes no session directory', async () => {
     setEngineApiOverride(() => ({
-      extractFacts: () => '{"files":{},"parseCount":0}',
+      ...nativeFunctions(),
+      extractModuleFacts: () => '{"files":{},"parseCount":0}',
       loadSystemModule: mocks.loadSystemModule,
       analyzeProject: mocks.analyzeProject,
       clearAnalysisCache: mocks.clearAnalysisCache,
@@ -237,7 +242,8 @@ describe('a session that keeps its artifacts in memory', () => {
 describe('a session that keeps its artifacts in memory', () => {
   test('leaves asset placeholders to its host and a sibling epoch alone', async () => {
     setEngineApiOverride(() => ({
-      extractFacts: () => '{"files":{},"parseCount":0}',
+      ...nativeFunctions(),
+      extractModuleFacts: () => '{"files":{},"parseCount":0}',
       loadSystemModule: mocks.loadSystemModule,
       analyzeProject: mocks.analyzeProject,
       clearAnalysisCache: mocks.clearAnalysisCache,
@@ -290,7 +296,8 @@ describe("a host's engine and logger", () => {
       },
       {
         engine: () => ({
-          extractFacts: () => '{"files":{},"parseCount":0}',
+          ...nativeFunctions(),
+          extractModuleFacts: () => '{"files":{},"parseCount":0}',
           loadSystemModule: mocks.loadSystemModule,
           analyzeProject: hostAnalyze,
           clearAnalysisCache: mocks.clearAnalysisCache,
@@ -337,7 +344,8 @@ describe("a host's engine and logger", () => {
       { system: './src/system.ts' },
       {
         engine: () => ({
-          extractFacts: () => '{"files":{},"parseCount":0}',
+          ...nativeFunctions(),
+          extractModuleFacts: () => '{"files":{},"parseCount":0}',
           loadSystemModule: mocks.loadSystemModule,
           analyzeProject: hostAnalyze,
           clearAnalysisCache: mocks.clearAnalysisCache,
@@ -414,7 +422,8 @@ describe("a host's engine and logger", () => {
       { system: './src/system.ts' },
       {
         engine: () => ({
-          extractFacts: () => '{"files":{},"parseCount":0}',
+          ...nativeFunctions(),
+          extractModuleFacts: () => '{"files":{},"parseCount":0}',
           loadSystemModule: mocks.loadSystemModule,
           analyzeProject: hostAnalyze,
           clearAnalysisCache: mocks.clearAnalysisCache,
@@ -454,7 +463,8 @@ describe("a host's engine and logger", () => {
 describe('a host that substitutes asset URLs itself', () => {
   async function publishWithAsset(hostSubstitutesAssets: boolean) {
     setEngineApiOverride(() => ({
-      extractFacts: () => '{"files":{},"parseCount":0}',
+      ...nativeFunctions(),
+      extractModuleFacts: () => '{"files":{},"parseCount":0}',
       loadSystemModule: mocks.loadSystemModule,
       analyzeProject: mocks.analyzeProject,
       clearAnalysisCache: mocks.clearAnalysisCache,

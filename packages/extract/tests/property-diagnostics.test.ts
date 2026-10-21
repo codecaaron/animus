@@ -14,6 +14,7 @@ import {
 import { checkCustomProperties } from '../pipeline/property-diagnostics';
 import { runProjectAnalysis } from '../pipeline/run-analysis';
 import { loadSystemConfig } from '../pipeline/system-config';
+import { nativeFunctions } from './native-functions';
 
 import type { V2ExtractEngine } from '../pipeline/engine-adapter';
 
@@ -129,6 +130,7 @@ function analyze(
   const config = ds.toConfig();
   const system = loadSystemConfig(
     () => ({
+      ...nativeFunctions(),
       loadSystemModule: () => ({
         ...serialized,
         propConfig: config.propConfig,

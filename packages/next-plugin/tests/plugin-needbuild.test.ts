@@ -2,6 +2,8 @@ import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
+
 const mocks = vi.hoisted(() => ({
   extractFacts: vi.fn<(filesJson: string) => string>(),
   loadSystemModule: vi.fn(),
@@ -16,7 +18,8 @@ import {
 } from '../../extract/session/singleton';
 
 setEngineApiOverride(() => ({
-  extractFacts: mocks.extractFacts,
+  ...nativeFunctions(),
+  extractModuleFacts: mocks.extractFacts,
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,

@@ -9,6 +9,8 @@ import {
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../native-functions';
+
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn(),
@@ -18,7 +20,8 @@ const mocks = vi.hoisted(() => ({
 import { setEngineApiOverride } from '../../session/singleton';
 
 setEngineApiOverride(() => ({
-  extractFacts: () => '{"files":{},"parseCount":0}',
+  ...nativeFunctions(),
+  extractModuleFacts: () => '{"files":{},"parseCount":0}',
   resolveSpecifier: requireResolveSpecifier,
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,

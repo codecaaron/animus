@@ -2,6 +2,8 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../native-functions';
+
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
@@ -14,7 +16,8 @@ import { parserStoppingAt } from '../source-ingestion-fixtures';
 // Injection through the singleton's globalThis seam reaches every copy of
 // the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
-  extractFacts: parserStoppingAt('(('),
+  ...nativeFunctions(),
+  extractModuleFacts: parserStoppingAt('(('),
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,

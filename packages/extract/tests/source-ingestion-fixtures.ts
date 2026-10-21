@@ -99,7 +99,13 @@ export function makeHost(
 ): SourceIngestorHost {
   const { strict = false, warnings = [], extractFacts } = options;
   return {
-    engineApi: () => (extractFacts ? { extractFacts } : {}),
+    engineApi: () => ({
+      extractModuleFacts:
+        extractFacts ??
+        (() => {
+          throw new Error('this host supplies no module facts');
+        }),
+    }),
     prefix: '[animus-test]',
     strict: () => strict,
     warn: (message) => {

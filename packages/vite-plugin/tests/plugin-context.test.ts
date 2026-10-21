@@ -3,6 +3,7 @@ import { join, resolve } from 'path';
 import { createLogger, resolveConfig } from 'vite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   createKitWorkspace,
   disposeTempRoots,
@@ -62,6 +63,7 @@ function kitWorkspaceEngine(
   onAnalyze: (received: AnalyzeProjectArgs) => void = () => {}
 ) {
   return () => ({
+    ...nativeFunctions(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
@@ -70,7 +72,7 @@ function kitWorkspaceEngine(
       variableCss: '',
       dependencies: [],
     }),
-    extractFacts: factsExtractor({
+    extractModuleFacts: factsExtractor({
       [join(app, 'src', 'system.ts')]: {
         ...emptyFacts(join(app, 'src', 'system.ts')),
         imports: systemImportFacts(KIT_SYSTEM_SOURCE),

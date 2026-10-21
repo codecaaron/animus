@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { createLogger, resolveConfig } from 'vite';
 import { afterEach, describe, expect, test } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   disposeTempRoots,
   makeTempRoot,
@@ -36,6 +37,7 @@ async function startAborted(
     warnings.push(message);
   };
   const ctx = new PluginContext({ system: './src/ds.ts', ...options }, () => ({
+    ...nativeFunctions(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
@@ -44,7 +46,7 @@ async function startAborted(
       variableCss: '',
       dependencies: [],
     }),
-    extractFacts: parserStoppingAt('ds(.'),
+    extractModuleFacts: parserStoppingAt('ds(.'),
     analyzeProject: () => {
       throw new Error('an aborted attempt must not analyze');
     },

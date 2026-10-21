@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { createLogger, resolveConfig } from 'vite';
 import { afterEach, describe, expect, test } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   createKitWorkspace,
   disposeTempRoots,
@@ -33,6 +34,7 @@ async function buildKitConsumer(strict: boolean) {
     warnings.push(message);
   };
   const ctx = new PluginContext({ system: './src/system.ts', strict }, () => ({
+    ...nativeFunctions(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
@@ -46,7 +48,7 @@ async function buildKitConsumer(strict: boolean) {
         },
       }),
     }),
-    extractFacts: factsExtractor({
+    extractModuleFacts: factsExtractor({
       [system]: {
         ...emptyFacts(system),
         imports: systemImportFacts(KIT_SYSTEM_SOURCE),

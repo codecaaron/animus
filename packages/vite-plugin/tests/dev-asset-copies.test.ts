@@ -9,6 +9,7 @@ import { join, resolve } from 'node:path';
 import { resolveConfig } from 'vite';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   createKitWorkspace,
   disposeTempRoots,
@@ -49,6 +50,7 @@ async function serveWithAsset(options: ServeOptions = {}) {
   const specifier = options.outsideRoot ? '../logo.svg' : './logo.svg';
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   const ctx = new PluginContext({ system: './src/system.ts' }, () => ({
+    ...nativeFunctions(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
@@ -57,7 +59,7 @@ async function serveWithAsset(options: ServeOptions = {}) {
       variableCss: '',
       dependencies: [],
     }),
-    extractFacts: factsExtractor({
+    extractModuleFacts: factsExtractor({
       [join(app, 'src', 'system.ts')]: {
         ...emptyFacts(join(app, 'src', 'system.ts')),
         imports: systemImportFacts(KIT_SYSTEM_SOURCE),

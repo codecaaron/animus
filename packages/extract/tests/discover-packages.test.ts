@@ -1220,7 +1220,7 @@ test('an imported kit the system does not include is an error', () => {
       const dir = join(root, 'node_modules', ...name.split('/'));
       return existsSync(dir) ? dir : null;
     },
-    extractFacts: () =>
+    extractModuleFacts: () =>
       JSON.stringify({
         parseCount: 1,
         files: {
@@ -1242,7 +1242,7 @@ test('an imported kit the system does not include is an error', () => {
     engine,
     root,
     ['@acme/included', '@acme/legacy'],
-    () => JSON.parse(engine.extractFacts())
+    () => JSON.parse(engine.extractModuleFacts())
   );
   rmSync(root, { recursive: true, force: true });
 

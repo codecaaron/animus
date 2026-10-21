@@ -14,6 +14,7 @@ import {
 import { dirname, join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   BUTTON_SOURCE,
   disposeTempRoots,
@@ -50,7 +51,8 @@ const mocks = vi.hoisted(() => ({
 import { setEngineApiOverride } from '../../extract/session/singleton';
 
 setEngineApiOverride(() => ({
-  extractFacts: mocks.extractFacts,
+  ...nativeFunctions(),
+  extractModuleFacts: mocks.extractFacts,
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,

@@ -26,9 +26,9 @@ const CSS_IMPORT = "import '.animus/styles.css';\n";
 const unreachableNative = {
   ExtractEngine: class implements V2ExtractEngine {
     prepare(): string {
-      throw new Error('engine must not be called for unknown paths');
+      return '{}';
     }
-    analyze(): string {
+    analyzePrepared(): string {
       return '{}';
     }
     transformFile(): string {

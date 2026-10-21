@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { createV2EngineApi, parseFilesJson } from '../pipeline';
+import { nativeFunctions } from './native-functions';
 
 import type { V2EngineStateStore, V2ExtractEngine } from '../pipeline';
 
@@ -86,9 +87,7 @@ describe('engine adapter analyzeProject', () => {
     const api = createV2EngineApi({
       label: 'adapter-policy-test',
       loadNativeEngine: () => ({
-        loadSystemModule: () => {
-          throw new Error('a refused corpus loads no system');
-        },
+        ...nativeFunctions(),
         ExtractEngine: class {
           constructor() {
             constructed += 1;
@@ -96,7 +95,7 @@ describe('engine adapter analyzeProject', () => {
           prepare() {
             return '{}';
           }
-          analyze() {
+          analyzePrepared() {
             return '{}';
           }
           fullManifestJson() {

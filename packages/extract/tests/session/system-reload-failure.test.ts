@@ -2,6 +2,8 @@ import { readFileSync, realpathSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../native-functions';
+
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn(),
@@ -13,8 +15,9 @@ import { setEngineApiOverride } from '../../session/singleton';
 // Injection through the singleton's globalThis seam reaches every copy of
 // the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
+  ...nativeFunctions(),
   loadSystemModule: mocks.loadSystemModule,
-  extractFacts: () => '{"files":{},"parseCount":0}',
+  extractModuleFacts: () => '{"files":{},"parseCount":0}',
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));

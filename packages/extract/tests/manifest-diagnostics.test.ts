@@ -13,6 +13,7 @@ import {
 } from '../pipeline/manifest-diagnostics';
 import { runProjectAnalysis } from '../pipeline/run-analysis';
 import { loadSystemConfig } from '../pipeline/system-config';
+import { nativeFunctions } from './native-functions';
 
 import type {
   DiagnosticLevels,
@@ -454,6 +455,7 @@ describe('invalid @property registrations', () => {
   function load(prefix?: string) {
     return loadSystemConfig(
       () => ({
+        ...nativeFunctions(),
         loadSystemModule: () => ({
           propConfig: '{}',
           groupRegistry: '{}',
@@ -523,6 +525,7 @@ describe('invalid @property registrations', () => {
     ]);
     const system = loadSystemConfig(
       () => ({
+        ...nativeFunctions(),
         loadSystemModule: () => ({
           propConfig: '{}',
           groupRegistry: '{}',
@@ -574,6 +577,7 @@ describe('invalid @property registrations', () => {
       const warned: string[] = [];
       runProjectAnalysis(
         () => ({
+          ...nativeFunctions(),
           analyzeProject: () =>
             JSON.stringify({
               diagnostics: [],
@@ -612,6 +616,7 @@ describe('invalid @property registrations', () => {
     const analyze = (strict: boolean, warn: (message: string) => void) =>
       runProjectAnalysis(
         () => ({
+          ...nativeFunctions(),
           analyzeProject: () =>
             JSON.stringify({
               diagnostics: [],

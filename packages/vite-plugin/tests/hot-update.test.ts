@@ -18,6 +18,7 @@ import { join, resolve } from 'path';
 import { resolveConfig } from 'vite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   createKitWorkspace,
   disposeTempRoots,
@@ -548,6 +549,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     const ctx = new PluginContext(
       { system: './src/system.ts', exclude },
       () => ({
+        ...nativeFunctions(),
         loadSystemModule: () => {
           state.systemLoads += 1;
           if (state.systemLoadFails) throw new Error('planned system failure');
@@ -560,7 +562,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
             dependencies: [],
           };
         },
-        extractFacts: (filesJson: string) => {
+        extractModuleFacts: (filesJson: string) => {
           // SAFETY: the Session's own JSON.stringify of its file entries.
           const entries = JSON.parse(filesJson) as Array<{
             path: string;

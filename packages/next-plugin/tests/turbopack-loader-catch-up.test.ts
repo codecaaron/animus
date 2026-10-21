@@ -1,4 +1,5 @@
 import { contentHash } from '@animus-ui/extract/pipeline';
+import { artifactHash } from '@animus-ui/extract/session';
 import {
   existsSync,
   mkdirSync,
@@ -10,6 +11,8 @@ import {
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
+
 const mocks = {
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn(),
@@ -18,8 +21,9 @@ const mocks = {
 };
 
 const engineDouble = () => ({
+  ...nativeFunctions(),
   loadSystemModule: mocks.loadSystemModule,
-  extractFacts: () => '{"files":{},"parseCount":0}',
+  extractModuleFacts: () => '{"files":{},"parseCount":0}',
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
   transformFile: mocks.transformFile,
@@ -137,9 +141,9 @@ function writeGeneration(root: string, spec: GenerationSpec) {
       sessionId,
       generation,
       replacementEpoch: epoch,
-      manifestHash: contentHash(manifestBytes),
-      inputsHash: contentHash(inputsBytes),
-      stylesHash: contentHash(stylesBytes),
+      manifestHash: artifactHash(nativeFunctions(), manifestBytes),
+      inputsHash: artifactHash(nativeFunctions(), inputsBytes),
+      stylesHash: artifactHash(nativeFunctions(), stylesBytes),
     })
   );
   if (spec.writeEpochArtifact) {

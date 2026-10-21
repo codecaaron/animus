@@ -17,6 +17,8 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { contentHash } from '../../pipeline';
+import { artifactHash } from '../../session/session-paths';
+import { nativeFunctions } from '../native-functions';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
@@ -29,7 +31,8 @@ import { setEngineApiOverride } from '../../session/singleton';
 // Injection through the singleton's globalThis seam reaches every copy of
 // the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
-  extractFacts: () => '{"files":{},"parseCount":0}',
+  ...nativeFunctions(),
+  extractModuleFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
@@ -507,13 +510,22 @@ describe('analysis-commit content (design D1)', () => {
     expect(commit.generation).toBe(1);
     expect(commit.replacementEpoch).toBe(expectedEpoch(PLAN_A));
     expect(commit.manifestHash).toBe(
-      contentHash(readSessionArtifact(session, 'manifest.json'))
+      artifactHash(
+        nativeFunctions(),
+        readSessionArtifact(session, 'manifest.json')
+      )
     );
     expect(commit.inputsHash).toBe(
-      contentHash(readSessionArtifact(session, 'analysis-inputs.json'))
+      artifactHash(
+        nativeFunctions(),
+        readSessionArtifact(session, 'analysis-inputs.json')
+      )
     );
     expect(commit.stylesHash).toBe(
-      contentHash(readSessionArtifact(session, 'styles.css'))
+      artifactHash(
+        nativeFunctions(),
+        readSessionArtifact(session, 'styles.css')
+      )
     );
   });
 

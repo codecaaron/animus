@@ -13,6 +13,7 @@ import {
 } from '../pipeline/property-names';
 import { runProjectAnalysis } from '../pipeline/run-analysis';
 import { loadSystemConfig } from '../pipeline/system-config';
+import { nativeFunctions } from './native-functions';
 
 describe('one final name per managed property', () => {
   const names = createPropertyNames(['tone', 'gap'], 'acme');
@@ -154,12 +155,15 @@ const SYSTEM = {
 };
 
 function load(prefix?: string, prefixContextualVars?: boolean) {
-  return loadSystemConfig(() => ({ loadSystemModule: () => SYSTEM }), {
-    systemPath: 'ds.ts',
-    rootDir: '/',
-    prefix,
-    prefixContextualVars,
-  });
+  return loadSystemConfig(
+    () => ({ ...nativeFunctions(), loadSystemModule: () => SYSTEM }),
+    {
+      systemPath: 'ds.ts',
+      rootDir: '/',
+      prefix,
+      prefixContextualVars,
+    }
+  );
 }
 
 const artifacts = (system: ReturnType<typeof load>) => ({
@@ -261,6 +265,7 @@ describe('system load under a prefix', () => {
     for (const prefixContextualVars of [false, true]) {
       const system = loadSystemConfig(
         () => ({
+          ...nativeFunctions(),
           loadSystemModule: () => ({
             ...SYSTEM,
             declarationScalesJson: clamp('var(--color-red)'),
@@ -287,6 +292,7 @@ describe('system load under a prefix', () => {
     expect(conflicts(load('animus', true))).toEqual([['--tone', 'error']]);
     const shadowed = loadSystemConfig(
       () => ({
+        ...nativeFunctions(),
         loadSystemModule: () => ({
           ...SYSTEM,
           variableCss: `${SYSTEM.variableCss}\n:root { --acme-tone: blue; }`,
@@ -306,6 +312,7 @@ describe('system load under a prefix', () => {
     const analysis = () =>
       runProjectAnalysis(
         () => ({
+          ...nativeFunctions(),
           analyzeProject: () =>
             JSON.stringify({
               diagnostics: [],
@@ -356,6 +363,7 @@ describe('the map reaches the extractor', () => {
     const engineApi = createV2EngineApi({
       label: 'property-names-test',
       loadNativeEngine: () => ({
+        ...nativeFunctions(),
         loadSystemModule: () => ({ ...SYSTEM, dependencies: [] }),
         ExtractEngine: class {
           constructor(options: EngineOptions) {
@@ -364,7 +372,7 @@ describe('the map reaches the extractor', () => {
           prepare() {
             return '{}';
           }
-          analyze() {
+          analyzePrepared() {
             return JSON.stringify({
               diagnostics: [],
               sheets: { global: '' },

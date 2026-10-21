@@ -3,6 +3,8 @@ import { readFileSync, writeFileSync } from 'fs';
 import { join, relative, sep } from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../../../extract/tests/native-functions';
+
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn(),
@@ -14,7 +16,8 @@ import { setEngineApiOverride } from '../../../extract/session/singleton';
 import { latestSessionKey } from '../../../extract/tests/session/session-fixtures';
 
 setEngineApiOverride(() => ({
-  extractFacts: () => '{"files":{},"parseCount":0}',
+  ...nativeFunctions(),
+  extractModuleFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,

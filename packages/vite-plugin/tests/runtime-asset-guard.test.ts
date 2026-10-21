@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { createLogger, resolveConfig } from 'vite';
 import { afterEach, expect, test } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   disposeTempRoots,
   makeTempRoot,
@@ -50,6 +51,7 @@ async function build(manifest: ProjectManifest, strict: boolean) {
     warnings.push(message);
   };
   const ctx = new PluginContext({ system: './src/ds.ts', strict }, () => ({
+    ...nativeFunctions(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
@@ -58,7 +60,7 @@ async function build(manifest: ProjectManifest, strict: boolean) {
       variableCss: '',
       dependencies: [],
     }),
-    extractFacts: () => JSON.stringify({ files: {}, parseCount: 0 }),
+    extractModuleFacts: () => JSON.stringify({ files: {}, parseCount: 0 }),
     analyzeProject: () => JSON.stringify(manifest),
   }));
   applyResolvedConfig(

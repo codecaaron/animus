@@ -4,6 +4,8 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../native-functions';
+
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn(),
@@ -14,7 +16,8 @@ import { setEngineApiOverride } from '../../session/singleton';
 import { parserStoppingAt } from '../source-ingestion-fixtures';
 
 setEngineApiOverride(() => ({
-  extractFacts: parserStoppingAt('(('),
+  ...nativeFunctions(),
+  extractModuleFacts: parserStoppingAt('(('),
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,

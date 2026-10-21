@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { setEngineApiOverride } from '../../extract/session/singleton';
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   buildManifest,
   createProject,
@@ -30,7 +31,8 @@ describe("a failed load's observations are watched", () => {
     const palette = join(root, 'src', 'palette.ts');
     const absent = join(root, 'src', 'theme.ts');
     setEngineApiOverride(() => ({
-      extractFacts: () => '{"files":{},"parseCount":0}',
+      ...nativeFunctions(),
+      extractModuleFacts: () => '{"files":{},"parseCount":0}',
       loadSystemModule: () => {
         throw Object.assign(new Error('SyntaxError in palette.ts'), {
           dependencies: [join(root, 'src', 'system.ts'), palette],
@@ -129,7 +131,8 @@ describe('a webpack compile that ends without done or failed', () => {
     restoreGlobals = resetAnimusGlobals();
     const root = createProject('animus-unplugin-webpack-');
     setEngineApiOverride(() => ({
-      extractFacts: parserStoppingAt('(('),
+      ...nativeFunctions(),
+      extractModuleFacts: parserStoppingAt('(('),
       loadSystemModule: () => ({ ...SYSTEM_CONFIG, dependencies: [] }),
       analyzeProject: () => buildManifest(PLAN_A),
       transformFile: (source: string) => ({
@@ -170,7 +173,8 @@ describe('a Rollup watch rebuild', () => {
     restoreGlobals = resetAnimusGlobals();
     const root = createProject('animus-unplugin-rollup-rebuild-');
     setEngineApiOverride(() => ({
-      extractFacts: parserStoppingAt('(('),
+      ...nativeFunctions(),
+      extractModuleFacts: parserStoppingAt('(('),
       loadSystemModule: () => ({ ...SYSTEM_CONFIG, dependencies: [] }),
       analyzeProject: () => buildManifest(PLAN_A),
       transformFile: (source: string) => ({

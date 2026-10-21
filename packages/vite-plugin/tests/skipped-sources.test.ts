@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { createLogger, resolveConfig } from 'vite';
 import { afterEach, describe, expect, test } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   disposeTempRoots,
   makeTempRoot,
@@ -34,6 +35,7 @@ async function productionBuild() {
   );
   const contexts: AnalysisContextWire[] = [];
   const ctx = new PluginContext({ system: './src/ds.ts' }, () => ({
+    ...nativeFunctions(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
@@ -42,7 +44,7 @@ async function productionBuild() {
       variableCss: '',
       dependencies: [],
     }),
-    extractFacts: factsExtractor({}),
+    extractModuleFacts: factsExtractor({}),
     analyzeProject: (...args: unknown[]) => {
       // SAFETY: the context slot holds the host's own JSON.stringify output,
       // or nothing when the host knows nothing.

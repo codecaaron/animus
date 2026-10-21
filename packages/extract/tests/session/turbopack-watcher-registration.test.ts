@@ -7,6 +7,8 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { nativeFunctions } from '../native-functions';
+
 const engine = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   analyzeProject: vi.fn(),
@@ -21,7 +23,8 @@ import {
 
 // Only the phase-replacement row runs real cycles; the rest stub them.
 setEngineApiOverride(() => ({
-  extractFacts: () => '{"files":{},"parseCount":0}',
+  ...nativeFunctions(),
+  extractModuleFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: engine.loadSystemModule,
   analyzeProject: engine.analyzeProject,
   clearAnalysisCache: engine.clearAnalysisCache,

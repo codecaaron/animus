@@ -1294,7 +1294,7 @@ test.each([
   const engine = {
     declaresKitSource: native.declaresKitSource,
     locatePackage: native.locatePackage,
-    extractFacts: () =>
+    extractModuleFacts: () =>
       JSON.stringify({
         parseCount: 1,
         files: {
@@ -1314,7 +1314,7 @@ test.each([
       engine,
       root,
       [],
-      () => JSON.parse(engine.extractFacts())
+      () => JSON.parse(engine.extractModuleFacts())
     ).map((d) => [d.component, d.code]),
   }).toEqual({
     declared: [name],

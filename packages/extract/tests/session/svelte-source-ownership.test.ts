@@ -12,6 +12,7 @@ import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { contentHash } from '../../pipeline';
+import { nativeFunctions } from '../native-functions';
 import { systemImportFacts } from '../source-ingestion-fixtures';
 
 const mocks = vi.hoisted(() => ({
@@ -35,6 +36,7 @@ import type { AnalysisSourceEntry, AnalyzeProjectArgs } from '../../pipeline';
 
 setEngineApiOverride(() => {
   const api = {
+    ...nativeFunctions(),
     loadSystemModule: mocks.loadSystemModule,
     analyzeProject: mocks.analyzeProject,
     transformFile: mocks.transformFile,
@@ -43,7 +45,7 @@ setEngineApiOverride(() => {
     // The fixtures install no package.
     locatePackage: () => null,
   };
-  return { ...api, extractFacts: mocks.extractFacts };
+  return { ...api, extractModuleFacts: mocks.extractFacts };
 });
 
 type EngineFileEntry = Pick<AnalysisSourceEntry, 'path' | 'source'>;

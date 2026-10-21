@@ -1,4 +1,5 @@
 import { contentHash } from '@animus-ui/extract/pipeline';
+import { artifactHash } from '@animus-ui/extract/session';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -7,6 +8,7 @@ import {
   analysisCommitPath,
   sessionArtifactDir,
 } from '../../extract/session/session-paths';
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   disposeTempRoots,
   makeManifest,
@@ -80,9 +82,9 @@ function writeCommitted(
       sessionId: SESSION_ID,
       generation: 1,
       replacementEpoch: 'e1',
-      manifestHash: contentHash(manifestBytes),
-      inputsHash: contentHash(inputsBytes),
-      stylesHash: contentHash(stylesBytes),
+      manifestHash: artifactHash(nativeFunctions(), manifestBytes),
+      inputsHash: artifactHash(nativeFunctions(), inputsBytes),
+      stylesHash: artifactHash(nativeFunctions(), stylesBytes),
     })
   );
 }
@@ -123,6 +125,7 @@ beforeEach(() => {
   }));
   __resetTurbopackLoaderStateForTests?.();
   __setTurbopackLoaderEngineApiForTests?.(() => ({
+    ...nativeFunctions(),
     analyzeProject: mocks.analyzeProject,
     transformFile: mocks.transformFile,
   }));
@@ -170,9 +173,9 @@ describe('turbopack loader hydration', () => {
         sessionId: SESSION_ID,
         generation: 1,
         replacementEpoch: 'e1',
-        manifestHash: contentHash(manifestBytes),
-        inputsHash: contentHash(inputsBytes),
-        stylesHash: contentHash(stylesBytes),
+        manifestHash: artifactHash(nativeFunctions(), manifestBytes),
+        inputsHash: artifactHash(nativeFunctions(), inputsBytes),
+        stylesHash: artifactHash(nativeFunctions(), stylesBytes),
       })
     );
     await expect(

@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { createLogger } from 'vite';
 import { afterEach, expect, test } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   createKitWorkspace,
   disposeTempRoots,
@@ -45,6 +46,7 @@ async function buildWithUnlinkedKit(
   const system = join(app, 'src', 'system.ts');
   let analysed = '';
   const ctx = new PluginContext({ system: './src/system.ts' }, () => ({
+    ...nativeFunctions(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
@@ -53,7 +55,7 @@ async function buildWithUnlinkedKit(
       variableCss: '',
       dependencies: [],
     }),
-    extractFacts: factsExtractor({
+    extractModuleFacts: factsExtractor({
       [system]: { ...emptyFacts(system), imports: systemImportFacts(SYSTEM) },
     }),
     resolveSpecifier: (

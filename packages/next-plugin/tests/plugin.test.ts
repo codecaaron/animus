@@ -20,6 +20,7 @@ import {
   getSharedCss,
   sessionKey,
 } from '../../extract/session/singleton';
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import {
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
@@ -48,7 +49,8 @@ const mocks = vi.hoisted(() => ({
 import { setEngineApiOverride } from '../../extract/session/singleton';
 
 setEngineApiOverride(() => ({
-  extractFacts: () => '{"files":{},"parseCount":0}',
+  ...nativeFunctions(),
+  extractModuleFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,

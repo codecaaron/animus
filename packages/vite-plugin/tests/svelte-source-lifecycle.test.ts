@@ -12,6 +12,7 @@ import { join, relative } from 'node:path';
 import { createLogger } from 'vite';
 import { afterEach, describe, expect, test } from 'vitest';
 
+import { nativeFunctions } from '../../extract/tests/native-functions';
 import { systemImportFacts } from '../../extract/tests/source-ingestion-fixtures';
 import { runBuildStart } from '../src/build-start';
 import { PluginContext } from '../src/context';
@@ -119,6 +120,7 @@ function makeEngineProbe(): EngineProbe {
   const transformedPaths: string[] = [];
   let failNext = false;
   const engine = {
+    ...nativeFunctions(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
@@ -128,7 +130,7 @@ function makeEngineProbe(): EngineProbe {
       contextualVarsJson: '{}',
       dependencies: [],
     }),
-    extractFacts: (filesJson: string) => {
+    extractModuleFacts: (filesJson: string) => {
       factsInputs.push(parseRawSourceEntries(filesJson));
       return factsFor(filesJson);
     },
@@ -164,6 +166,7 @@ function makeStatefulResetProbe() {
   let clears = 0;
   const transformedPaths: string[] = [];
   const engine = {
+    ...nativeFunctions(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
@@ -173,7 +176,7 @@ function makeStatefulResetProbe() {
       contextualVarsJson: '{}',
       dependencies: [],
     }),
-    extractFacts: factsFor,
+    extractModuleFacts: factsFor,
     analyzeProject: () => {
       active = true;
       return JSON.stringify(makeManifest());
@@ -579,6 +582,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     let replacement = 'createClassResolver(["a"])';
     let failNext = false;
     const engine = {
+      ...nativeFunctions(),
       loadSystemModule: () => ({
         propConfig: '{}',
         groupRegistry: '{}',
@@ -588,7 +592,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
         contextualVarsJson: '{}',
         dependencies: [],
       }),
-      extractFacts: factsFor,
+      extractModuleFacts: factsFor,
       analyzeProject: () => {
         if (failNext) {
           failNext = false;
