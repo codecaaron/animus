@@ -19634,6 +19634,27 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// Contract: a component a local binding of any name holds is handed on
+    /// wherever that binding is: `const r = R` passed to `createElement`
+    /// through `apply` or `Reflect.apply`, or to a package's renderer, keeps
+    /// R, which nothing else renders, as the `Alias` spelling does.
+    #[test]
+    fn a_component_an_alias_of_any_name_hands_on_stays() {
+        let inputs = test_inputs();
+        let r = "const R = ds.styles({ color: 'red' }).asElement('div');\n";
+        for (alias, call) in [
+            ("r", "import * as React from 'react';\nexport default function Page() { return React.createElement.apply(null, [r]); }\n"),
+            ("r", "import { createElement } from 'react';\nexport default function Page() { return Reflect.apply(createElement, null, [r]); }\n"),
+            ("r", "import { renderLater } from 'lib';\nexport default function Page() { return renderLater(r); }\n"),
+            ("Alias", "import * as React from 'react';\nexport default function Page() { return React.createElement.apply(null, [Alias]); }\n"),
+        ] {
+            let source = format!("{r}const {alias} = R;\n{call}");
+            let out = analyze(&[("app/page.tsx", source.as_str())], &inputs);
+            assert_eq!(out.reconciliation["components_eliminated"], 0, "{source}");
+            assert!(out.css.contains("red"), "{source}\n{}", out.css);
+        }
+    }
+
     /// Contract: short names emit utility rules in the same order as
     /// readable names, so the cascade is unchanged: the short CSS, each name
     /// mapped back to its readable one, is the readable CSS.

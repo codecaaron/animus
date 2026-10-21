@@ -1381,7 +1381,22 @@ pub(crate) fn collect_enriched_usage(
                 undeferred: BTreeSet::new(),
                 ancestors: Vec::new(),
                 aliases: &aliases,
+                value_aliases: BTreeSet::new(),
             };
+            // An alias of an alias names the same value.
+            let declared = declared_aliases(program);
+            loop {
+                let grew: Vec<String> = declared
+                    .iter()
+                    .filter(|(alias, value)| !scan.is_candidate(alias) && scan.is_candidate(value))
+                    .map(|(alias, _)| alias.clone())
+                    .collect();
+                let known = scan.value_aliases.len();
+                scan.value_aliases.extend(grew);
+                if scan.value_aliases.len() == known {
+                    break;
+                }
+            }
             scan.holders = scan
                 .reads
                 .iter()
@@ -6022,6 +6037,9 @@ struct EscapeScan<'a, 's> {
     /// React's wrappers and `const` aliases among them, whatever their
     /// names' case: what a write or hand-on of one changes, it renders.
     react_bindings: BTreeSet<String>,
+    /// Bindings a declaration gives a candidate's value (`const r = R`),
+    /// whatever their names' case: a reference to one hands that value on.
+    value_aliases: BTreeSet<String>,
 }
 
 /// A proof the engine may find that a reference does not hand its value
@@ -6052,9 +6070,30 @@ impl Escape {
     }
 }
 
+/// Each binding a declaration initializes with another binding's value, as
+/// written (`const r = R`, `let r = (R as C)`), in any scope: the alias and
+/// the name it reads.
+fn declared_aliases(program: &Program<'_>) -> Vec<(String, String)> {
+    struct Declared(Vec<(String, String)>);
+    impl<'a> Visit<'a> for Declared {
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            if let (oxc::ast::ast::BindingPattern::BindingIdentifier(alias), Some(init)) = (&declarator.id, &declarator.init) {
+                if let Expression::Identifier(value) = init.get_inner_expression() {
+                    self.0.push((alias.name.to_string(), value.name.to_string()));
+                }
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+    }
+    let mut declared = Declared(Vec::new());
+    declared.visit_program(program);
+    declared.0
+}
+
 impl EscapeScan<'_, '_> {
     fn is_candidate(&self, name: &str) -> bool {
         name.starts_with(|c: char| c.is_ascii_uppercase())
+            || self.value_aliases.contains(name)
             || self.react_bindings.contains(name)
             || self.namespaces.contains(name)
             || self.imports.contains(name)
