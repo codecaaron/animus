@@ -295,6 +295,33 @@ describe('an ignored, never-imported file is not analysed; an ignored, imported 
     session.close();
   });
 
+  test('a git listing cut short keeps nothing out', async () => {
+    const root = gitProject({
+      '.gitignore': 'gen/\n',
+      'gen/unused.ts': 'export const unused = 1;\n',
+    });
+    // A git whose ignore listing ends without its NUL, and exits zero.
+    const shim = join(root, '.shim');
+    mkdirSync(shim);
+    const real = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    writeFileSync(
+      join(shim, 'git'),
+      `#!/bin/sh\ncase "$*" in *--ignored*) printf src; exit 0;; esac\nexec ${real} "$@"\n`,
+      { mode: 0o755 }
+    );
+    const session = makeSession(root);
+    const path = process.env.PATH;
+    process.env.PATH = `${shim}:${path}`;
+    try {
+      await session.runFullPipeline();
+    } finally {
+      process.env.PATH = path;
+    }
+    expect(analysed()).toContain('src/Button.tsx');
+    expect(analysed()).toContain('gen/unused.ts');
+    session.close();
+  });
+
   test('a .gitignore created under the root re-runs the full pass', async () => {
     const root = gitProject({
       '.gitignore': 'gen/*\n',

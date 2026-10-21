@@ -48,6 +48,9 @@ export function readGitIgnored(
   } catch {
     return null;
   }
+  // Every entry ends in NUL: a listing that does not is cut short, and
+  // answers nothing.
+  if (listing !== '' && !listing.endsWith('\0')) return null;
   const dirs = new Set<string>();
   const files = new Set<string>();
   for (const entry of listing.split('\0')) {
