@@ -324,7 +324,10 @@ fn eval_property_key(key: &PropertyKey<'_>) -> Result<String, BailError> {
     match key {
         PropertyKey::StaticIdentifier(id) => Ok(id.name.to_string()),
         PropertyKey::StringLiteral(lit) => literal_string(lit).map(str::to_string).ok_or_else(lone_surrogate),
-        PropertyKey::NumericLiteral(lit) => Ok(lit.value.to_string()),
+        // The name a number writes, `String(n)`, where the walk can spell it.
+        PropertyKey::NumericLiteral(lit) => {
+            js_number_key(lit.value).ok_or_else(|| BailError::new(UnevaluatedKind::ComputedKey, "number key whose name the walk cannot spell"))
+        }
         _ => Err(BailError::new(UnevaluatedKind::ComputedKey, "non-static property key")),
     }
 }
@@ -1207,6 +1210,16 @@ fn eval_static_template(
         }
     }
     Some(StaticValue::String(text))
+}
+
+/// The name a property `key` writes, as `static_name` reads it but for a
+/// number, which writes its `String(n)` where `js_number_key` proves it:
+/// none where the walk cannot spell it, as for a key the code computes.
+pub(crate) fn property_name<'a>(key: &PropertyKey<'a>) -> Option<std::borrow::Cow<'a, str>> {
+    match key {
+        PropertyKey::NumericLiteral(number) => js_number_key(number.value).map(std::borrow::Cow::Owned),
+        key => key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str),
+    }
 }
 
 /// The property name a number key writes, JavaScript's `String(n)`, where

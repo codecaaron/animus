@@ -868,7 +868,7 @@ impl<'s> Module<'s> {
             BindingPattern::ObjectPattern(object) if matches!(value.inputs, Inputs::AllBut(_)) => {
                 let mut named = BTreeSet::new();
                 for property in &object.properties {
-                    let held = match (property.computed, property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str)) {
+                    let held = match (property.computed, crate::eval::property_name(&property.key)) {
                         (false, Some(key)) => {
                             let name = self.names.id(&key);
                             named.insert(name);
@@ -1142,7 +1142,7 @@ impl<'s> Module<'s> {
 fn member_name(key: &PropertyKey<'_>) -> Option<String> {
     match key {
         PropertyKey::PrivateIdentifier(private) => Some(format!("#{}", private.name)),
-        key => key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|name| name.to_string()),
+        key => crate::eval::property_name(key).map(|name| name.to_string()),
     }
 }
 
@@ -1208,6 +1208,8 @@ struct Declarations<'r> {
     outside_let_goes: Vec<(u32, SymbolId)>,
     /// `const`s declared to a provably primitive value (`primitive`).
     primitive_consts: FxHashSet<SymbolId>,
+    /// `const`s declared to a number or a BigInt by its form (`numeric`).
+    number_consts: FxHashSet<SymbolId>,
     /// Bindings declared to a string, never reassigned, with it.
     string_consts: FxHashMap<SymbolId, &'r str>,
     /// Functions bound to a name, never reassigned, whose every return is
@@ -1312,6 +1314,7 @@ impl<'r> Declarations<'r> {
             outside_let_goes: Vec::new(),
             primitive_consts: FxHashSet::default(),
             string_consts: FxHashMap::default(),
+            number_consts: FxHashSet::default(),
             primitive_functions: FxHashSet::default(),
             keyed_stores: Vec::new(),
             untraced_stores: Vec::new(),
@@ -1609,10 +1612,13 @@ impl<'r> Declarations<'r> {
     /// by any use but a member's read, and `getPrototypeOf` let go as a
     /// value reaches prototypes. A write is judged by `written_into`: by a
     /// bracketed key, whatever it names, it may set any built-in's method.
-    /// A store's key is `name`, or the string a `const` the key reads
-    /// (`held`) is declared to.
-    fn member(&mut self, span: Span, object: &Expression<'_>, key: Option<Cow<'r, str>>, computed: bool, held: Option<&IdentifierReference<'_>>) {
+    /// A store's key is `name`, or the string a `const` the `bracket` key
+    /// reads is declared to. A bracketed key the walk cannot name that is a
+    /// number by its form (`numeric`) names an index: read, it is no
+    /// prototype; a store by it is judged as by any computed key.
+    fn member(&mut self, span: Span, object: &Expression<'_>, key: Option<Cow<'r, str>>, computed: bool, bracket: Option<&Expression<'_>>) {
         let name = key.as_deref();
+        let index = name.is_none() && bracket.is_some_and(|bracket| self.numeric(bracket));
         let effect = super::member_effect(span, self.ancestors.iter().rev());
         let written = matches!(effect, Some(MemberEffect::Assigned | MemberEffect::Deleted));
         let prototype = match name {
@@ -1638,7 +1644,7 @@ impl<'r> Declarations<'r> {
         };
         if unseen {
             self.patch(span.start, if reflection && !called { "writer-let-go" } else { "string-code" });
-        } else if let (None, Some((at, skip))) = (name, if written { self.logical_assignment(span) } else { Some((span, 0)) }) {
+        } else if let (None, false, Some((at, skip))) = (name, index, if written { self.logical_assignment(span) } else { Some((span, 0)) }) {
             // A key the code computes may be `__proto__`, read, and a logical
             // assignment reads what it gives.
             match self.consumption(at, skip) {
@@ -1649,7 +1655,7 @@ impl<'r> Declarations<'r> {
             }
         } else if prototype && self.reshapes(span) {
             self.patch(span.start, "prototype-use");
-        } else if self.prototype_let_go(span, object, name) {
+        } else if self.prototype_let_go(span, object, name, index) {
             self.patch(span.start, "prototype-let-go");
         }
         if written {
@@ -1665,7 +1671,10 @@ impl<'r> Declarations<'r> {
             // global or a static chain off one, which `written_into` leaves,
             // it may be any.
             if let Some(MemberEffect::Assigned) = effect {
-                let held = held.and_then(|id| self.symbol(id)).and_then(|symbol| self.string_consts.get(&symbol).copied());
+                let held = match bracket {
+                    Some(Expression::Identifier(id)) => self.symbol(id).and_then(|symbol| self.string_consts.get(&symbol).copied()),
+                    _ => None,
+                };
                 match key.or_else(|| held.map(Cow::Borrowed)) {
                     Some(key) => self.store_key(span.start, object, key),
                     None if self.platform(object) => self.patch(span.start, "unread-key-store"),
@@ -1737,10 +1746,10 @@ impl<'r> Declarations<'r> {
     /// reaches prototypes (`Object[k]`), a call of a method off a prototype
     /// (`Object.prototype.valueOf()`, which may return it), or
     /// `getPrototypeOf` called through `call`, `bind` or `apply`.
-    fn prototype_let_go(&self, span: Span, object: &Expression<'_>, name: Option<&str>) -> bool {
+    fn prototype_let_go(&self, span: Span, object: &Expression<'_>, name: Option<&str>, index: bool) -> bool {
         let reaches = match name {
             Some("prototype") => true,
-            None => self.reaches_prototypes(object),
+            None => !index && self.reaches_prototypes(object),
             _ => false,
         };
         if reaches && self.let_go(span, 0) {
@@ -1934,7 +1943,7 @@ impl<'r> Declarations<'r> {
                 ObjectPropertyKind::ObjectProperty(property) => {
                     property.kind == PropertyKind::Init
                         && !property.computed
-                        && property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|key| !trusted_name(&key) || self.no_trusted_callable(&property.value))
+                        && crate::eval::property_name(&property.key).is_some_and(|key| !trusted_name(&key) || self.no_trusted_callable(&property.value))
                 }
                 ObjectPropertyKind::SpreadProperty(_) => false,
             }),
@@ -1949,6 +1958,24 @@ impl<'r> Declarations<'r> {
     /// one, or a choice among them.
     fn primitive(&self, value: &Expression<'_>) -> bool {
         self.primitive_by(value, true)
+    }
+
+    /// Whether `value` is a number or a BigInt by its form, so never a key
+    /// such as `__proto__`: a number literal, the result of `-`, `*`, `/`,
+    /// `%`, `**`, a shift or a bitwise operator, of unary `-`, `+` or `~`,
+    /// of `++` or `--`, or a `const` declared to one. A `+` of two values
+    /// may join strings.
+    fn numeric(&self, value: &Expression<'_>) -> bool {
+        use oxc::syntax::operator::BinaryOperator;
+        match unwrap_type_assertions(value) {
+            Expression::NumericLiteral(_) | Expression::BigIntLiteral(_) | Expression::UpdateExpression(_) => true,
+            Expression::BinaryExpression(binary) => {
+                binary.operator.is_bitwise() || (binary.operator.is_arithmetic() && binary.operator != BinaryOperator::Addition)
+            }
+            Expression::UnaryExpression(unary) => unary.operator.is_arithmetic() || unary.operator.is_bitwise(),
+            Expression::Identifier(id) => self.symbol(id).is_some_and(|symbol| self.number_consts.contains(&symbol)),
+            _ => false,
+        }
     }
 
     /// `primitive`, counting the calls of `primitive_functions` only where
@@ -2258,15 +2285,6 @@ fn declares_itself(flags: SymbolFlags, kinds: SymbolFlags) -> bool {
     flags.intersects(kinds) && !flags.intersects(SymbolFlags::Variable)
 }
 
-/// The name a property `key` writes: a number's `String(n)` where
-/// `js_number_key` proves it.
-fn property_key<'a>(key: &oxc::ast::ast::PropertyKey<'a>) -> Option<Cow<'a, str>> {
-    match key {
-        oxc::ast::ast::PropertyKey::NumericLiteral(number) => js_number_key(number.value).map(Cow::Owned),
-        key => key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str),
-    }
-}
-
 /// Where a value goes (`Declarations::consumption`).
 enum Consumption {
     Consumed,
@@ -2293,7 +2311,7 @@ impl LiteralShape {
         for property in &object.properties {
             match property {
                 ObjectPropertyKind::ObjectProperty(property) => {
-                    let name = property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !property.computed);
+                    let name = crate::eval::property_name(&property.key).filter(|_| !property.computed);
                     let sets_prototype = !property.shorthand && name.as_deref() == Some("__proto__");
                     shape.plain &= property.kind == PropertyKind::Init && !sets_prototype;
                     // A setter runs on a store with the object as `this`.
@@ -2596,14 +2614,14 @@ impl<'a> Visit<'a> for Declarations<'a> {
         let unread = matches!(&property.value, BindingPattern::BindingIdentifier(id) if id.symbol_id.get().is_some_and(|symbol| {
             self.scoping.symbol_scope_id(symbol) != self.scoping.root_scope_id() && self.scoping.get_resolved_reference_ids(symbol).is_empty()
         }));
-        if (property.computed && !unread) || property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
+        if (property.computed && !unread) || crate::eval::property_name(&property.key).is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
             self.patch(property.span.start, "prototype-let-go");
         }
         oxc::ast_visit::walk::walk_binding_property(self, property);
     }
 
     fn visit_assignment_target_property_property(&mut self, property: &oxc::ast::ast::AssignmentTargetPropertyProperty<'a>) {
-        if property.computed || property.name.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
+        if property.computed || crate::eval::property_name(&property.name).is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
             self.patch(property.span.start, "prototype-let-go");
         }
         oxc::ast_visit::walk::walk_assignment_target_property_property(self, property);
@@ -2638,11 +2656,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
             },
             _ => (member.static_property_name().and_then(oxc::str::JSStr::as_str).map(Cow::Borrowed), true),
         };
-        let held = match &member.expression {
-            Expression::Identifier(id) => Some(&**id),
-            _ => None,
-        };
-        self.member(member.span, &member.object, name, computed, held);
+        self.member(member.span, &member.object, name, computed, Some(&member.expression));
         oxc::ast_visit::walk::walk_computed_member_expression(self, member);
     }
 
@@ -2681,7 +2695,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
                                         if let ObjectPropertyKind::ObjectProperty(property) = property {
                                             // A number key writes its `String(n)`; one the
                                             // walk cannot prove may write any key.
-                                            match property_key(&property.key) {
+                                            match crate::eval::property_name(&property.key) {
                                                 Some(key) => self.store_key(call.span.start, target, key),
                                                 None => self.written_into(target, true),
                                             }
@@ -2858,6 +2872,9 @@ impl<'a> Visit<'a> for Declarations<'a> {
                     if constant && self.primitive(init) {
                         self.primitive_consts.insert(symbol);
                     }
+                    if constant && self.numeric(init) {
+                        self.number_consts.insert(symbol);
+                    }
                     if let Some(string) = super::static_string(init).filter(|_| constant) {
                         self.string_consts.insert(symbol, string);
                     }
@@ -3012,7 +3029,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 ObjectPropertyKind::ObjectProperty(property) => {
                     !property.computed
                         && property.kind == PropertyKind::Init
-                        && property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|name| plain_key(&name))
+                        && crate::eval::property_name(&property.key).is_some_and(|name| plain_key(&name))
                         && match unwrap_type_assertions(&property.value) {
                             Expression::Identifier(_) => inputs_only(&property.value),
                             Expression::StaticMemberExpression(member) => {
@@ -3125,7 +3142,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 ObjectPropertyKind::ObjectProperty(property) => {
                     !property.computed
                         && property.kind == PropertyKind::Init
-                        && property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|name| plain_key(&name))
+                        && crate::eval::property_name(&property.key).is_some_and(|name| plain_key(&name))
                         && caller(&property.value)
                 }
             }),
@@ -4052,7 +4069,7 @@ impl<'a> Walk<'_, '_, 'a> {
             match unwrap_type_assertions(expression) {
                 Expression::ObjectExpression(object) => object.properties.iter().all(|property| match property {
                     ObjectPropertyKind::ObjectProperty(property) if !property.computed => {
-                        property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|name| into.push(name.to_string())).is_some()
+                        crate::eval::property_name(&property.key).map(|name| into.push(name.to_string())).is_some()
                     }
                     _ => false,
                 }),
@@ -4734,7 +4751,7 @@ fn param_inputs(params: &oxc::ast::ast::FormalParameters<'_>) -> Vec<(SymbolId, 
             BindingPattern::ObjectPattern(object) => {
                 let mut named = Vec::new();
                 for property in &object.properties {
-                    let input = match (property.computed, property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str)) {
+                    let input = match (property.computed, crate::eval::property_name(&property.key)) {
                         (false, Some(key)) => {
                             named.push(key.to_string());
                             let host_default = match &property.value {
@@ -4806,7 +4823,7 @@ fn plain_config(call: &CallExpression<'_>) -> bool {
 fn plain_object(object: &oxc::ast::ast::ObjectExpression<'_>) -> bool {
     object.properties.iter().all(|property| {
         matches!(property, ObjectPropertyKind::ObjectProperty(property)
-            if !property.computed && property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|name| plain_key(&name)))
+            if !property.computed && crate::eval::property_name(&property.key).is_some_and(|name| plain_key(&name)))
     })
 }
 

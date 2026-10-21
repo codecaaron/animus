@@ -14991,6 +14991,22 @@ const Render = ({ children }) => { document.body.onclick = t; return <div>{child
             ("const Render = ({ children }) => { const k = document.body.id; while (({})[k]) break; do {} while (({})[k]); for (; ({})[k]; ) break; return <div>{children}</div>; };", "", "", false),
             ("const Render = ({ children }) => { if (({})[document.body.id][document.body.id]) {} return <div>{children}</div>; };", "", "", false),
             ("const Render = ({ children }) => { ({})[document.body.id].p = 12; return <div>{children}</div>; };", "", "", true),
+            // A key that is a number by its form names an index, never
+            // `__proto__`: an arithmetic result but `+`, which may join
+            // strings, or a `const` of one. Shapes from the showcase,
+            // twenty, geist and supabase.
+            ("const Render = ({ children }) => { const n = document.body.childElementCount; const next = (n + 1) % 3; [{}][next]?.focus(); return <div>{children}</div>; };", "", "", false),
+            ("const PAGES = [{}];\nconst Render = ({ children }) => { const idx = PAGES.indexOf(document.body.id); pad(idx > 0 ? PAGES[idx - 1] : null); return <div>{children}</div>; };", "", "", false),
+            ("const PAGES = [{}];\nconst Render = ({ children }) => { const idx = PAGES.indexOf(document.body.id); pad(PAGES[idx + 1]); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { const els = [...document.querySelectorAll('a')]; els[els.length - 1].focus(); return <div>{children}</div>; };", "", "", false),
+            ("const COLORS = [{}];\nconst Render = ({ children }) => { pad((prev) => COLORS[(COLORS.indexOf(prev) + 1) % COLORS.length]); return <div>{children}</div>; };", "", "", false),
+            ("const STEPS = [{}];\nconst Render = ({ children, activeStep }) => { pad(activeStep >= 0 ? STEPS[activeStep] : null); return <div>{children}</div>; };", "", "", true),
+            ("function n(e, t = 0) { return e[e.length - (1 + t)]; }\nconst Render = ({ children }) => { pad(n([{}])); return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const res = [{ value: '' }]; res[res.length - 1].value += document.body.id; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const tabs = [{}]; const index = tabs.indexOf(document.body.id); pad(tabs[(index + (document.body.id ? 1 : tabs.length - 1)) % tabs.length]); return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const k = document.body.childElementCount; let i = k; const rows = [{}]; pad([rows[-1], rows[i++], rows[--i], rows[~k], rows[+k], rows[2 ** k], rows[k << 1], rows[k >> 1], rows[k >>> 1], rows[k | 1], rows[k & 1], rows[k ^ 1], rows[k * 2], rows[k / 2], rows[3n], rows[k % 2]]); return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { let next = document.body.childElementCount - 1; next = document.body.id; pad([{}][next]); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { const n = document.body.childElementCount; pad(Object[n - 1]); return <div>{children}</div>; };", "", "", false),
             ("const Render = ({ children }) => { const label = ({})[document.body.id].toLowerCase(); return <div>{children}</div>; };", "", "", true),
             ("const Render = ({ children }) => { ([])[document.body.id].push(pad); return <div>{children}</div>; };", "", "", true),
             ("const Render = ({ children }) => { const label = ({})[document.body.id]['toLowerCase'](); return <div>{children}</div>; };", "", "", true),
@@ -15648,9 +15664,36 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ("1e+21", "const q = protoOf();\nq[1e21] = 'lg';", true),
             ("16", "Reflect.set(p, 0x10, 'lg');", true),
             ("16", "p[0x11] = 'lg';", false),
+            ("16", "const n = document.body.childElementCount;\np[n - 1] = 'lg';", true),
         ] {
             let source = format!("import {{ protoOf }} from 'outside';\nconst w = document.defaultView;\nw.p = protoOf();\n{store}\n{}", numbered(prop));
             assert_eq!(analyze(&[("a.tsx", &source)], &test_inputs()).sheets.variants.contains("3px"), keeps, "{store}");
+        }
+        // So does a number key a spread or a rest lists, and one an option
+        // map spells: one the walk cannot spell may name any prop, and its
+        // option is no static one.
+        let listed = |prop: &str, program: &str| {
+            format!(
+                "const Btn = ds.styles({{ display: 'inline' }}).variant({{ prop: '{prop}', defaultVariant: 'md', variants: {{ md: {{ gap: '2px' }}, lg: {{ gap: '3px' }} }} }}).asElement('button');\n{program}"
+            )
+        };
+        for (prop, program, keeps) in [
+            ("1e+21", "export const App = () => <Btn {...{ 1e21: 'lg' }} />;\n", true),
+            ("1e+21", "export const App = () => <Btn {...{ 16: 'lg' }} />;\n", false),
+            ("1000000000000000000000", "const Wrap = ({ 1e21: v, ...rest }) => <Btn {...rest} />;\nexport const App = () => <Wrap {...{ '1000000000000000000000': 'lg' }} />;\n", true),
+            ("1000000000000000000000", "const Wrap = ({ '1000000000000000000000': v, ...rest }) => <Btn {...rest} />;\nexport const App = () => <Wrap {...{ '1000000000000000000000': 'lg' }} />;\n", false),
+        ] {
+            let source = listed(prop, program);
+            assert_eq!(analyze(&[("a.tsx", &source)], &test_inputs()).sheets.variants.contains("3px"), keeps, "{program}");
+        }
+        for (options, class, kept) in [
+            ("md: { gap: '2px' }, 1e21: { gap: '3px' }", "--size-1000000000000000000000", false),
+            ("md: { gap: '2px' }, 0x10: { gap: '3px' }", "--size-16", true),
+        ] {
+            let source = format!(
+                "const Btn = ds.styles({{ display: 'inline' }}).variant({{ prop: 'size', defaultVariant: 'md', variants: {{ {options} }} }}).asElement('button');\nexport const App = () => <Btn size={{document.body.id}} />;\n"
+            );
+            assert_eq!(analyze(&[("a.tsx", &source)], &test_inputs()).sheets.variants.contains(class), kept, "{options}");
         }
     }
 

@@ -111,7 +111,8 @@ pub(crate) fn eval_property_key(key: &PropertyKey) -> Option<String> {
     match key {
         PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
         PropertyKey::StringLiteral(lit) => crate::eval::literal_string(lit).map(str::to_string),
-        PropertyKey::NumericLiteral(lit) => Some(lit.value.to_string()),
+        // The name a number writes, `String(n)`, where the walk can spell it.
+        PropertyKey::NumericLiteral(lit) => crate::eval::js_number_key(lit.value),
         _ => None,
     }
 }

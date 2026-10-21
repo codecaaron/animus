@@ -483,7 +483,7 @@ pub(crate) fn create_element_props(argument: Option<&Argument<'_>>) -> Option<Ve
                 if is_prototype_setter(p) {
                     return None;
                 }
-                let key = p.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !p.computed)?;
+                let key = crate::eval::property_name(&p.key).filter(|_| !p.computed)?;
                 Some((key.to_string(), expr_variant(&p.value)))
             })
             .collect(),
@@ -537,7 +537,7 @@ pub(crate) fn create_element_literals(
             if is_prototype_setter(p) {
                 return None;
             }
-            let key = p.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str)?.to_string();
+            let key = crate::eval::property_name(&p.key)?.to_string();
             let mut value = evaluate(&p.value)?;
             if let serde_json::Value::Object(entries) = &mut value {
                 entries.retain(|_, entry| !entry.is_null());

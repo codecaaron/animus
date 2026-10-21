@@ -380,7 +380,7 @@ fn held_components<'b, 'a>(
             if p.computed || p.method || p.kind != PropertyKind::Init {
                 continue;
             }
-            let (Some(key), Some(function)) = (p.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str), ComponentFunction::of_expression(&p.value)) else {
+            let (Some(key), Some(function)) = (crate::eval::property_name(&p.key), ComponentFunction::of_expression(&p.value)) else {
                 continue;
             };
             held.push((format!("{name}.{key}"), function));
@@ -721,7 +721,7 @@ fn object_rest<'b, 'a>(
     let named = object
         .properties
         .iter()
-        .filter_map(|property| property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|key| key.to_string()))
+        .filter_map(|property| crate::eval::property_name(&property.key).map(|key| key.to_string()))
         .collect();
     Some((named, rest.as_ref()))
 }
@@ -2121,7 +2121,7 @@ fn held_position(span: Span, ancestors: &[AstKind<'_>]) -> (Vec<String>, bool) {
         match kind {
             kind if is_erased_wrapper(kind) => {}
             AstKind::ObjectProperty(prop) if prop.value.span() == current => {
-                match prop.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !prop.computed) {
+                match crate::eval::property_name(&prop.key).filter(|_| !prop.computed) {
                     Some(key) => keys.push(key.to_string()),
                     None => {
                         keys.clear();
@@ -4254,7 +4254,7 @@ fn returned_position(span: Span, ancestors: &[AstKind<'_>]) -> Option<(Span, Vec
         match rest.next()? {
             kind if is_erased_wrapper(kind) => current = kind.span(),
             AstKind::ObjectProperty(prop) if prop.value.span() == current && !prop.computed => {
-                keys.push(prop.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map_or_else(|| crate::flow::ANY_MEMBER.to_string(), |key| key.to_string()));
+                keys.push(crate::eval::property_name(&prop.key).map_or_else(|| crate::flow::ANY_MEMBER.to_string(), |key| key.to_string()));
                 match rest.next()? {
                     AstKind::ObjectExpression(object) => current = object.span,
                     _ => return None,
@@ -5295,7 +5295,7 @@ fn destructured_members<'b, 'a: 'b>(span: Span, mut ancestors: impl Iterator<Ite
     use oxc::ast::ast::{AssignmentTarget, AssignmentTargetProperty, BindingPattern};
     let (current, parent) = peel_wrappers(span, &mut ancestors);
     let key = |key: &oxc::ast::ast::PropertyKey<'_>, computed: bool| {
-        if computed { None } else { key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|name| name.to_string()) }
+        if computed { None } else { crate::eval::property_name(key).map(|name| name.to_string()) }
     };
     match parent {
         Some(AstKind::VariableDeclarator(declarator)) if declarator.init.as_ref().map(GetSpan::span) == Some(current) => {
@@ -5527,8 +5527,8 @@ fn spread_wrapper_candidates<'b, 'a>(program: &'b Program<'a>) -> Vec<WrapperCan
                         return None;
                     };
                     named.push(NamedProp {
-                        // An unknown (computed) key gives up: `static_name` has none.
-                        key: property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str)?.to_string(),
+                        // An unknown (computed) key gives up: `property_name` has none.
+                        key: crate::eval::property_name(&property.key)?.to_string(),
                         binding,
                         default,
                     });
@@ -6256,7 +6256,7 @@ impl EscapeScan<'_, '_> {
                     if slot_values.contains(&(value.start, value.end)) {
                         return None;
                     }
-                    let holder = match (property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !property.computed), rest.next()) {
+                    let holder = match (crate::eval::property_name(&property.key).filter(|_| !property.computed), rest.next()) {
                         (Some(key), Some(AstKind::ObjectExpression(object))) => holder_const(object.span, &mut rest)
                             .filter(|holder| self.reads.get(holder).is_some_and(|reads| reads.holds(&key, &path))),
                         _ => None,
@@ -7441,7 +7441,7 @@ fn rest_parameters(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<Symbol
             let keys: Option<BTreeSet<String>> = pattern
                 .properties
                 .iter()
-                .map(|property| property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !property.computed).map(|key| key.to_string()))
+                .map(|property| crate::eval::property_name(&property.key).filter(|_| !property.computed).map(|key| key.to_string()))
                 .collect();
             match keys {
                 Some(keys) if !self.scoping.symbol_is_mutated(symbol) => {
@@ -7545,7 +7545,7 @@ fn prop_tags_and_uses(
             return;
         };
         for property in &pattern.properties {
-            let Some(key) = property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !property.computed) else { continue };
+            let Some(key) = crate::eval::property_name(&property.key).filter(|_| !property.computed) else { continue };
             let binding = match &property.value {
                 BindingPattern::BindingIdentifier(binding) => binding,
                 // An omitted prop takes its default, which must name a host
@@ -8439,7 +8439,7 @@ fn important_literals(
                 let oxc::ast::ast::ObjectPropertyKind::ObjectProperty(property) = property else {
                     continue;
                 };
-                let Some(breakpoint) = property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !property.computed) else {
+                let Some(breakpoint) = crate::eval::property_name(&property.key).filter(|_| !property.computed) else {
                     continue;
                 };
                 let mut entries = Vec::new();
@@ -9243,7 +9243,7 @@ pub(crate) fn builder_references(program: &Program<'_>) -> Vec<(Span, String)> {
     }
     impl References {
         fn method_key(&mut self, key: &oxc::ast::ast::PropertyKey<'_>) {
-            if let Some(name) = key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|name| BUILDER_METHODS.contains(&name.as_ref())) {
+            if let Some(name) = crate::eval::property_name(key).filter(|name| BUILDER_METHODS.contains(&name.as_ref())) {
                 self.0.push((key.span(), name.to_string()));
             }
         }

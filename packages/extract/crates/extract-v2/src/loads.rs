@@ -601,7 +601,7 @@ fn webpack_context_args(dir: String, options: Option<Option<&Expression<'_>>>) -
             if property.computed {
                 return None;
             }
-            match property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str)?.as_ref() {
+            match crate::eval::property_name(&property.key)?.as_ref() {
                 "recursive" => recursive = Some(bool_literal(&property.value)?),
                 "regExp" => reg_exp = Some(regex_literal(&property.value)?),
                 "include" => include = Some(regex_literal(&property.value)?),

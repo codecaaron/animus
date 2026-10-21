@@ -218,7 +218,7 @@ impl StageFacts {
             if let Some(found) = KeySource::block_key(prop, source, path) {
                 self.block_keys.push(found);
             } else if let Expression::ObjectExpression(nested) = chain_walk::unwrap_type_assertions(&prop.value) {
-                path.push(prop.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|name| name.to_string()).unwrap_or_default());
+                path.push(crate::eval::property_name(&prop.key).map(|name| name.to_string()).unwrap_or_default());
                 self.record_block_keys(nested, source, path);
                 path.pop();
             }
@@ -1234,7 +1234,7 @@ fn literal_entries(object: &ObjectExpression<'_>, entries: &mut Vec<FacadeEntry>
         let code = p.method
             || p.kind != PropertyKind::Init
             || matches!(crate::chain_walk::unwrap_type_assertions(&p.value), Expression::FunctionExpression(_));
-        let Some(key) = p.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !p.computed) else {
+        let Some(key) = crate::eval::property_name(&p.key).filter(|_| !p.computed) else {
             entries.push(if code { FacadeEntry::Code(None) } else { FacadeEntry::Unknown });
             continue;
         };
@@ -1315,7 +1315,7 @@ fn object_member_chains(name: &str, init: &Expression<'_>, chains: &mut Vec<chai
         let oxc::ast::ast::ObjectPropertyKind::ObjectProperty(p) = property else {
             continue;
         };
-        let Some(key) = p.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !p.computed) else {
+        let Some(key) = crate::eval::property_name(&p.key).filter(|_| !p.computed) else {
             continue;
         };
         let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(&p.value) else {
