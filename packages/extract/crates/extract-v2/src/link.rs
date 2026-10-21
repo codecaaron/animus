@@ -39,6 +39,10 @@ pub(crate) struct Lowered {
     pub(crate) dynamic_code: Option<&'static str>,
     /// Whether the module may call `eval` directly (`StringCode`).
     pub(crate) direct_eval: bool,
+    /// See `StringCode::trusts_promise`.
+    pub(crate) trusts_promise: bool,
+    /// See `StringCode::replaces_promise`.
+    pub(crate) replaces_promise: bool,
     /// How the module lets a loader escape, if it does.
     pub(crate) loader_escape: Option<&'static str>,
 }
@@ -65,6 +69,8 @@ impl Lowered {
             readings,
             dynamic_code: strings.reads,
             direct_eval: strings.direct_eval,
+            trusts_promise: strings.trusts_promise,
+            replaces_promise: strings.replaces_promise,
             loader_escape,
         }
     }

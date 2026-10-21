@@ -568,6 +568,12 @@ pub struct FileFacts {
     /// load any module and change what it exports.
     #[serde(skip)]
     pub(crate) dynamic_code: Option<&'static str>,
+    /// See `StringCode::trusts_promise`.
+    #[serde(skip)]
+    pub(crate) trusts_promise: bool,
+    /// See `StringCode::replaces_promise`.
+    #[serde(skip)]
+    pub(crate) replaces_promise: bool,
     /// How the module lets a loader escape (`reads module.require`), which
     /// can load any module and change what it exports.
     #[serde(skip)]
@@ -1421,6 +1427,8 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         written_namespaces,
         param_readings: Arc::clone(&lowered.readings),
         dynamic_code: lowered.dynamic_code,
+        trusts_promise: lowered.trusts_promise,
+        replaces_promise: lowered.replaces_promise,
         loader_escape: lowered.loader_escape,
         member_parent_extensions: Vec::new(),
         member_rooted_chains: Vec::new(),

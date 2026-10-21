@@ -6467,6 +6467,16 @@ fn names_context_provider(
         })
 }
 
+/// A timer proven through a `Promise` executor (`StringCode::trusts_promise`)
+/// may run a string once any module may replace the global `Promise`.
+pub(crate) fn distrust_promise(files: &mut BTreeMap<String, FileFacts>) {
+    if files.values().any(|ff| ff.replaces_promise) {
+        for ff in files.values_mut().filter(|ff| ff.trusts_promise) {
+            ff.dynamic_code.get_or_insert(crate::usage_facts::STRING_TIMER);
+        }
+    }
+}
+
 /// Judges each object hand-off the modules record: a hand-off to a function
 /// that does more than read that parameter is a use that may change the
 /// object, like any other, and joins `unsafe_object_uses` and
@@ -12471,6 +12481,7 @@ mod tests {
             );
             order.push(path.to_string());
         }
+        distrust_promise(&mut files);
         let links = crate::link::ProjectLinks::link(&files, inputs);
         judge_object_handoffs(&mut files, inputs, &links);
         run_with_system_floor(&files, &order, inputs, "animus", total_system_floor)
@@ -14793,6 +14804,12 @@ const Render = ({ children }) => { document.body.onclick = t; return <div>{child
             ("const C = window.React.Children;\nC.only = pad;\nconst Render = ({ children }) => <div>{React.Children.only(children)}</div>;", "", "", true),
             // A member of `Children` the walk does not list is unknown code.
             ("import * as R from 'react';\nconst Render = ({ children }) => <div>{R.Children.fake(children)}</div>;", "", "", true),
+            // A namespace or a built-in handed to an analysed receiver, and a
+            // key the code computes, which may be `__proto__`, reach a
+            // prototype every props object inherits.
+            ("import { bridge } from './other';\nbridge.map(Math);\nconst Render = ({ children }) => <div>{children}</div>;", "", "export const bridge = { map(value) { const k = '__proto__'; const first = value[k]; const p = first[k] || first; p.p = 8; } };\n", true),
+            ("import { bridge } from './other';\nbridge.map({});\nconst Render = ({ children }) => <div>{children}</div>;", "", "export const bridge = { map(value) { const k = '__proto__'; const first = value[k]; const p = first[k] || first; p.p = 8; } };\n", true),
+            ("import { bridge } from './other';\nbridge.map([]);\nconst Render = ({ children }) => <div>{children}</div>;", "", "export const bridge = { map(value) { const first = value[0]; return first; } };\n", false),
             ("const Render = ({ children }) => <div>{React.Children.only(children)}</div>;", "", "", false),
             ("import * as R from 'react';\nimport { bridge } from './other';\nbridge.map(R.Children);\nconst Render = ({ children }) => <div>{R.Children.only(children)}</div>;", "", "export const bridge = { map(C) { C.only = (c) => c; } };\n", true),
             ("import * as R from 'react';\nconst patch = (x, C) => { C.only = pad; };\nsetTimeout(patch, 0, 1, R.Children);\nconst Render = ({ children }) => <div>{R.Children.only(children)}</div>;", "", "", true),
@@ -18771,12 +18788,18 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("import { Slot } from 'ui-lib';\nimport { createElement } from 'react';\nconst Poly = ({ as, ...rest }) => createElement(as ?? 'span', rest, <R size=\"sm\" />);\nexport const S = () => <Poly as={Slot} />;", &every),
             ("import { Slot } from 'ui-lib';\nconst Poly = ({ as: Tag = 'span' }) => <Tag icon={<R size=\"sm\" />} />;\nexport const S = () => <Poly as={Slot} />;", &every),
             ("const Poly = ({ as: Tag = 'span', ...rest }) => <Tag {...rest}><R size=\"sm\" /></Tag>;\nexport const S = () => <Poly as=\"div\" />;\neval('0');", &every),
-            // So do the children and config a clone of such an element adds.
+            // So do the children and config a clone adds to any element not
+            // provably a host element's: of such a type, or held anywhere.
             ("import { Slot } from 'ui-lib';\nimport { cloneElement } from 'react';\nconst Poly = ({ as: Tag = 'span' }) => cloneElement(<Tag />, {}, <R size=\"sm\" />);\nexport const S = () => <Poly as={Slot} />;", &every),
             ("import { Slot } from 'ui-lib';\nimport { cloneElement } from 'react';\nconst Poly = ({ as: Tag = 'span' }) => cloneElement(<Tag />, { icon: <R size=\"sm\" /> });\nexport const S = () => <Poly as={Slot} />;", &every),
             ("import { Slot } from 'ui-lib';\nimport { cloneElement, createElement } from 'react';\nconst Poly = ({ as }) => cloneElement(createElement(as ?? 'span'), {}, <R size=\"sm\" />);\nexport const S = () => <Poly as={Slot} />;", &every),
             ("import { Slot } from 'ui-lib';\nimport { renderAsChild } from '@animus-ui/system';\nconst Poly = ({ as: Tag = 'span' }) => renderAsChild(<Tag />, { icon: <R size=\"sm\" /> });\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("import { Slot } from 'ui-lib';\nimport { cloneElement } from 'react';\nconst Poly = ({ as: Tag = 'span' }) => { const el = <Tag />; return cloneElement(el, {}, <R size=\"sm\" />); };\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("import { Slot } from 'ui-lib';\nimport { cloneElement } from 'react';\nconst Poly = ({ as: Tag = 'span' }) => cloneElement(cloneElement(<Tag />), {}, <R size=\"sm\" />);\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("import { Slot } from 'ui-lib';\nimport { cloneElement, createElement } from 'react';\nconst Poly = ({ as }) => { const el = createElement(as ?? 'span'); return cloneElement(el, {}, <R size=\"sm\" />); };\nexport const S = () => <Poly as={Slot} />;", &every),
+            ("import { cloneElement } from 'react';\nexport const S = () => cloneElement(<my-frame />, {}, <R size=\"sm\" />);", &every),
             ("import { cloneElement } from 'react';\nexport const S = () => cloneElement(<section />, {}, <R size=\"sm\" />);", &pruned),
+            ("import { cloneElement, createElement } from 'react';\nexport const S = () => cloneElement(createElement('section'), {}, <R size=\"sm\" />);", &pruned),
             ("const W = (p) => <R {...p} />;\nexport const S = () => <W size=\"sm\" />;", &pruned),
             ("function Card({ children }) { return <section>{children}</section>; }\nexport const S = () => <Card><R size=\"sm\" /></Card>;", &pruned),
             ("const Box = ds.styles({}).asElement('section');\nexport const S = () => <Box><R size=\"sm\" /></Box>;", &pruned),
@@ -18819,8 +18842,50 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("const later = (a, fn) => setTimeout(fn, 0);\nexport const run = (pair) => later(...pair, () => {});\n", &every),
             ("const Promise = (run) => run(globalThis.code);\nexport const wait = () => new Promise((resolve) => setTimeout(resolve, 0));\n", &every),
             ("function later(fn) { arguments[0] = globalThis.code; setTimeout(fn, 0); }\nlater(() => {});\n", &every),
+            // A function with a second name, or one no use calls, proves
+            // nothing of its parameters.
+            ("(function inner(cb) { setTimeout(cb, 0); })(globalThis.code);\n", &every),
+            ("export const schedule = function inner(cb) { setTimeout(cb, 0); };\n", &every),
+            ("(function inner(cb) { if (!globalThis.done) { globalThis.done = 1; inner(() => {}); } setTimeout(cb, 0); })(globalThis.code);\n", &every),
+            ("const schedule = function inner(cb) { if (!globalThis.done) { globalThis.done = 1; inner(globalThis.code); } setTimeout(cb, 0); };\nschedule(() => {});\n", &every),
+            ("{ function later(fn) { setTimeout(fn, 0); } }\nlater(globalThis.code);\n", &every),
+            // An executor holds what `Promise` gives it only where nothing
+            // else can call it or change its parameters.
+            ("export const wait = () => new Promise(function again(cb) { if (!globalThis.done) { globalThis.done = 1; again(globalThis.code); } setTimeout(cb, 0); });\n", &every),
+            ("export const wait = () => new Promise(function (cb) { arguments[0] = globalThis.code; setTimeout(cb, 0); });\n", &every),
+            ("export const wait = () => new Promise((cb) => { cb = globalThis.code; setTimeout(cb, 0); });\n", &every),
+            ("Promise = class { constructor(run) { run(globalThis.code); } };\nexport const wait = () => new Promise((cb) => setTimeout(cb, 0));\n", &every),
         ] {
             assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app), ("evil.tsx", evil)]), want, "{evil}");
+        }
+        // So does any module that may replace the global `Promise`: the timer
+        // that trusts it may run a string.
+        let wait = "export const wait = () => new Promise((resolve) => setTimeout(resolve, 0));\n";
+        let timer_runs_string = |patch: &str| {
+            let counter = ParseCounter::new(0);
+            let mut files: BTreeMap<String, FileFacts> = [("wait.tsx", wait), ("patch.tsx", patch)]
+                .into_iter()
+                .map(|(path, source)| (path.to_string(), extract_file_facts_with_prefix(&OwnedAst::parse(path.to_string(), source.to_string(), &counter), "animus")))
+                .collect();
+            distrust_promise(&mut files);
+            files["wait.tsx"].dynamic_code.is_some()
+        };
+        for (patch, replaces) in [
+            ("Promise = class { constructor(run) { run(globalThis.code); } };\n", true),
+            ("globalThis.Promise = class { constructor(run) { run(globalThis.code); } };\n", true),
+            ("var Promise = function (run) { run(globalThis.code); };\n", true),
+            ("export const swap = (name, value) => { window[name] = value; };\n", true),
+            ("export const swap = (doc, name, value) => { doc.defaultView[name] = value; };\n", true),
+            ("export const swap = (target, value) => Object.assign(target, { Promise: value });\n", true),
+            ("export const swap = (target, value) => { target['Promise'] = value; };\n", true),
+            ("export const swap = (target, value) => { target[`Promise`] = value; };\n", true),
+            ("export const swap = (name, value) => Object.defineProperty(globalThis, name, { value });\n", true),
+            ("export const scroller = () => window;\n", false),
+        ] {
+            assert_eq!(timer_runs_string(patch), replaces, "{patch}");
+            if replaces {
+                assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app), ("wait.tsx", wait), ("patch.tsx", patch)]), &every, "{patch}");
+            }
         }
         let app = "import { R } from './r';\nimport { Family } from './receivers';\n\
                    export const S = () => <Family.Root><R size=\"sm\" active /></Family.Root>;\n";

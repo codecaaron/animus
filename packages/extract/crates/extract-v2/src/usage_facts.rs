@@ -2620,14 +2620,37 @@ fn style_object_use(
 /// or called with a first argument not provably a function, counts, as its
 /// bare name under `typeof` or `instanceof` does not. A function or arrow
 /// written there is one, and so is a
-/// binding never reassigned that is declared to one, that a `Promise`
-/// executor gets (`resolve`, `reject`), or that is a parameter of a
-/// function every use of which calls it with a function in its place (an
-/// export is a use; a module that reads `arguments` proves none).
+/// binding never reassigned that is declared to one, or that is a
+/// parameter of a function with no other name every use of which calls it
+/// with a function in its place (an export is a use, and a function no use
+/// calls proves none). An unnamed `Promise` executor written in place gets
+/// functions (`resolve`, `reject`) from the global `Promise`, which the
+/// proof then trusts (`trusts_promise`). A module that reads `arguments`,
+/// which may change a parameter or call an executor as `callee`, proves no
+/// parameter and trusts no executor.
 pub(crate) struct StringCode {
     pub(crate) reads: Option<&'static str>,
     pub(crate) direct_eval: bool,
+    /// Whether a timer gets a function only through a `Promise` executor:
+    /// should any analysed module replace the global `Promise`
+    /// (`replaces_promise`), the timer may run a string
+    /// (`analyze_css::distrust_promise`).
+    pub(crate) trusts_promise: bool,
+    /// Whether the module may replace the global `Promise`: it writes the
+    /// unbound name, declares it at its top (a script's global), names
+    /// `Promise` as a string, a template or a property key, writes a member
+    /// named `Promise`, or gives the global object (the unbound
+    /// `globalThis`, `window`, `self` or `global`, or a `window`,
+    /// `globalThis` or `defaultView` member) a key it computes or to
+    /// `Object` or `Reflect`.
+    /// Not followed: a key built at run time from text that never names
+    /// `Promise` (`'Prom' + 'ise'`, data), written into the global object
+    /// reached any other way (stored, passed, returned).
+    pub(crate) replaces_promise: bool,
 }
+
+/// Why a timer may run a string.
+pub(crate) const STRING_TIMER: &str = "lets a timer run what may be a string";
 
 /// How `program` runs code from strings: see `StringCode`.
 pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> StringCode {
@@ -2638,16 +2661,18 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
     const RUNNERS: [&str; 2] = ["eval", "Function"];
     const TIMERS: [&str; 2] = ["setTimeout", "setInterval"];
     const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
-    const STRING_TIMER: &str = "lets a timer run what may be a string";
+    /// Members that may hold the global object.
+    const GLOBAL_MEMBERS: [&str; 3] = ["window", "globalThis", "defaultView"];
     struct Reads<'s> {
         scoping: &'s oxc::semantic::Scoping,
         found: Option<&'static str>,
         direct_eval: bool,
         /// Each timer call's first argument.
         timers: Vec<Argument>,
-        /// Bindings declared to a function, and `Promise` executors'
-        /// parameters.
+        /// Bindings declared to a function.
         functions: FxHashSet<SymbolId>,
+        /// The parameters an unnamed `Promise` executor gets functions in.
+        executors: FxHashSet<SymbolId>,
         /// Each parameter of a function a binding names, by that binding and
         /// position.
         parameters: FxHashMap<SymbolId, (SymbolId, usize)>,
@@ -2657,8 +2682,10 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
         /// call with anything.
         exported: FxHashSet<SymbolId>,
         /// Whether the module reads `arguments`, which in a script can
-        /// change a parameter.
+        /// change a parameter or call a function as `callee`.
         arguments: bool,
+        /// See `StringCode::replaces_promise`.
+        replaces_promise: bool,
     }
     /// An argument as a timer's first would read it.
     enum Argument {
@@ -2675,11 +2702,12 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
             }
         }
     }
-    /// The parameters of a function or arrow written as `expression`.
-    fn function_params<'b>(expression: &'b Expression<'_>) -> Option<&'b FormalParameters<'b>> {
+    /// The parameters of a function or arrow written as `expression`, and
+    /// whether it is unnamed: a named one is reached by its own name too.
+    fn function_params<'b>(expression: &'b Expression<'_>) -> Option<(&'b FormalParameters<'b>, bool)> {
         match expression.get_inner_expression() {
-            Expression::ArrowFunctionExpression(arrow) => Some(&arrow.params),
-            Expression::FunctionExpression(function) => Some(&function.params),
+            Expression::ArrowFunctionExpression(arrow) => Some((&arrow.params, true)),
+            Expression::FunctionExpression(function) => Some((&function.params, function.id.is_none())),
             _ => None,
         }
     }
@@ -2718,10 +2746,53 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
                 _ => Argument::Other,
             }
         }
-        /// Records `symbol` as declared to a function with `params`.
-        fn function(&mut self, symbol: SymbolId, params: &FormalParameters<'_>) {
+        /// Records `symbol` as declared to a function, whose `params` are
+        /// given where nothing else names it.
+        fn function(&mut self, symbol: SymbolId, params: Option<&FormalParameters<'_>>) {
             self.functions.insert(symbol);
-            self.parameters.extend(plain_parameters(params).map(|(at, parameter)| (parameter, (symbol, at))));
+            if let Some(params) = params {
+                self.parameters.extend(plain_parameters(params).map(|(at, parameter)| (parameter, (symbol, at))));
+            }
+        }
+        /// Whether `expression` may be the global object: the unbound
+        /// global object, or a member named for it.
+        fn global_like(&self, expression: &Expression<'_>) -> bool {
+            match expression.get_inner_expression() {
+                Expression::Identifier(id) => GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.unbound(id),
+                Expression::StaticMemberExpression(member) => GLOBAL_MEMBERS.contains(&member.property.name.as_str()),
+                _ => false,
+            }
+        }
+        /// Whether every timer gets a function, the `seeds` among them: a
+        /// parameter is one once every use of its function calls it with
+        /// one in its place, and each added may prove another.
+        fn proves(&self, seeds: &FxHashSet<SymbolId>) -> bool {
+            let mut functions: FxHashSet<SymbolId> =
+                self.functions.iter().chain(seeds.iter().filter(|seed| !self.scoping.symbol_is_mutated(**seed))).copied().collect();
+            // A module that reads `arguments` proves no parameter.
+            if !self.arguments {
+                loop {
+                    let proven: Vec<_> = self
+                        .parameters
+                        .iter()
+                        .filter(|(parameter, (binding, at))| {
+                            let calls = self.calls.get(binding).map_or(&[][..], Vec::as_slice);
+                            !functions.contains(*parameter)
+                                && !self.scoping.symbol_is_mutated(**parameter)
+                                && !self.exported.contains(binding)
+                                && !calls.is_empty()
+                                && calls.len() == self.scoping.get_resolved_reference_ids(*binding).len()
+                                && calls.iter().all(|arguments| arguments.get(*at).is_some_and(|argument| argument.is_function(&functions)))
+                        })
+                        .map(|(parameter, _)| *parameter)
+                        .collect();
+                    if proven.is_empty() {
+                        break;
+                    }
+                    functions.extend(proven);
+                }
+            }
+            self.timers.iter().all(|first| first.is_function(&functions))
         }
     }
     impl<'a> Visit<'a> for Reads<'_> {
@@ -2730,6 +2801,9 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
             let name = id.name.as_str();
             if value && (RUNNERS.contains(&name) || TIMERS.contains(&name)) && self.unbound(id) {
                 self.record(name);
+            }
+            if name == "Promise" && self.unbound(id) && id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_write()) {
+                self.replaces_promise = true;
             }
             self.arguments |= name == "arguments";
         }
@@ -2754,6 +2828,13 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
                 }
                 return;
             }
+            // `Object` and `Reflect` write into the global object by keys
+            // the code may compute.
+            if matches!(call.callee.get_inner_expression(), Expression::StaticMemberExpression(member)
+                if matches!(&member.object, Expression::Identifier(object) if matches!(object.name.as_str(), "Object" | "Reflect") && self.unbound(object)))
+            {
+                self.replaces_promise |= call.arguments.iter().any(|argument| argument.as_expression().is_some_and(|argument| self.global_like(argument)));
+            }
             if let Expression::Identifier(id) = &call.callee {
                 if let Some(symbol) = symbol_of(self.scoping, id) {
                     // A spread moves every argument after it.
@@ -2773,8 +2854,8 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
         }
         fn visit_new_expression(&mut self, new: &oxc::ast::ast::NewExpression<'a>) {
             let promise = matches!(new.callee.get_inner_expression(), Expression::Identifier(id) if id.name == "Promise" && self.unbound(id));
-            if let (true, Some(params)) = (promise, new.arguments.first().and_then(|argument| argument.as_expression()).and_then(function_params)) {
-                self.functions.extend(plain_parameters(params).filter(|(at, _)| *at < 2).map(|(_, symbol)| symbol));
+            if let (true, Some((params, true))) = (promise, new.arguments.first().and_then(|argument| argument.as_expression()).and_then(function_params)) {
+                self.executors.extend(plain_parameters(params).filter(|(at, _)| *at < 2).map(|(_, symbol)| symbol));
             }
             oxc::ast_visit::walk::walk_new_expression(self, new);
         }
@@ -2801,15 +2882,16 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
             oxc::ast_visit::walk::walk_export_default_declaration(self, export);
         }
         fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
+            // A function expression's own name is one of two it has.
             if let Some(symbol) = function.id.as_ref().and_then(|id| id.symbol_id.get()) {
-                self.function(symbol, &function.params);
+                self.function(symbol, function.is_declaration().then_some(&*function.params));
             }
             oxc::ast_visit::walk::walk_function(self, function, flags);
         }
         fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
             if let (oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init)) = (&declarator.id, &declarator.init) {
-                if let (Some(symbol), Some(params)) = (id.symbol_id.get(), function_params(init)) {
-                    self.function(symbol, params);
+                if let (Some(symbol), Some((params, unnamed))) = (id.symbol_id.get(), function_params(init)) {
+                    self.function(symbol, unnamed.then_some(params));
                 }
             }
             oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
@@ -2820,6 +2902,27 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
                 self.record(name);
             }
             oxc::ast_visit::walk::walk_static_member_expression(self, member);
+        }
+        fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
+            self.replaces_promise |= member.static_property_name().is_none() && self.global_like(&member.object);
+            oxc::ast_visit::walk::walk_computed_member_expression(self, member);
+        }
+        fn visit_simple_assignment_target(&mut self, target: &oxc::ast::ast::SimpleAssignmentTarget<'a>) {
+            if let oxc::ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) = target {
+                self.replaces_promise |= member.property.name == "Promise";
+            }
+            oxc::ast_visit::walk::walk_simple_assignment_target(self, target);
+        }
+        fn visit_property_key(&mut self, key: &oxc::ast::ast::PropertyKey<'a>) {
+            self.replaces_promise |= key.static_name().is_some_and(|name| name == "Promise");
+            oxc::ast_visit::walk::walk_property_key(self, key);
+        }
+        fn visit_string_literal(&mut self, literal: &oxc::ast::ast::StringLiteral<'a>) {
+            self.replaces_promise |= literal.value == "Promise";
+        }
+        fn visit_template_literal(&mut self, template: &oxc::ast::ast::TemplateLiteral<'a>) {
+            self.replaces_promise |= template.single_quasi().is_some_and(|text| text == "Promise");
+            oxc::ast_visit::walk::walk_template_literal(self, template);
         }
         fn visit_unary_expression(&mut self, unary: &UnaryExpression<'a>) {
             if unary.operator == UnaryOperator::Typeof && self.bare_runner(&unary.argument) {
@@ -2841,40 +2944,33 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
         direct_eval: false,
         timers: Vec::new(),
         functions: FxHashSet::default(),
+        executors: FxHashSet::default(),
         parameters: FxHashMap::default(),
         calls: FxHashMap::default(),
         exported: FxHashSet::default(),
         arguments: false,
+        replaces_promise: false,
     };
     reads.visit_program(program);
+    reads.replaces_promise |= scoping.get_root_binding("Promise".into()).is_some_and(|symbol| {
+        let flags = scoping.symbol_flags(symbol);
+        flags.intersects(oxc::semantic::SymbolFlags::Value) && !flags.intersects(oxc::semantic::SymbolFlags::Import)
+    });
+    let mut trusts_promise = false;
     if reads.found.is_none() && reads.timers.iter().any(|first| !matches!(first, Argument::Function)) {
         reads.functions.retain(|symbol| !scoping.symbol_is_mutated(*symbol));
-        // A parameter is a function once every use of its function calls it
-        // with one in its place; each added may prove another.
-        while !reads.arguments {
-            let proven: Vec<_> = reads
-                .parameters
-                .iter()
-                .filter(|(parameter, (binding, at))| {
-                    let calls = reads.calls.get(binding).map_or(&[][..], Vec::as_slice);
-                    !reads.functions.contains(*parameter)
-                        && !scoping.symbol_is_mutated(**parameter)
-                        && !reads.exported.contains(binding)
-                        && calls.len() == scoping.get_resolved_reference_ids(*binding).len()
-                        && calls.iter().all(|arguments| arguments.get(*at).is_some_and(|argument| argument.is_function(&reads.functions)))
-                })
-                .map(|(parameter, _)| *parameter)
-                .collect();
-            if proven.is_empty() {
-                break;
-            }
-            reads.functions.extend(proven);
+        // An executor's parameters trust the global `Promise`; a module that
+        // reads `arguments` may call an executor as `callee`.
+        let mut proven = reads.proves(&FxHashSet::default());
+        if !proven && !reads.arguments {
+            proven = reads.proves(&reads.executors);
+            trusts_promise = proven;
         }
-        if reads.timers.iter().any(|first| !first.is_function(&reads.functions)) {
+        if !proven {
             reads.found = Some(STRING_TIMER);
         }
     }
-    StringCode { reads: reads.found, direct_eval: reads.direct_eval }
+    StringCode { reads: reads.found, direct_eval: reads.direct_eval, trusts_promise, replaces_promise: reads.replaces_promise }
 }
 
 /// How a module lets a loader escape, which can load any module. The

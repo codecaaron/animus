@@ -330,6 +330,9 @@ const CONSOLE_METHODS: [&str; 21] = [
 /// `JSON` beyond the array methods' names.
 const TRUSTED_STATICS: [&str; 8] = ["is", "fromEntries", "isArray", "of", "from", "isFinite", "isNaN", "stringify"];
 
+/// The trusted globals that are namespaces, objects of trusted methods.
+const TRUSTED_NAMESPACES: [&str; 4] = ["Math", "JSON", "Reflect", "console"];
+
 /// The globals the allowlist trusts by name, beside `INTRINSICS` and the
 /// global functions above: read off the global object (`window.Math`) and
 /// let go, one could be redirected.
@@ -1352,14 +1355,19 @@ impl<'r> Declarations<'r> {
 
     /// The member `name` (`None` when the code computes it) of `object`, at
     /// `span`, its key `computed` in brackets. A prototype reached by name
-    /// (`Array.prototype`) or through a value (`[].__proto__`) is changed
+    /// (`Array.prototype`) or through a value (`[].__proto__`, or read by a
+    /// key the code computes, which may be `__proto__`) is changed
     /// by any use but a member's read, and `getPrototypeOf` let go as a
     /// value reaches prototypes. A write is judged by `written_into`: by a
     /// bracketed key, whatever it names, it may set any built-in's method.
     fn member(&mut self, span: Span, object: &Expression<'_>, name: Option<&str>, computed: bool) {
+        let effect = super::member_effect(span, self.ancestors.iter().rev());
+        let written = matches!(effect, Some(MemberEffect::Assigned | MemberEffect::Deleted));
         let prototype = match name {
             Some("prototype") => self.intrinsic(object),
             Some("__proto__") => true,
+            // A key the code computes may be `__proto__`, read.
+            None => !written,
             Some("getPrototypeOf" | "setPrototypeOf") => {
                 !self.module_binding(object) && !matches!(self.ancestors.last(), Some(AstKind::CallExpression(call)) if call.callee.span() == span)
             }
@@ -1385,8 +1393,7 @@ impl<'r> Declarations<'r> {
         } else if self.prototype_let_go(span, object, name) {
             self.patch(span.start, "prototype-let-go");
         }
-        let effect = super::member_effect(span, self.ancestors.iter().rev());
-        if matches!(effect, Some(MemberEffect::Assigned | MemberEffect::Deleted)) {
+        if written {
             // A value with no callable under a trusted key redirects no
             // built-in, except by a key the walk cannot read into an object
             // the module may not own.
@@ -1841,10 +1848,10 @@ impl<'r> Declarations<'r> {
     /// Whether a trusted name, used itself as a value under `parent`, stays
     /// where the walk can see it: tested, compared, `typeof`, a base class,
     /// or handed to a built-in array method, a global function or React. An
-    /// `object` (the global object, React or React's `Children`) goes to an
-    /// array method only of an array a built-in builds: a method's name
-    /// says nothing of whose method it is, and the receiver may write into
-    /// it by a name the walk does not list. A function written into by a
+    /// `object` (the global object, React or React's `Children`, or a
+    /// namespace such as `Math`) goes to an array method only of an array a
+    /// built-in builds: a method's name says nothing of whose method it is,
+    /// and the receiver may write into it by a name the walk does not list. A function written into by a
     /// trusted name is caught where it is written (`stored_name`).
     fn harmless_value(&self, parent: Option<&AstKind<'r>>, span: Span, object: bool) -> bool {
         match parent {
@@ -1914,7 +1921,7 @@ impl<'r> Declarations<'r> {
             _ if !react => GLOBAL_OBJECTS.contains(&name) && matches!(first, Some("React" | "ReactDOM")),
             _ => first.is_none_or(|first| !react_value(first)),
         };
-        let object = react || GLOBAL_OBJECTS.contains(&name);
+        let object = react || GLOBAL_OBJECTS.contains(&name) || TRUSTED_NAMESPACES.contains(&name);
         let_go && !self.harmless_value(parent, id.span, object)
     }
 
@@ -2266,7 +2273,12 @@ impl<'a> Visit<'a> for Declarations<'a> {
     }
 
     fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
-        self.member(member.span, &member.object, member.static_property_name().map(|name| name.as_str()), true);
+        // A number key names an index, never `__proto__`.
+        let name = match &member.expression {
+            Expression::NumericLiteral(number) => number.raw.as_ref().map(|raw| raw.as_str()),
+            _ => member.static_property_name().map(|name| name.as_str()),
+        };
+        self.member(member.span, &member.object, name, true);
         oxc::ast_visit::walk::walk_computed_member_expression(self, member);
     }
 
@@ -2781,14 +2793,16 @@ impl<'a> Walk<'_, '_, 'a> {
         }
     }
 
-    /// Whether `expression` is an element whose type may be the caller's
-    /// `as`: JSX named by it, or `createElement` of it.
-    fn of_caller_type(&self, expression: &Expression<'_>) -> bool {
+    /// Whether `expression` is an element of a host type written there: JSX
+    /// named by one, or `createElement` of one.
+    fn host_element(&self, expression: &Expression<'_>) -> bool {
         match unwrap_type_assertions(expression) {
-            Expression::JSXElement(element) => self.names_caller_type(&element.opening_element.name),
+            Expression::JSXElement(element) => {
+                matches!(&element.opening_element.name, JSXElementName::Identifier(name) if !name.name.contains('-'))
+            }
             Expression::CallExpression(call) => {
                 self.creates_element(call)
-                    && call.arguments.first().and_then(|argument| argument.as_expression()).is_some_and(|kind| self.caller_type(kind) == Some(true))
+                    && call.arguments.first().and_then(|argument| argument.as_expression()).is_some_and(|kind| self.caller_type(kind) == Some(false))
             }
             _ => false,
         }
@@ -2996,9 +3010,10 @@ impl<'a> Walk<'_, '_, 'a> {
                 }
                 continue;
             };
-            // A clone of an element of the caller's type gets what the clone
-            // adds there, which no caller's site judges.
-            if position == 0 && self.clones(call) && Some(expression.span()) != current && self.of_caller_type(expression) {
+            // A clone of any element but a host one written in place (of the
+            // caller's type, or held in a binding) gets what the clone adds
+            // there, which no site judges.
+            if position == 0 && self.clones(call) && Some(expression.span()) != current && !self.host_element(expression) {
                 if value.has_elements() {
                     self.sink(call.span.start, None, &value.elements());
                 }

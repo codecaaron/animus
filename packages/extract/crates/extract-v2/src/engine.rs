@@ -1248,6 +1248,7 @@ impl ExtractEngine {
                 (ast.path.clone(), facts::structural_facts(ast, lowered, objects))
             })
             .collect();
+        analyze_css::distrust_promise(&mut structural_by_file);
         clock.mark("lowering");
         let links = ProjectLinks::of_records(&lowered_by_file, |lowered| &*lowered.record, &self.opts.css_inputs);
         // A hand-off to a function that does more than read is a use like
