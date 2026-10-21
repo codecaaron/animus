@@ -1,6 +1,7 @@
 import {
   classStem,
   isMediaFile,
+  lineAtByte,
   outputEvidence,
   removeComponentRules,
   shippedClasses,
@@ -1828,11 +1829,8 @@ function siteLocator(
       return site.attrs === null ? `${site.file} (createElement)` : site.file;
     }
     const source = read(site.file);
-    if (source === null || start > source.length)
-      return `${site.file}@${start}`;
-    let line = 1;
-    for (let at = 0; at < start; at++) if (source[at] === 0x0a) line++;
-    return `${site.file}:${line}`;
+    const line = source === null ? null : lineAtByte(source, start);
+    return line === null ? `${site.file}@${start}` : `${site.file}:${line}`;
   };
 }
 
@@ -2146,7 +2144,7 @@ function deliveryLines(delivery: DeliveryReport, components: number): string[] {
     `  Split costs: ${savingText(delivery.splitCost)}`,
     delivery.removal === null
       ? `  Removal keeps every component: ${delivery.removalKept}`
-      : `  Removal: ${delivery.removal.components} of ${components} components no output file includes, saves ${savingText(delivery.removal.saving)}`,
+      : `  Removal: ${delivery.removal.components} of ${components} components no output file includes, counted from what the bundle ships, not from the source's renders; saves ${savingText(delivery.removal.saving)}`,
     ...(delivery.unread.length > 0
       ? [
           `  Not read as text, so left out of the removal estimate: ${delivery.unread.slice(0, 5).join(', ')}${delivery.unread.length > 5 ? `, +${delivery.unread.length - 5} more` : ''}; a Vite build keeps every component if they are part of its output`,

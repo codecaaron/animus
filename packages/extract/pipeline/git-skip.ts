@@ -161,6 +161,28 @@ function mayMatchBelow(patterns: readonly string[]): (key: string) => boolean {
     );
 }
 
+/** Why a pass analyses everything git keeps out. */
+type FailedOpen =
+  | { why: 'rounds' }
+  | { why: 'load'; sites: readonly string[]; hostLists: boolean };
+
+/** Top-level paths listed in a skip's account. */
+const TOP_LEVEL_SHOWN = 8;
+
+/** The top-level directories and files of `paths`, a directory with `/`. */
+function topLevel(paths: readonly string[]): string {
+  const tops = [
+    ...new Set(
+      paths.map((path) => {
+        const at = path.indexOf('/');
+        return at === -1 ? path : `${path.slice(0, at)}/`;
+      })
+    ),
+  ].sort();
+  const more = tops.length - TOP_LEVEL_SHOWN;
+  return `in ${tops.slice(0, TOP_LEVEL_SHOWN).join(', ')}${more > 0 ? `, +${more} more` : ''}`;
+}
+
 /**
  * What git keeps out of one session's analysis, and what it lets back in:
  * paths git ignores and directories below the root that are git checkouts of
@@ -176,8 +198,11 @@ export class GitSkip {
    *  everything. */
   private authority = false;
   /** Why this pass analyses everything git keeps out, where it failed
-   *  open. */
-  private open: 'rounds' | 'load' | null = null;
+   *  open: past the round bound, or for the loads the host cannot list, as
+   *  `describeLoad` names them, and whether it lists any load. */
+  private open: FailedOpen | null = null;
+  /** Each path the walk kept out, root-relative: a directory once. */
+  private skipped = new Set<string>();
   /** The repository's top and exclude file, where a repository holds the
    *  root. */
   private repository: { top: string; exclude: string } | null = null;
@@ -219,6 +244,7 @@ export class GitSkip {
   beginPass(rootDir: string, pulled: Iterable<string> = []): boolean {
     this.rootDir = rootDir;
     this.open = null;
+    this.skipped = new Set();
     this.pulled = new Set(pulled);
     this.walked = null;
     this.ignored = this.everything ? null : readGitIgnored(rootDir);
@@ -256,10 +282,9 @@ export class GitSkip {
     return [...this.pulled].sort();
   }
 
-  /** The rest of this pass analyses everything git keeps out: past the
-   *  round bound, or for a load the host cannot list. */
-  failOpen(why: 'rounds' | 'load'): void {
-    this.open = why;
+  /** The rest of this pass analyses everything git keeps out. */
+  failOpen(open: FailedOpen): void {
+    this.open = open;
   }
 
   private get deciding(): boolean {
@@ -301,6 +326,13 @@ export class GitSkip {
       this.inCheckout(full) ||
       this.ignoredSinceWalk(key);
     return skipped && !this.keptAnyway(full, rel, key);
+  }
+
+  /** `skips`, for the walk: a path it keeps out counts in `summary`. */
+  walkSkips(full: string, rel: string): boolean {
+    const skipped = this.skips(full, rel);
+    if (skipped) this.skipped.add(posixKey(rel));
+    return skipped;
   }
 
   /** Whether the walk leaves out a directory it reached: a checkout of its
@@ -378,21 +410,35 @@ export class GitSkip {
   /** The verbose account of a full pass that took `rounds`, the earlier
    *  ones `earlierMs`; null where git kept nothing out. */
   summary(rounds: number, earlierMs: number): string | null {
-    if (this.open === 'rounds') {
+    if (this.open?.why === 'rounds') {
       return (
         `git: files git keeps out were still imported after ${rounds - 1} ` +
         `rounds, so this pass analysed every file git ignores`
       );
     }
-    if (this.open === 'load') {
-      return (
-        `git: a computed load the host cannot list exactly may load a file ` +
-        `git keeps out, so this pass analysed every file git ignores`
-      );
+    if (this.open?.why === 'load') {
+      const { sites, hostLists } = this.open;
+      const named = `${sites[0]}${sites.length > 1 ? ` (+${sites.length - 1} more)` : ''}`;
+      return hostLists
+        ? `git: the host cannot list exactly what ${named} loads, and it may ` +
+            `load a file git keeps out, so this pass analysed every file git ignores`
+        : `git: this host lists no computed load exactly (it bundles nothing), ` +
+            `so ${named} may load a file git keeps out, and this pass analysed ` +
+            `every file git ignores`;
     }
     if (!this.authority) return null;
+    const checkouts = new Set(this.skippedCheckouts);
+    const paths = [...this.skipped].filter(
+      (path) => !this.pulled.has(path) && !checkouts.has(path)
+    );
     const parts = [
-      ...(this.ignored === null ? [] : ['paths git ignores']),
+      ...(this.ignored === null
+        ? []
+        : [
+            paths.length === 0
+              ? 'no path git ignores, since the walk met none'
+              : `${paths.length} ${paths.length === 1 ? 'path' : 'paths'} git ignores (${topLevel(paths)})`,
+          ]),
       ...(this.skippedCheckouts.length === 0
         ? []
         : [`checkouts of their own (${this.skippedCheckouts.join(', ')})`]),

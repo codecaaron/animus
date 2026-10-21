@@ -2,7 +2,7 @@
   "corpusSha256": "98175374fca3e9c8f6e77aecaf85cca380275a25042d7908a3607e3bf84ca821",
   "engine": "extractor",
   "mode": "development",
-  "refreshIntent": "removal-warning-states-its-cost-20261021",
+  "refreshIntent": "removal-warning-names-its-check-20261021",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {

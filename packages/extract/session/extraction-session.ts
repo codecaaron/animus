@@ -37,6 +37,7 @@ import {
   taggedPackages,
 } from '../pipeline/discover-packages';
 import { GIT_SKIPPED, GitSkip } from '../pipeline/git-skip';
+import { describeLoad, lineAtByte } from '../pipeline/host-expansions';
 import { nativeLoaderResolution } from '../pipeline/host-package-resolver';
 import {
   adaptedOriginals,
@@ -188,6 +189,7 @@ import { logBuildTimings, timingRequested } from './timing';
 
 import type { PackageReadRecord } from '../pipeline/alias-agreement';
 import type { OnUndiscoverable } from '../pipeline/discover-files';
+import type { ListedLoad } from '../pipeline/host-expansions';
 import type { DiscoveryResolver } from '../pipeline/host-package-resolver';
 import type {
   AnimusCoreOptions,
@@ -1098,10 +1100,10 @@ export class ExtractionSession {
           stats: () => excludes.stats(),
           unmatched: () => excludes.unmatched(),
           matches: (full, rel) =>
-            excludes.matches(full, rel) || git.skips(full, rel),
+            excludes.matches(full, rel) || git.walkSkips(full, rel),
           explain: (full, rel) =>
             excludes.explain(full, rel) ??
-            (git.skips(full, rel) ? GIT_SKIPPED : null),
+            (git.walkSkips(full, rel) ? GIT_SKIPPED : null),
           skipsDirectory: (full, rel) => git.skipsDirectory(full, rel),
         },
         extensionsSet,
@@ -2010,10 +2012,15 @@ export class ExtractionSession {
         await this.runPipelineRound(pending, hostSources);
       } catch (error) {
         if (!(error instanceof SkippedSourcesWanted)) throw error;
-        if (error.open) git.failOpen('load');
-        else {
+        if (error.unlisted.length > 0) {
+          git.failOpen({
+            why: 'load',
+            sites: this.loadSites(error.unlisted, hostSources),
+            hostLists: error.hostLists,
+          });
+        } else {
           git.pull(this.withSkippedImports(error.paths, hostSources));
-          if (round + 1 >= GIT_SKIP_ROUNDS) git.failOpen('rounds');
+          if (round + 1 >= GIT_SKIP_ROUNDS) git.failOpen({ why: 'rounds' });
         }
         continue;
       }
@@ -2029,6 +2036,35 @@ export class ExtractionSession {
     if (this.passReports.has(key)) return true;
     this.passReports.add(key);
     return false;
+  }
+
+  /** Each load as a reader finds it (`describeLoad`): its line read from
+   *  the source the host gave or the file, where one holds its offset. */
+  private loadSites(
+    loads: readonly ListedLoad[],
+    hostSources: ReadonlyMap<string, string>
+  ): string[] {
+    const sources = new Map<string, Buffer | null>();
+    const read = (importer: string): Buffer | null => {
+      if (!sources.has(importer)) {
+        const abs = resolve(this.rootDir!, importer);
+        let source = hostSources.get(abs);
+        try {
+          source ??= readFileSync(abs, 'utf-8');
+        } catch {
+          // An adapted module (`x.mdx.tsx`) has no file of its own.
+        }
+        sources.set(
+          importer,
+          source === undefined ? null : Buffer.from(source)
+        );
+      }
+      return sources.get(importer) ?? null;
+    };
+    return loads.map((load) => {
+      const source = read(load.importer);
+      return describeLoad(load, source && lineAtByte(source, load.start));
+    });
   }
 
   /** `paths` and each file git keeps out that they import, transitively, as

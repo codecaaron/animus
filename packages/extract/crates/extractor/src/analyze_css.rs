@@ -6077,10 +6077,14 @@ fn identity_uncertainty_diagnostics(
     // What the tags cost: the components no analysed code renders, which
     // removal would take, or none.
     let cost = match held_back {
-        [] => " at no cost, as every extracted component is rendered or handed on".to_string(),
+        [] => " at no cost, as the analysed source renders or hands on every extracted component".to_string(),
         held => {
             let kept = if held.len() == 1 { "is" } else { "are" };
-            format!(", so {} no analysed code renders {kept} kept ({})", count_of(held.len(), "component"), capped_list(held, ", "))
+            format!(
+                ", so {} the analysed source never renders {kept} kept ({}), counted from the source's renders, not from what a bundle includes",
+                count_of(held.len(), "component"),
+                capped_list(held, ", ")
+            )
         }
     };
     let summary = diagnostic(
@@ -19656,8 +19660,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("info".to_string(), "<Link>".to_string(), "<Link> is imported from 'router', which extraction does not analyse".to_string()),
         ];
         for (entries, cost) in [
-            (base.to_vec(), "off for this build at no cost, as every extracted component is rendered or handed on"),
-            ([base.as_slice(), &[q]].concat(), "off for this build, so 1 component no analysed code renders is kept (Q)"),
+            (base.to_vec(), "off for this build at no cost, as the analysed source renders or hands on every extracted component"),
+            (
+                [base.as_slice(), &[q]].concat(),
+                "off for this build, so 1 component the analysed source never renders is kept (Q), counted from the source's renders, not from what a bundle includes",
+            ),
         ] {
             let production = reported(&entries, false);
             assert_eq!(production.len(), 3, "{production:#?}");

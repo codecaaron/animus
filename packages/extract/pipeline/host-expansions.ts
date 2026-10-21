@@ -61,6 +61,40 @@ export interface ListedLoad {
   args: ListedArgs | null;
 }
 
+/** The 1-based line of the UTF-8 byte offset `start` in `source`; null
+ *  past its end. */
+export function lineAtByte(source: Uint8Array, start: number): number | null {
+  if (start > source.length) return null;
+  let line = 1;
+  for (let at = 0; at < start; at++) if (source[at] === 0x0a) line++;
+  return line;
+}
+
+/** A computed load as a reader finds it: the importer, the line where the
+ *  host can read it, and the call as written (`import.meta.glob('./a/*.tsx')`,
+ *  `` import(`./pages/${…}.tsx`) ``). */
+export function describeLoad(load: ListedLoad, line: number | null): string {
+  const at = line === null ? load.importer : `${load.importer}:${line}`;
+  const args = load.args;
+  const quote = (text: string) => `'${text}'`;
+  let call: string;
+  if (args === null)
+    call = `a ${load.kind} load whose argument is not written out`;
+  else if ('patterns' in args) {
+    const callee =
+      load.kind === 'globEager' ? 'import.meta.globEager' : 'import.meta.glob';
+    call = `${callee}(${args.patterns.map(quote).join(', ')})`;
+  } else if ('quasis' in args) {
+    const specifier = args.template
+      ? `\`${args.quasis.join('${…}')}\``
+      : args.quasis.map(quote).join(' + … + ');
+    call = `${load.kind === 'require' ? 'require' : 'import'}(${specifier})`;
+  } else {
+    call = `require.context(${quote(args.dir)}${args.recursive === null ? '' : `, ${args.recursive}`}${args.regExp === null ? '' : `, /${args.regExp.source}/${args.regExp.flags}`})`;
+  }
+  return `${at} ${call}`;
+}
+
 /** A file a computed load expands to, rootDir-relative, with the query the
  *  host loads it with (`''`, or `?…`). */
 export interface ExpandedPath {

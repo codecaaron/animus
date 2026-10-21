@@ -344,6 +344,7 @@ export type {
   WebpackRuleEntry,
   WebpackRuleReading,
 } from './webpack-expansions';
+export { lineAtByte } from './host-expansions';
 export type {
   ExpandedPath,
   HostLoadExpander,
