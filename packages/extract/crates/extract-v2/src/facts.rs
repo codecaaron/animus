@@ -101,7 +101,7 @@ impl KeySource {
     /// not an object literal.
     fn block_key(prop: &oxc::ast::ast::ObjectProperty<'_>, source: &str, path: &[String]) -> Option<Self> {
         let key = match &prop.key {
-            PropertyKey::StringLiteral(literal) if !prop.computed => literal.value.as_str(),
+            PropertyKey::StringLiteral(literal) if !prop.computed => literal.value.as_str()?,
             PropertyKey::StaticIdentifier(identifier) if !prop.computed => identifier.name.as_str(),
             _ => return None,
         };
@@ -152,7 +152,7 @@ pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<St
                 for prop in &obj.properties {
                     let ObjectPropertyKind::ObjectProperty(prop) = prop else { continue };
                     let key = match &prop.key {
-                        PropertyKey::StringLiteral(literal) if !prop.computed => Some(literal.value.as_str()),
+                        PropertyKey::StringLiteral(literal) if !prop.computed => literal.value.as_str(),
                         PropertyKey::StaticIdentifier(identifier) if !prop.computed => Some(identifier.name.as_str()),
                         _ => None,
                     };
@@ -218,7 +218,7 @@ impl StageFacts {
             if let Some(found) = KeySource::block_key(prop, source, path) {
                 self.block_keys.push(found);
             } else if let Expression::ObjectExpression(nested) = chain_walk::unwrap_type_assertions(&prop.value) {
-                path.push(prop.key.static_name().map(|name| name.to_string()).unwrap_or_default());
+                path.push(prop.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|name| name.to_string()).unwrap_or_default());
                 self.record_block_keys(nested, source, path);
                 path.pop();
             }
@@ -1167,7 +1167,7 @@ pub(crate) enum FacadeEntry {
 /// `__proto__: …` sets the prototype, which can supply any member; the
 /// shorthand `{ __proto__ }` and a computed key define an own member.
 fn sets_prototype(p: &oxc::ast::ast::ObjectProperty<'_>) -> bool {
-    !p.computed && !p.shorthand && p.key.static_name().as_deref() == Some("__proto__")
+    !p.computed && !p.shorthand && p.key.static_name().is_some_and(|name| name == "__proto__")
 }
 
 /// The member writes of `const X = { … }` or `const X = Object.assign({ … },
@@ -1234,7 +1234,7 @@ fn literal_entries(object: &ObjectExpression<'_>, entries: &mut Vec<FacadeEntry>
         let code = p.method
             || p.kind != PropertyKind::Init
             || matches!(crate::chain_walk::unwrap_type_assertions(&p.value), Expression::FunctionExpression(_));
-        let Some(key) = p.key.static_name().filter(|_| !p.computed) else {
+        let Some(key) = p.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !p.computed) else {
             entries.push(if code { FacadeEntry::Code(None) } else { FacadeEntry::Unknown });
             continue;
         };
@@ -1315,7 +1315,7 @@ fn object_member_chains(name: &str, init: &Expression<'_>, chains: &mut Vec<chai
         let oxc::ast::ast::ObjectPropertyKind::ObjectProperty(p) = property else {
             continue;
         };
-        let Some(key) = p.key.static_name().filter(|_| !p.computed) else {
+        let Some(key) = p.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !p.computed) else {
             continue;
         };
         let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(&p.value) else {

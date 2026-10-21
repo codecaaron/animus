@@ -380,7 +380,7 @@ fn held_components<'b, 'a>(
             if p.computed || p.method || p.kind != PropertyKind::Init {
                 continue;
             }
-            let (Some(key), Some(function)) = (p.key.static_name(), ComponentFunction::of_expression(&p.value)) else {
+            let (Some(key), Some(function)) = (p.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str), ComponentFunction::of_expression(&p.value)) else {
                 continue;
             };
             held.push((format!("{name}.{key}"), function));
@@ -721,7 +721,7 @@ fn object_rest<'b, 'a>(
     let named = object
         .properties
         .iter()
-        .filter_map(|property| property.key.static_name().map(|key| key.to_string()))
+        .filter_map(|property| property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|key| key.to_string()))
         .collect();
     Some((named, rest.as_ref()))
 }
@@ -907,7 +907,7 @@ pub fn collect_export_facts(program: &Program<'_>) -> Vec<ExportFact> {
                     out.push(ExportFact {
                         exported: spec.exported.name().to_string(),
                         local: None,
-                        source: Some(export.source.value.to_string()),
+                        source: Some(animus_system_loader::specifier_text(export.source.value).into_owned()),
                         original: Some(spec.local.name().to_string()),
                     });
                 }
@@ -2121,7 +2121,7 @@ fn held_position(span: Span, ancestors: &[AstKind<'_>]) -> (Vec<String>, bool) {
         match kind {
             kind if is_erased_wrapper(kind) => {}
             AstKind::ObjectProperty(prop) if prop.value.span() == current => {
-                match prop.key.static_name().filter(|_| !prop.computed) {
+                match prop.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !prop.computed) {
                     Some(key) => keys.push(key.to_string()),
                     None => {
                         keys.clear();
@@ -2826,7 +2826,7 @@ pub(crate) fn string_code<'a>(program: &oxc::ast::ast::Program<'a>, scoping: &ox
         }
         /// The key of `member` the walk reads: written, or a `const`'s.
         fn key(&self, member: &ComputedMemberExpression<'a>) -> Option<&'a str> {
-            member.static_property_name().map(|name| name.as_str()).or_else(|| match member.expression.get_inner_expression() {
+            member.static_property_name().and_then(oxc::str::JSStr::as_str).or_else(|| match member.expression.get_inner_expression() {
                 Expression::Identifier(id) => symbol_of(self.scoping, id).and_then(|symbol| self.strings.get(&symbol).copied()),
                 _ => None,
             })
@@ -3122,9 +3122,13 @@ pub(crate) fn string_code<'a>(program: &oxc::ast::ast::Program<'a>, scoping: &ox
             oxc::ast_visit::walk::walk_new_expression(self, new);
         }
         fn visit_import_declaration(&mut self, import: &oxc::ast::ast::ImportDeclaration<'a>) {
-            for specifier in import.specifiers.iter().flatten() {
-                if let Some(symbol) = specifier.local().symbol_id.get() {
-                    self.imports.insert(symbol, import.source.value.as_str());
+            // A specifier with a lone surrogate names no module: what a call
+            // through its import is handed is replaced.
+            if let Some(source) = import.source.value.as_str() {
+                for specifier in import.specifiers.iter().flatten() {
+                    if let Some(symbol) = specifier.local().symbol_id.get() {
+                        self.imports.insert(symbol, source);
+                    }
                 }
             }
             oxc::ast_visit::walk::walk_import_declaration(self, import);
@@ -3329,7 +3333,7 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
     struct Builtins(FxHashSet<SymbolId>);
     impl<'a> Visit<'a> for Builtins {
         fn visit_import_declaration(&mut self, import: &ImportDeclaration<'a>) {
-            if BUILTINS.contains(&import.source.value.as_str()) {
+            if import.source.value.as_str().is_some_and(|specifier| BUILTINS.contains(&specifier)) {
                 for specifier in import.specifiers.iter().flatten() {
                     match specifier {
                         ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
@@ -3351,7 +3355,7 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
         }
         fn visit_ts_import_equals_declaration(&mut self, import: &TSImportEqualsDeclaration<'a>) {
             if let TSModuleReference::ExternalModuleReference(external) = &import.module_reference {
-                if BUILTINS.contains(&external.expression.value.as_str()) {
+                if external.expression.value.as_str().is_some_and(|specifier| BUILTINS.contains(&specifier)) {
                     self.0.extend(import.id.symbol_id.get());
                 }
             }
@@ -3402,7 +3406,7 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
         fn direct_loader(callee: &Expression<'_>) -> bool {
             is_require(callee)
                 || callee.get_inner_expression().as_member_expression().is_some_and(|member| {
-                    matches!(member.static_property_name(), Some("context" | "resolve")) && is_require(member.object())
+                    matches!(member.static_property_name().and_then(oxc::str::JSStr::as_str), Some("context" | "resolve")) && is_require(member.object())
                 })
         }
         /// Judges the constant member `name` of `object`, true when the read
@@ -3473,7 +3477,7 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
             }
         }
         fn visit_computed_member_expression(&mut self, member: &ComputedMemberExpression<'a>) {
-            if member.static_property_name().is_none_or(|name| !self.member(&member.object, &name)) {
+            if member.static_property_name().and_then(oxc::str::JSStr::as_str).is_none_or(|name| !self.member(&member.object, name)) {
                 oxc::ast_visit::walk::walk_computed_member_expression(self, member);
             }
         }
@@ -3484,7 +3488,7 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
             oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
         }
         fn visit_import_declaration(&mut self, import: &ImportDeclaration<'a>) {
-            let builtin = BUILTINS.contains(&import.source.value.as_str()) && !import.import_kind.is_type();
+            let builtin = import.source.value.as_str().is_some_and(|specifier| BUILTINS.contains(&specifier)) && !import.import_kind.is_type();
             // A `createRequire` that makes only this file's own `require`
             // loads only what that `require` does.
             let own = std::mem::take(&mut self.own);
@@ -3511,13 +3515,13 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
             }
         }
         fn visit_export_all_declaration(&mut self, export: &ExportAllDeclaration<'a>) {
-            if BUILTINS.contains(&export.source.value.as_str()) && !export.export_kind.is_type() {
+            if export.source.value.as_str().is_some_and(|specifier| BUILTINS.contains(&specifier)) && !export.export_kind.is_type() {
                 self.found.get_or_insert(BUILTIN);
             }
             oxc::ast_visit::walk::walk_export_all_declaration(self, export);
         }
         fn visit_export_from_declaration(&mut self, export: &ExportFromDeclaration<'a>) {
-            let builtin = BUILTINS.contains(&export.source.value.as_str());
+            let builtin = export.source.value.as_str().is_some_and(|specifier| BUILTINS.contains(&specifier));
             let loads = |specifier: &oxc::ast::ast::ExportSpecifier<'_>| !BUILTIN_MEMBERS.contains(&specifier.local.name().as_str());
             if builtin && export.specifiers.iter().any(loads) {
                 self.found.get_or_insert(BUILTIN);
@@ -3562,7 +3566,7 @@ fn own_requires(
     let mut imported = FxHashSet::default();
     for statement in &program.body {
         let Statement::ImportDeclaration(import) = statement else { continue };
-        if !MODULE_BUILTINS.contains(&import.source.value.as_str()) || import.import_kind.is_type() {
+        if !import.source.value.as_str().is_some_and(|specifier| MODULE_BUILTINS.contains(&specifier)) || import.import_kind.is_type() {
             continue;
         }
         for specifier in import.specifiers.iter().flatten() {
@@ -4250,7 +4254,7 @@ fn returned_position(span: Span, ancestors: &[AstKind<'_>]) -> Option<(Span, Vec
         match rest.next()? {
             kind if is_erased_wrapper(kind) => current = kind.span(),
             AstKind::ObjectProperty(prop) if prop.value.span() == current && !prop.computed => {
-                keys.push(prop.key.static_name().map_or_else(|| crate::flow::ANY_MEMBER.to_string(), |key| key.to_string()));
+                keys.push(prop.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map_or_else(|| crate::flow::ANY_MEMBER.to_string(), |key| key.to_string()));
                 match rest.next()? {
                     AstKind::ObjectExpression(object) => current = object.span,
                     _ => return None,
@@ -5291,7 +5295,7 @@ fn destructured_members<'b, 'a: 'b>(span: Span, mut ancestors: impl Iterator<Ite
     use oxc::ast::ast::{AssignmentTarget, AssignmentTargetProperty, BindingPattern};
     let (current, parent) = peel_wrappers(span, &mut ancestors);
     let key = |key: &oxc::ast::ast::PropertyKey<'_>, computed: bool| {
-        if computed { None } else { key.static_name().map(|name| name.to_string()) }
+        if computed { None } else { key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|name| name.to_string()) }
     };
     match parent {
         Some(AstKind::VariableDeclarator(declarator)) if declarator.init.as_ref().map(GetSpan::span) == Some(current) => {
@@ -5524,7 +5528,7 @@ fn spread_wrapper_candidates<'b, 'a>(program: &'b Program<'a>) -> Vec<WrapperCan
                     };
                     named.push(NamedProp {
                         // An unknown (computed) key gives up: `static_name` has none.
-                        key: property.key.static_name()?.to_string(),
+                        key: property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str)?.to_string(),
                         binding,
                         default,
                     });
@@ -6252,7 +6256,7 @@ impl EscapeScan<'_, '_> {
                     if slot_values.contains(&(value.start, value.end)) {
                         return None;
                     }
-                    let holder = match (property.key.static_name().filter(|_| !property.computed), rest.next()) {
+                    let holder = match (property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !property.computed), rest.next()) {
                         (Some(key), Some(AstKind::ObjectExpression(object))) => holder_const(object.span, &mut rest)
                             .filter(|holder| self.reads.get(holder).is_some_and(|reads| reads.holds(&key, &path))),
                         _ => None,
@@ -7437,7 +7441,7 @@ fn rest_parameters(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<Symbol
             let keys: Option<BTreeSet<String>> = pattern
                 .properties
                 .iter()
-                .map(|property| property.key.static_name().filter(|_| !property.computed).map(|key| key.to_string()))
+                .map(|property| property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !property.computed).map(|key| key.to_string()))
                 .collect();
             match keys {
                 Some(keys) if !self.scoping.symbol_is_mutated(symbol) => {
@@ -7541,7 +7545,7 @@ fn prop_tags_and_uses(
             return;
         };
         for property in &pattern.properties {
-            let Some(key) = property.key.static_name().filter(|_| !property.computed) else { continue };
+            let Some(key) = property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !property.computed) else { continue };
             let binding = match &property.value {
                 BindingPattern::BindingIdentifier(binding) => binding,
                 // An omitted prop takes its default, which must name a host
@@ -7737,7 +7741,7 @@ impl ReactImports {
         let mut imports = Self { functions: FxHashMap::default(), namespaces: FxHashSet::default() };
         for statement in &program.body {
             let Statement::ImportDeclaration(import) = statement else { continue };
-            if !modules.contains(&import.source.value.as_str()) {
+            if !import.source.value.as_str().is_some_and(|specifier| modules.contains(&specifier)) {
                 continue;
             }
             for specifier in import.specifiers.iter().flatten() {
@@ -8124,7 +8128,7 @@ impl ReactNames {
             let Statement::ImportDeclaration(import) = stmt else {
                 continue;
             };
-            let source = import.source.value.as_str();
+            let Some(source) = import.source.value.as_str() else { continue };
             let automatic = AUTOMATIC_RUNTIMES.iter().find(|(runtime, _)| *runtime == source).map(|(_, f)| *f);
             let exported: &'static [&'static str] = match automatic {
                 Some(exports) => exports,
@@ -8435,7 +8439,7 @@ fn important_literals(
                 let oxc::ast::ast::ObjectPropertyKind::ObjectProperty(property) = property else {
                     continue;
                 };
-                let Some(breakpoint) = property.key.static_name().filter(|_| !property.computed) else {
+                let Some(breakpoint) = property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !property.computed) else {
                     continue;
                 };
                 let mut entries = Vec::new();
@@ -9210,7 +9214,7 @@ pub(crate) fn builder_references(program: &Program<'_>) -> Vec<(Span, String)> {
         // MDX has no use for the system package: any import of it, named,
         // default or namespace, reaches the builder's style declarations.
         fn visit_import_declaration(&mut self, import: &oxc::ast::ast::ImportDeclaration<'a>) {
-            let source = import.source.value.as_str();
+            let Some(source) = import.source.value.as_str() else { return };
             if source == SYSTEM_PACKAGE || source.strip_prefix(SYSTEM_PACKAGE).is_some_and(|rest| rest.starts_with('/')) {
                 self.0.push((import.span, format!("import from {source}")));
             }
@@ -9239,7 +9243,7 @@ pub(crate) fn builder_references(program: &Program<'_>) -> Vec<(Span, String)> {
     }
     impl References {
         fn method_key(&mut self, key: &oxc::ast::ast::PropertyKey<'_>) {
-            if let Some(name) = key.static_name().filter(|name| BUILDER_METHODS.contains(&name.as_ref())) {
+            if let Some(name) = key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|name| BUILDER_METHODS.contains(&name.as_ref())) {
                 self.0.push((key.span(), name.to_string()));
             }
         }

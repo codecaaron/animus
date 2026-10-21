@@ -195,7 +195,7 @@ fn try_extract_transform(
     }
 
     let name = match call.arguments.first() {
-        Some(Argument::StringLiteral(lit)) => lit.value.to_string(),
+        Some(Argument::StringLiteral(lit)) if let Some(name) = lit.value.as_str() => name.to_string(),
         _ => {
             return Some(ExtractedTransform {
                 name: String::new(),

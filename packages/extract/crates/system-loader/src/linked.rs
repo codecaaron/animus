@@ -334,12 +334,12 @@ pub(crate) fn rewrite_analysed(
             .body
             .iter()
             .filter_map(|stmt| match stmt {
-                Statement::ImportDeclaration(decl) => Some(decl.source.value.as_str()),
-                Statement::ExportFromDeclaration(decl) => Some(decl.source.value.as_str()),
-                Statement::ExportAllDeclaration(decl) => Some(decl.source.value.as_str()),
+                Statement::ImportDeclaration(decl) => Some(decl.source.value),
+                Statement::ExportFromDeclaration(decl) => Some(decl.source.value),
+                Statement::ExportAllDeclaration(decl) => Some(decl.source.value),
                 _ => None,
             })
-            .map(key)
+            .map(|specifier| key(&crate::specifier_text(specifier)))
             .collect(),
         link: String::new(),
         body: String::new(),
@@ -356,7 +356,7 @@ pub(crate) fn rewrite_analysed(
     for stmt in &program.body {
         match stmt {
             Statement::ImportDeclaration(decl) => {
-                let from = key(&decl.source.value);
+                let from = key(&crate::specifier_text(decl.source.value));
                 for specifier in decl.specifiers.iter().flatten() {
                     let name = match specifier {
                         ImportDeclarationSpecifier::ImportSpecifier(named) => module_export_name(&named.imported),
@@ -381,7 +381,7 @@ pub(crate) fn rewrite_analysed(
                 remove(&mut edits, decl.span.start, decl.span.end);
             }
             Statement::ExportFromDeclaration(decl) => {
-                let from = key(&decl.source.value);
+                let from = key(&crate::specifier_text(decl.source.value));
                 for es in &decl.specifiers {
                     module.exports.push((
                         module_export_name(&es.exported),
@@ -464,7 +464,7 @@ pub(crate) fn rewrite_analysed(
                 edits.push(prefix);
             }
             Statement::ExportAllDeclaration(decl) => {
-                let from = key(&decl.source.value);
+                let from = key(&crate::specifier_text(decl.source.value));
                 match &decl.exported {
                     Some(exported) => {
                         module.exports.push((module_export_name(exported), ExportTarget::Namespace { from }))

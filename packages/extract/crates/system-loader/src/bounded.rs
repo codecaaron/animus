@@ -392,7 +392,7 @@ impl<'c> Loader<'c> {
                 .collect();
             for call in calls {
                 let Some(member) = call.callee.get_inner_expression().as_member_expression() else { continue };
-                if member.static_property_name() != Some("registerGlobalStyles")
+                if !member.static_property_name().is_some_and(|name| name == "registerGlobalStyles")
                     || !self.animus_value(&path, program, member.object(), 0)?
                 {
                     continue;
@@ -402,7 +402,7 @@ impl<'c> Loader<'c> {
                 };
                 for property in &argument.properties {
                     let ObjectPropertyKind::ObjectProperty(property) = property else { continue };
-                    let (Some(name), Expression::Identifier(value)) = (property.key.static_name(), property.value.get_inner_expression())
+                    let (Some(name), Expression::Identifier(value)) = (property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str), property.value.get_inner_expression())
                     else {
                         continue;
                     };
@@ -862,7 +862,7 @@ impl<'c> Loader<'c> {
             | Expression::ArrayExpression(_) => Class::Value,
             Expression::ClassExpression(class) => class_shape(class),
             Expression::ObjectExpression(object) => {
-                let key = |property: &PropertyKey<'_>| property.static_name().map(|name| name.to_string());
+                let key = |property: &PropertyKey<'_>| property.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|name| name.to_string());
                 let mut class = Class::Value;
                 for property in &object.properties {
                     match property {
@@ -896,7 +896,7 @@ impl<'c> Loader<'c> {
                 },
                 callee => match callee.as_member_expression() {
                     Some(member) => {
-                        let Some(method) = member.static_property_name() else {
+                        let Some(method) = member.static_property_name().and_then(oxc::str::JSStr::as_str) else {
                             return Ok(Class::Unknown("a computed method call".to_string()));
                         };
                         if builtin_array(program, expression) {
@@ -1062,7 +1062,7 @@ impl<'c> Loader<'c> {
             // a module-level object literal that holds one.
             expression => match expression.as_member_expression() {
                 Some(member) => {
-                    let property = member.static_property_name().and_then(|key| match member.object().get_inner_expression() {
+                    let property = member.static_property_name().and_then(oxc::str::JSStr::as_str).and_then(|key| match member.object().get_inner_expression() {
                         Expression::Identifier(object) => literal_property(program, &object.name, key),
                         _ => None,
                     });
@@ -1070,7 +1070,7 @@ impl<'c> Loader<'c> {
                         Some(value) => self.animus_value(module, program, value, depth + 1)?,
                         None => {
                             // An imported object's property, traced in its module.
-                            let imported = match (member.static_property_name(), member.object().get_inner_expression()) {
+                            let imported = match (member.static_property_name().and_then(oxc::str::JSStr::as_str), member.object().get_inner_expression()) {
                                 (Some(key), Expression::Identifier(object)) => match declaration(program, &object.name) {
                                     Some(Decl::Import { spec, name: Some(name) }) => Some((spec, name, key.to_string())),
                                     _ => None,
@@ -1172,11 +1172,11 @@ impl<'c> Loader<'c> {
             // destructured or imported `register…()`.
             let callee = call.callee.get_inner_expression();
             let found: Option<(String, Option<&Expression<'_>>)> = match callee.as_member_expression() {
-                Some(member) => match member.static_property_name() {
+                Some(member) => match member.static_property_name().and_then(oxc::str::JSStr::as_str) {
                     Some(name) if REGISTRATIONS.contains(&name) => Some((name.to_string(), Some(member.object()))),
                     Some("call" | "apply") => member.object().as_member_expression().and_then(|inner| {
                         inner
-                            .static_property_name()
+                            .static_property_name().and_then(oxc::str::JSStr::as_str)
                             .filter(|name| REGISTRATIONS.contains(name))
                             .map(|name| (name.to_string(), Some(inner.object())))
                     }),
@@ -1254,7 +1254,9 @@ impl<'c> Loader<'c> {
                     (member.property.name.to_string(), member.span)
                 }
                 AstKind::ComputedMemberExpression(member) => match &member.expression {
-                    Expression::StringLiteral(key) if REGISTRATIONS.contains(&key.value.as_str()) => (key.value.to_string(), member.span),
+                    Expression::StringLiteral(key) if let Some(name) = key.value.as_str().filter(|name| REGISTRATIONS.contains(name)) => {
+                        (name.to_string(), member.span)
+                    }
                     _ => continue,
                 },
                 AstKind::IdentifierReference(reference) => match declaration(&program, &reference.name) {
@@ -1482,7 +1484,7 @@ fn builtin_array(program: &Program<'_>, expression: &Expression<'_>) -> bool {
         Expression::ArrayExpression(_) => true,
         Expression::CallExpression(call) => {
             let Some(member) = call.callee.get_inner_expression().as_member_expression() else { return false };
-            let Some(method) = member.static_property_name() else { return false };
+            let Some(method) = member.static_property_name().and_then(oxc::str::JSStr::as_str) else { return false };
             match member.object().get_inner_expression() {
                 Expression::Identifier(global) if declaration(program, &global.name).is_none() => {
                     matches!((global.name.as_str(), method), ("Object", "keys" | "values" | "entries") | ("Array", "from" | "of"))
@@ -1511,7 +1513,7 @@ fn class_shape(class: &oxc::ast::ast::Class<'_>) -> Class {
             ClassElement::StaticBlock(_) => return true,
             ClassElement::TSIndexSignature(_) => return false,
         };
-        is_static && (computed || matches!(key.static_name().as_deref(), Some("toConfig" | "getVocabularyRecord")))
+        is_static && (computed || matches!(key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).as_deref(), Some("toConfig" | "getVocabularyRecord")))
     });
     if carries { Class::Unknown("a class whose static members may carry the system protocol".to_string()) } else { Class::Value }
 }
@@ -1565,7 +1567,7 @@ fn declaration<'a, 'p>(program: &'a Program<'p>, local: &str) -> Option<Decl<'a,
                             ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => Some("default".to_string()),
                             ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => None,
                         };
-                        return Some(Decl::Import { spec: import.source.value.to_string(), name });
+                        return Some(Decl::Import { spec: crate::specifier_text(import.source.value).into_owned(), name });
                     }
                 }
                 continue;
@@ -1612,7 +1614,7 @@ fn declaration<'a, 'p>(program: &'a Program<'p>, local: &str) -> Option<Decl<'a,
                             for property in &pattern.properties {
                                 if let BindingPattern::BindingIdentifier(id) = &property.value {
                                     if id.name == local {
-                                        let key = property.key.static_name().map(|name| name.to_string()).unwrap_or_default();
+                                        let key = property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|name| name.to_string()).unwrap_or_default();
                                         return declarator.init.as_ref().map(|from| Decl::Destructured { key, from });
                                     }
                                 }
@@ -1639,7 +1641,7 @@ fn declaration<'a, 'p>(program: &'a Program<'p>, local: &str) -> Option<Decl<'a,
 fn literal_property<'a, 'p>(program: &'a Program<'p>, binding: &str, key: &str) -> Option<&'a Expression<'p>> {
     match declaration(program, binding) {
         Some(Decl::Init(Expression::ObjectExpression(literal))) => literal.properties.iter().find_map(|property| match property {
-            ObjectPropertyKind::ObjectProperty(property) if !property.computed && property.key.static_name().as_deref() == Some(key) => {
+            ObjectPropertyKind::ObjectProperty(property) if !property.computed && property.key.static_name().is_some_and(|name| name == key) => {
                 Some(&property.value)
             }
             _ => None,
@@ -1714,7 +1716,7 @@ fn written_after(program: &Program<'_>, local: &str) -> bool {
         }),
         AstKind::CallExpression(call) => call.callee.as_member_expression().is_some_and(|member| {
             matches!(member.object(), Expression::Identifier(id) if id.name == "Object")
-                && matches!(member.static_property_name(), Some("assign" | "defineProperty" | "defineProperties" | "setPrototypeOf"))
+                && matches!(member.static_property_name().and_then(oxc::str::JSStr::as_str), Some("assign" | "defineProperty" | "defineProperties" | "setPrototypeOf"))
                 && call.arguments.first().and_then(|argument| argument.as_expression()).is_some_and(named)
         }),
         _ => false,
@@ -1730,7 +1732,7 @@ fn static_member(semantic: &oxc::semantic::Semantic<'_>, node: oxc::semantic::No
         // A write through a namespace throws at runtime, as ESM throws.
         AstKind::StaticMemberExpression(member) => Some(member.property.name.to_string()),
         AstKind::ComputedMemberExpression(member) => match &member.expression {
-            Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+            Expression::StringLiteral(literal) => literal.value.as_str().map(str::to_string),
             _ => None,
         },
         AstKind::JSXMemberExpression(member) => Some(member.property.name.to_string()),
@@ -1818,7 +1820,7 @@ fn analysed<'c>(arena: &'c Allocator, source: &str, path: &str) -> (ModuleRecord
                     .collect::<Option<Vec<String>>>()
                     .map_or(Read::Whole, Read::Members),
             };
-            reads.push((decl.source.value.to_string(), read));
+            reads.push((crate::specifier_text(decl.source.value).into_owned(), read));
         }
     }
     let refused = refuse_unsupported(&semantic, source, path).err();
@@ -1880,7 +1882,7 @@ fn record_from(program: &Program<'_>) -> ModuleRecord<String, String> {
                 if decl.import_kind.is_type() || (decl.specifiers.as_ref().is_some_and(|all| !all.is_empty()) && values.count() == 0) {
                     continue;
                 }
-                let at = request(&mut record.requests, &decl.source.value);
+                let at = request(&mut record.requests, &crate::specifier_text(decl.source.value));
                 for specifier in decl.specifiers.iter().flatten() {
                     let name = match specifier {
                         ImportDeclarationSpecifier::ImportSpecifier(named) if named.import_kind.is_type() => continue,
@@ -1905,7 +1907,7 @@ fn record_from(program: &Program<'_>) -> ModuleRecord<String, String> {
                 if decl.export_kind.is_type() {
                     continue;
                 }
-                let at = request(&mut record.requests, &decl.source.value);
+                let at = request(&mut record.requests, &crate::specifier_text(decl.source.value));
                 for specifier in &decl.specifiers {
                     if !specifier.export_kind.is_type() {
                         let local = module_export_name(&specifier.local);
@@ -1946,7 +1948,7 @@ fn record_from(program: &Program<'_>) -> ModuleRecord<String, String> {
                 if decl.export_kind.is_type() {
                     continue;
                 }
-                let at = request(&mut record.requests, &decl.source.value);
+                let at = request(&mut record.requests, &crate::specifier_text(decl.source.value));
                 match &decl.exported {
                     Some(exported) => record.namespace_exports.push((module_export_name(exported), at)),
                     None => record.star_exports.push(at),

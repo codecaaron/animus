@@ -130,7 +130,7 @@ pub fn collect_listed(program: &Program<'_>) -> (Vec<Load>, Vec<HostLoad>) {
         };
         loads.push(Load {
             kind,
-            target: LoadTarget::Specifier(source.value.to_string()),
+            target: source.value.as_str().map_or(LoadTarget::Unknown, |specifier| LoadTarget::Specifier(specifier.to_string())),
             spelling: Spelling::String,
             span,
             enclosing_function: None,
@@ -321,9 +321,11 @@ pub enum LoadTarget {
 /// The modules a specifier expression can name.
 pub(crate) fn load_of(specifier: &Expression<'_>) -> LoadTarget {
     match specifier.get_inner_expression() {
-        Expression::StringLiteral(literal) => LoadTarget::Specifier(literal.value.to_string()),
+        Expression::StringLiteral(literal) => {
+            crate::eval::literal_string(literal).map_or(LoadTarget::Unknown, |specifier| LoadTarget::Specifier(specifier.to_string()))
+        }
         Expression::TemplateLiteral(template) => {
-            let head = template.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref());
+            let head = template.quasis.first().and_then(crate::eval::cooked_text);
             match (template.expressions.is_empty(), head) {
                 (true, Some(head)) => LoadTarget::Specifier(head.to_string()),
                 (false, Some(head)) => LoadTarget::Prefix(head.to_string()),
@@ -386,7 +388,7 @@ fn webpack_context_of(call: &CallExpression<'_>) -> LoadTarget {
         Some(Expression::ObjectExpression(object)) => object.properties.iter().find_map(|property| {
             match property {
                 oxc::ast::ast::ObjectPropertyKind::ObjectProperty(property)
-                    if property.key.static_name().as_deref() == Some(name) =>
+                    if property.key.static_name().is_some_and(|key| key == name) =>
                 {
                     Some(&property.value)
                 }
@@ -404,7 +406,9 @@ fn webpack_context_of(call: &CallExpression<'_>) -> LoadTarget {
 fn glob_loads(argument: Option<&Argument<'_>>) -> Vec<LoadTarget> {
     let pattern = |expression: &Expression<'_>| match expression.get_inner_expression() {
         Expression::StringLiteral(literal) if literal.value.starts_with('!') => None,
-        Expression::StringLiteral(literal) => Some(LoadTarget::Glob(literal.value.to_string())),
+        Expression::StringLiteral(literal) => {
+            Some(crate::eval::literal_string(literal).map_or(LoadTarget::Unknown, |pattern| LoadTarget::Glob(pattern.to_string())))
+        }
         _ => Some(LoadTarget::Unknown),
     };
     match argument.and_then(Argument::as_expression).map(Expression::get_inner_expression) {
@@ -460,9 +464,11 @@ fn loader(callee: &Expression<'_>) -> Loader {
             member(&static_member.object, static_member.property.name.to_string())
         }
         Expression::ComputedMemberExpression(computed) => match computed.expression.get_inner_expression() {
-            Expression::StringLiteral(name) => member(&computed.object, name.value.to_string()),
+            Expression::StringLiteral(name) if let Some(name) = crate::eval::literal_string(name) => {
+                member(&computed.object, name.to_string())
+            }
             Expression::TemplateLiteral(template) if template.expressions.is_empty() => {
-                match template.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref()) {
+                match template.quasis.first().and_then(crate::eval::cooked_text) {
                     Some(name) => member(&computed.object, name.to_string()),
                     None => Loader::Other,
                 }
@@ -595,7 +601,7 @@ fn webpack_context_args(dir: String, options: Option<Option<&Expression<'_>>>) -
             if property.computed {
                 return None;
             }
-            match property.key.static_name()?.as_ref() {
+            match property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str)?.as_ref() {
                 "recursive" => recursive = Some(bool_literal(&property.value)?),
                 "regExp" => reg_exp = Some(regex_literal(&property.value)?),
                 "include" => include = Some(regex_literal(&property.value)?),
@@ -638,9 +644,9 @@ fn bool_literal(expression: &Expression<'_>) -> Option<bool> {
 /// A string literal, or a template with no substitution, as its value.
 fn literal_text(expression: &Expression<'_>) -> Option<String> {
     match expression.get_inner_expression() {
-        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::StringLiteral(literal) => crate::eval::literal_string(literal).map(str::to_string),
         Expression::TemplateLiteral(template) if template.expressions.is_empty() => {
-            template.quasis.first()?.value.cooked.as_ref().map(|cooked| cooked.to_string())
+            crate::eval::cooked_text(template.quasis.first()?).map(str::to_string)
         }
         _ => None,
     }
@@ -672,14 +678,14 @@ fn specifier_args(
 /// substitution is text itself.
 fn quasis_of(expression: &Expression<'_>) -> Option<Vec<String>> {
     match expression.get_inner_expression() {
-        Expression::StringLiteral(literal) => Some(vec![literal.value.to_string()]),
+        Expression::StringLiteral(literal) => Some(vec![crate::eval::literal_string(literal)?.to_string()]),
         // A substitution with string structure of its own (a nested
         // template, a concatenation with a string) adds path text a host
         // reads, which the quasis would not show.
         Expression::TemplateLiteral(template) if !template.expressions.iter().any(is_text) => template
             .quasis
             .iter()
-            .map(|quasi| quasi.value.cooked.as_ref().map(|cooked| cooked.to_string()))
+            .map(|quasi| crate::eval::cooked_text(quasi).map(str::to_string))
             .collect(),
         Expression::TemplateLiteral(_) => None,
         // `+` concatenates when either side is text; numbers it adds.

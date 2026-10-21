@@ -30,7 +30,7 @@ pub(super) fn extract_forward(call: &CallExpression<'_>) -> Result<Option<Forwar
         let oxc::ast::ast::ObjectPropertyKind::ObjectProperty(property) = property else {
             return Err(unread());
         };
-        if property.computed || property.key.static_name().as_deref() != Some("forward") {
+        if property.computed || !property.key.static_name().is_some_and(|name| name == "forward") {
             return Err(unread());
         }
         forward = Some(match unwrap_type_assertions(&property.value) {

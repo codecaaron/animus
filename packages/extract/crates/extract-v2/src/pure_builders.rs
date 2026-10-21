@@ -618,7 +618,7 @@ impl Walk<'_> {
                 };
                 let key = match &property.key {
                     PropertyKey::StaticIdentifier(key) => key.name.as_str(),
-                    PropertyKey::StringLiteral(key) => key.value.as_str(),
+                    PropertyKey::StringLiteral(key) if let Some(key) = key.value.as_str() => key,
                     PropertyKey::NumericLiteral(_) => "",
                     _ => return false,
                 };

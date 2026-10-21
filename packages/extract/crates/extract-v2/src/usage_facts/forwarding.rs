@@ -681,11 +681,11 @@ impl<'s> Module<'s> {
             let Statement::ImportDeclaration(import) = statement else { continue };
             for specifier in import.specifiers.iter().flatten() {
                 let Some(symbol) = specifier.local().symbol_id.get() else { continue };
-                let source = import.source.value.as_str();
+                let source = animus_system_loader::specifier_text(import.source.value);
                 sources.insert(symbol, source.to_string());
                 // Animus's `renderAsChild` clones the one child it gets, as
                 // its own `asChild` does.
-                if super::is_animus_system_specifier(source)
+                if super::is_animus_system_specifier(&source)
                     && matches!(specifier, ImportDeclarationSpecifier::ImportSpecifier(named) if named.imported.name() == "renderAsChild")
                 {
                     slot_renders.insert(symbol);
@@ -694,7 +694,7 @@ impl<'s> Module<'s> {
                     namespaces.insert(symbol);
                 }
                 // An import may hold elements its module builds.
-                if !REACT_MODULES.contains(&source) {
+                if !REACT_MODULES.contains(&source.as_ref()) {
                     let imports = BTreeSet::from([symbol]);
                     held.insert(symbol, Held { imports, ..Held::default() });
                 }
@@ -742,8 +742,12 @@ impl<'s> Module<'s> {
         // A re-export of React's own lets its exports go where the analysis
         // cannot follow writes to them.
         let reexports_react = program.body.iter().find_map(|statement| match statement {
-            Statement::ExportFromDeclaration(export) if REACT_MODULES.contains(&export.source.value.as_str()) => Some(export.span.start),
-            Statement::ExportAllDeclaration(export) if REACT_MODULES.contains(&export.source.value.as_str()) => Some(export.span.start),
+            Statement::ExportFromDeclaration(export) if export.source.value.as_str().is_some_and(|source| REACT_MODULES.contains(&source)) => {
+                Some(export.span.start)
+            }
+            Statement::ExportAllDeclaration(export) if export.source.value.as_str().is_some_and(|source| REACT_MODULES.contains(&source)) => {
+                Some(export.span.start)
+            }
             _ => None,
         });
         // A binding may hold a prototype unless it holds what the module
@@ -864,7 +868,7 @@ impl<'s> Module<'s> {
             BindingPattern::ObjectPattern(object) if matches!(value.inputs, Inputs::AllBut(_)) => {
                 let mut named = BTreeSet::new();
                 for property in &object.properties {
-                    let held = match (property.computed, property.key.static_name()) {
+                    let held = match (property.computed, property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str)) {
                         (false, Some(key)) => {
                             let name = self.names.id(&key);
                             named.insert(name);
@@ -1138,7 +1142,7 @@ impl<'s> Module<'s> {
 fn member_name(key: &PropertyKey<'_>) -> Option<String> {
     match key {
         PropertyKey::PrivateIdentifier(private) => Some(format!("#{}", private.name)),
-        key => key.static_name().map(|name| name.to_string()),
+        key => key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|name| name.to_string()),
     }
 }
 
@@ -1849,7 +1853,7 @@ impl<'r> Declarations<'r> {
         match unwrap_type_assertions(object) {
             Expression::StaticMemberExpression(member) => matches!(member.property.name.as_str(), "prototype" | "__proto__"),
             Expression::ComputedMemberExpression(member) => {
-                member.static_property_name().is_some_and(|name| matches!(name.as_str(), "prototype" | "__proto__"))
+                member.static_property_name().and_then(oxc::str::JSStr::as_str).is_some_and(|name| matches!(name, "prototype" | "__proto__"))
             }
             _ => false,
         }
@@ -1860,7 +1864,7 @@ impl<'r> Declarations<'r> {
     fn global_object_binding(&self, object: &Expression<'_>) -> bool {
         self.named_global(object, "Object")
             || matches!(unwrap_type_assertions(object), Expression::ComputedMemberExpression(member)
-                if member.static_property_name().is_none_or(|name| name == "Object")
+                if member.static_property_name().and_then(oxc::str::JSStr::as_str).is_none_or(|name| name == "Object")
                     && matches!(&member.object, Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none()))
     }
 
@@ -1930,7 +1934,7 @@ impl<'r> Declarations<'r> {
                 ObjectPropertyKind::ObjectProperty(property) => {
                     property.kind == PropertyKind::Init
                         && !property.computed
-                        && property.key.static_name().is_some_and(|key| !trusted_name(&key) || self.no_trusted_callable(&property.value))
+                        && property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|key| !trusted_name(&key) || self.no_trusted_callable(&property.value))
                 }
                 ObjectPropertyKind::SpreadProperty(_) => false,
             }),
@@ -2152,7 +2156,7 @@ impl<'r> Declarations<'r> {
                 }
                 Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == at => {
                     if members == 0 {
-                        first = member.static_property_name().map(|name| name.as_str());
+                        first = member.static_property_name().and_then(oxc::str::JSStr::as_str);
                     }
                     member.span
                 }
@@ -2259,7 +2263,7 @@ fn declares_itself(flags: SymbolFlags, kinds: SymbolFlags) -> bool {
 fn property_key<'a>(key: &oxc::ast::ast::PropertyKey<'a>) -> Option<Cow<'a, str>> {
     match key {
         oxc::ast::ast::PropertyKey::NumericLiteral(number) => js_number_key(number.value).map(Cow::Owned),
-        key => key.static_name(),
+        key => key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str),
     }
 }
 
@@ -2289,7 +2293,7 @@ impl LiteralShape {
         for property in &object.properties {
             match property {
                 ObjectPropertyKind::ObjectProperty(property) => {
-                    let name = property.key.static_name().filter(|_| !property.computed);
+                    let name = property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).filter(|_| !property.computed);
                     let sets_prototype = !property.shorthand && name.as_deref() == Some("__proto__");
                     shape.plain &= property.kind == PropertyKind::Init && !sets_prototype;
                     // A setter runs on a store with the object as `this`.
@@ -2592,14 +2596,14 @@ impl<'a> Visit<'a> for Declarations<'a> {
         let unread = matches!(&property.value, BindingPattern::BindingIdentifier(id) if id.symbol_id.get().is_some_and(|symbol| {
             self.scoping.symbol_scope_id(symbol) != self.scoping.root_scope_id() && self.scoping.get_resolved_reference_ids(symbol).is_empty()
         }));
-        if (property.computed && !unread) || property.key.static_name().is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
+        if (property.computed && !unread) || property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
             self.patch(property.span.start, "prototype-let-go");
         }
         oxc::ast_visit::walk::walk_binding_property(self, property);
     }
 
     fn visit_assignment_target_property_property(&mut self, property: &oxc::ast::ast::AssignmentTargetPropertyProperty<'a>) {
-        if property.computed || property.name.static_name().is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
+        if property.computed || property.name.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
             self.patch(property.span.start, "prototype-let-go");
         }
         oxc::ast_visit::walk::walk_assignment_target_property_property(self, property);
@@ -2632,7 +2636,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
                     None => (None, true),
                 },
             },
-            _ => (member.static_property_name().map(|name| Cow::Borrowed(name.as_str())), true),
+            _ => (member.static_property_name().and_then(oxc::str::JSStr::as_str).map(Cow::Borrowed), true),
         };
         let held = match &member.expression {
             Expression::Identifier(id) => Some(&**id),
@@ -2647,18 +2651,18 @@ impl<'a> Visit<'a> for Declarations<'a> {
         // `__defineGetter__`, `__defineSetter__` and their kin write into the
         // object they are called on.
         if let Some(member) = callee.filter(|member| {
-            member.static_property_name().is_some_and(|name| name.len() > 4 && name.starts_with("__") && name.ends_with("__"))
+            member.static_property_name().and_then(oxc::str::JSStr::as_str).is_some_and(|name| name.len() > 4 && name.starts_with("__") && name.ends_with("__"))
         }) {
             self.written_into(member.object(), true);
         }
         // `getPrototypeOf`'s result, off any root but a binding the module
         // declares, is a prototype.
-        if callee.is_some_and(|member| member.static_property_name() == Some("getPrototypeOf") && !self.module_binding(member.object()))
+        if callee.is_some_and(|member| member.static_property_name().is_some_and(|name| name == "getPrototypeOf") && !self.module_binding(member.object()))
             && self.reshapes(call.span)
         {
             self.patch(call.span.start, "prototype-use");
         }
-        if let Some((Expression::Identifier(object), Some(name))) = callee.map(|member| (member.object(), member.static_property_name())) {
+        if let Some((Expression::Identifier(object), Some(name))) = callee.map(|member| (member.object(), member.static_property_name().and_then(oxc::str::JSStr::as_str))) {
             if self.symbol(object).is_none() {
                 // A built-in that writes into its first argument; a spread
                 // first argument is a target the module does not own.
@@ -2726,7 +2730,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
                             }
                         }
                         member => {
-                            if member.static_property_name().is_some_and(|name| HOOK_KEYS.contains(&name)) {
+                            if member.static_property_name().and_then(oxc::str::JSStr::as_str).is_some_and(|name| HOOK_KEYS.contains(&name)) {
                                 self.hookable_bindings.insert(symbol);
                             } else {
                                 self.named_stores.insert(symbol);
@@ -3008,7 +3012,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 ObjectPropertyKind::ObjectProperty(property) => {
                     !property.computed
                         && property.kind == PropertyKind::Init
-                        && property.key.static_name().is_some_and(|name| plain_key(&name))
+                        && property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|name| plain_key(&name))
                         && match unwrap_type_assertions(&property.value) {
                             Expression::Identifier(_) => inputs_only(&property.value),
                             Expression::StaticMemberExpression(member) => {
@@ -3121,7 +3125,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 ObjectPropertyKind::ObjectProperty(property) => {
                     !property.computed
                         && property.kind == PropertyKind::Init
-                        && property.key.static_name().is_some_and(|name| plain_key(&name))
+                        && property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|name| plain_key(&name))
                         && caller(&property.value)
                 }
             }),
@@ -3630,7 +3634,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 self.member_read(at, member.span, Some(member.property.name.as_str()), value)
             }
             AstKind::ComputedMemberExpression(member) if member.object.span() == current => {
-                self.member_read(at, member.span, member.static_property_name().as_ref().map(|name| name.as_str()), value)
+                self.member_read(at, member.span, member.static_property_name().and_then(oxc::str::JSStr::as_str), value)
             }
             AstKind::PrivateFieldExpression(member) if member.object.span() == current => Self::read_through(value),
             // The value is a computed key.
@@ -3794,7 +3798,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 };
                 let name = match member {
                     oxc::ast::ast::MemberExpression::PrivateFieldExpression(private) => Some(format!("#{}", private.field.name)),
-                    member => member.static_property_name().map(str::to_string),
+                    member => member.static_property_name().and_then(oxc::str::JSStr::as_str).map(str::to_string),
                 };
                 match unwrap_type_assertions(member.object()) {
                     // A plain store on an instance nothing can reshape.
@@ -4048,7 +4052,7 @@ impl<'a> Walk<'_, '_, 'a> {
             match unwrap_type_assertions(expression) {
                 Expression::ObjectExpression(object) => object.properties.iter().all(|property| match property {
                     ObjectPropertyKind::ObjectProperty(property) if !property.computed => {
-                        property.key.static_name().map(|name| into.push(name.to_string())).is_some()
+                        property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).map(|name| into.push(name.to_string())).is_some()
                     }
                     _ => false,
                 }),
@@ -4730,7 +4734,7 @@ fn param_inputs(params: &oxc::ast::ast::FormalParameters<'_>) -> Vec<(SymbolId, 
             BindingPattern::ObjectPattern(object) => {
                 let mut named = Vec::new();
                 for property in &object.properties {
-                    let input = match (property.computed, property.key.static_name()) {
+                    let input = match (property.computed, property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str)) {
                         (false, Some(key)) => {
                             named.push(key.to_string());
                             let host_default = match &property.value {
@@ -4802,7 +4806,7 @@ fn plain_config(call: &CallExpression<'_>) -> bool {
 fn plain_object(object: &oxc::ast::ast::ObjectExpression<'_>) -> bool {
     object.properties.iter().all(|property| {
         matches!(property, ObjectPropertyKind::ObjectProperty(property)
-            if !property.computed && property.key.static_name().is_some_and(|name| plain_key(&name)))
+            if !property.computed && property.key.static_name().and_then(oxc::ast::StaticPropertyName::into_cow_str).is_some_and(|name| plain_key(&name)))
     })
 }
 

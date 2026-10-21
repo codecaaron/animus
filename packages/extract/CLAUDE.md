@@ -6,7 +6,7 @@ Static CSS extraction pipeline. Parses TS/TSX via OXC, walks builder chains, eva
 
 Two independent Rust crates (no Cargo workspace). Cargo selects toolchains by
 invocation directory, so each has its own aligned `rust-toolchain.toml`.
-OXC 0.154 requires Rust >= 1.97; the current release pin also includes the
+OXC 0.155 requires Rust >= 1.97; the current release pin also includes the
 Mach-O stripping fix needed on macOS 27.
 
 ```
@@ -120,7 +120,7 @@ bun run build:v2:debug        # debug NAPI
 ## Known Failure Modes
 
 - **Stale `.node` binary after signature change:** adding/removing/reordering NAPI parameters silently accepts wrong arity or crashes. Fix: `rm crates/extract-v2/*.node && vp run build:extract-v2`.
-- **OXC version:** consumed via the `oxc` umbrella crate (pinned `0.154`), not individual `oxc_*` crates.
+- **OXC version:** consumed via the `oxc` umbrella crate (pinned `0.155`), not individual `oxc_*` crates.
 - **Per-property bail diagnostics:** check `[skip]` markers in extraction errors for what was skipped.
 
 ## Debugging Quick-Ref

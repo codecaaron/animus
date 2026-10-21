@@ -364,19 +364,15 @@ fn number(value: f64) -> Result<StaticValue, BailError> {
 }
 
 /// A string literal's text as JavaScript holds it. One with a lone surrogate
-/// has none: oxc writes its value encoded (`\u{FFFD}` and the code unit in
-/// hex), which no static text may stand for.
+/// has none: no Rust string holds it, and no static text may stand for it.
 pub(crate) fn literal_string<'a>(literal: &oxc::ast::ast::StringLiteral<'a>) -> Option<&'a str> {
-    (!literal.lone_surrogates).then(|| literal.value.as_str())
+    literal.value.as_str()
 }
 
 /// A template element's cooked text, as `literal_string` reads a string's:
 /// none for one with a lone surrogate, or with an invalid escape.
 pub(crate) fn cooked_text<'a>(quasi: &oxc::ast::ast::TemplateElement<'a>) -> Option<&'a str> {
-    if quasi.lone_surrogates {
-        return None;
-    }
-    quasi.value.cooked.as_ref().map(|cooked| cooked.as_str())
+    quasi.value.cooked.and_then(oxc::str::JSStr::as_str)
 }
 
 fn lone_surrogate() -> BailError {
@@ -625,11 +621,11 @@ pub fn parse_variant_arg(
             let key = eval_property_key(&p.key)?;
             match key.as_str() {
                 "prop" => match &p.value {
-                    Expression::StringLiteral(lit) if literal_string(lit).is_some() => prop = lit.value.to_string(),
+                    Expression::StringLiteral(lit) if let Some(text) = literal_string(lit) => prop = text.to_string(),
                     other => all_skips.push(skip("prop", expression_kind(other), "variant prop name (non-static)", other)),
                 },
                 "defaultVariant" => match &p.value {
-                    Expression::StringLiteral(lit) if literal_string(lit).is_some() => default_variant = Some(lit.value.to_string()),
+                    Expression::StringLiteral(lit) if let Some(text) = literal_string(lit) => default_variant = Some(text.to_string()),
                     // A boolean variant's default names its key.
                     Expression::BooleanLiteral(lit) => default_variant = Some(lit.value.to_string()),
                     other => all_skips.push(skip(
@@ -1257,7 +1253,7 @@ fn system_function_bindings(program: &Program<'_>, in_package: bool) -> FxHashMa
         let Statement::ImportDeclaration(import) = stmt else {
             continue;
         };
-        if !crate::usage_facts::is_animus_system_specifier(&import.source.value) {
+        if !import.source.value.as_str().is_some_and(crate::usage_facts::is_animus_system_specifier) {
             continue;
         }
         for specifier in import.specifiers.iter().flatten() {

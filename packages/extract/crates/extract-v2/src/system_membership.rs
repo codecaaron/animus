@@ -736,14 +736,14 @@ fn loaded_module(init: &Expression<'_>) -> Option<String> {
         Expression::ParenthesizedExpression(paren) => loaded_module(&paren.expression),
         Expression::AwaitExpression(awaited) => loaded_module(&awaited.argument),
         Expression::ImportExpression(import) => match &import.source {
-            Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+            Expression::StringLiteral(literal) => crate::eval::literal_string(literal).map(str::to_string),
             _ => None,
         },
         Expression::CallExpression(call) => match (&call.callee, call.arguments.first().and_then(Argument::as_expression)) {
             (Expression::Identifier(callee), Some(Expression::StringLiteral(literal)))
                 if callee.name == "require" && call.arguments.len() == 1 =>
             {
-                Some(literal.value.to_string())
+                crate::eval::literal_string(literal).map(str::to_string)
             }
             _ => None,
         },
@@ -763,7 +763,8 @@ fn import_local_spans(program: &Program<'_>) -> BTreeMap<(String, String), u32> 
                 ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => &default.local,
                 ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => continue,
             };
-            spans.entry((import.source.value.to_string(), local.name.to_string())).or_insert(local.span.start);
+            let Some(source) = import.source.value.as_str() else { continue };
+            spans.entry((source.to_string(), local.name.to_string())).or_insert(local.span.start);
         }
     }
     spans

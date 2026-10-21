@@ -116,7 +116,7 @@ impl<'a> Lowering<'a, '_> {
                     || (!classic && self.names.is_compiled_fragment(first))
             }
             Argument::StaticMemberExpression(member) => static_member_root(member).is_some(),
-            Argument::StringLiteral(tag) => !classic && host_tag(&tag.value),
+            Argument::StringLiteral(tag) => !classic && tag.value.as_str().is_some_and(host_tag),
             _ => false,
         };
         // A spread among the ignored arguments is no metadata.
@@ -247,7 +247,9 @@ impl<'a> Lowering<'a, '_> {
             Some(Argument::StaticMemberExpression(member)) => {
                 JSXElementName::MemberExpression(self.jsx_member(member.unbox()))
             }
-            Some(Argument::StringLiteral(tag)) => JSXElementName::new_identifier(tag.span, tag.value, &self.builder),
+            Some(Argument::StringLiteral(tag)) => {
+                JSXElementName::new_identifier(tag.span, tag.value.as_arena_str().expect("lowerable checked the tag"), &self.builder)
+            }
             _ => unreachable!("lowerable checked the component"),
         }
     }
@@ -369,11 +371,12 @@ fn attribute_name<'a>(key: &PropertyKey<'a>) -> Option<&'a str> {
     match key {
         PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
         PropertyKey::StringLiteral(literal) => {
-            let mut chars = literal.value.chars();
+            let text = literal.value.as_str()?;
+            let mut chars = text.chars();
             let first = chars.next()?;
             ((first.is_ascii_alphabetic() || first == '_' || first == '$')
                 && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '-')))
-            .then(|| literal.value.as_str())
+            .then_some(text)
         }
         _ => None,
     }

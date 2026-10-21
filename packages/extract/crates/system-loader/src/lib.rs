@@ -648,10 +648,17 @@ fn resolve_relative(
 }
 
 fn module_export_name(name: &oxc::ast::ast::ModuleExportName<'_>) -> String {
-    match name {
-        oxc::ast::ast::ModuleExportName::IdentifierName(id) => id.name.to_string(),
-        oxc::ast::ast::ModuleExportName::IdentifierReference(id) => id.name.to_string(),
-        oxc::ast::ast::ModuleExportName::StringLiteral(literal) => literal.value.to_string(),
+    name.name().to_string()
+}
+
+/// The specifier an import or re-export names. One holding a lone surrogate
+/// names no file: it is kept as a leading NUL and its escaped text, which no
+/// path holds and no two such specifiers share, so it resolves to nothing and
+/// the load fails where any unresolvable import does.
+pub fn specifier_text(value: oxc::str::JSStr<'_>) -> std::borrow::Cow<'_, str> {
+    match value.as_str() {
+        Some(specifier) => std::borrow::Cow::Borrowed(specifier),
+        None => std::borrow::Cow::Owned(format!("\0{value:?}")),
     }
 }
 

@@ -147,7 +147,7 @@ impl<'s> TransformReferences<'s> {
             {
                 // A static name labels diagnostics; the binding stays the identity.
                 let name = match call.arguments.first() {
-                    Some(Argument::StringLiteral(literal)) => literal.value.as_str(),
+                    Some(Argument::StringLiteral(literal)) if let Some(name) = literal.value.as_str() => name,
                     _ => at,
                 };
                 let definition = call
