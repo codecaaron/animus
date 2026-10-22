@@ -778,6 +778,10 @@ export function packageReaches(
       })
     ));
   const result: PackageReach[] = [];
+  // Each package's roots, by directory: an analysed file reaches every
+  // package with a root among its ancestors, so each file's ancestors are
+  // walked once for all of them.
+  const byRoot = new Map<string, string[][]>();
   for (const [identity, instances] of byIdentity) {
     const key = [
       root,
@@ -792,21 +796,27 @@ export function packageReaches(
       decisions.set(key, decision);
     }
     if (decision.roots === null) continue;
-    const roots = new Set(decision.roots);
-    const reaches = [...absolutes()]
-      .filter(([, absolute]) => {
-        for (let dir = dirname(absolute); ; dir = dirname(dir)) {
-          if (roots.has(dir)) return true;
-          if (dirname(dir) === dir) return false;
-        }
-      })
-      .map(([file]) => file);
+    const reaches: string[] = [];
+    for (const packageRoot of new Set(decision.roots)) {
+      byRoot.set(packageRoot, [...(byRoot.get(packageRoot) ?? []), reaches]);
+    }
     result.push({
       identity,
-      reaches: reaches.sort(),
+      reaches,
       ...(decision.local && { local: true as const }),
     });
   }
+  if (result.length === 0) return result;
+  for (const [file, absolute] of absolutes()) {
+    // A package with several roots above a file takes it once.
+    const reached = new Set<string[]>();
+    for (let dir = dirname(absolute); ; dir = dirname(dir)) {
+      for (const reaches of byRoot.get(dir) ?? []) reached.add(reaches);
+      if (dirname(dir) === dir) break;
+    }
+    for (const reaches of reached) reaches.push(file);
+  }
+  for (const { reaches } of result) reaches.sort();
   return result;
 }
 
