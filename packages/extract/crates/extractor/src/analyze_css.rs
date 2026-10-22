@@ -19329,8 +19329,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// Contract: a family's slots are what compose's `Object.entries` reads of
     /// its slots object. A repeated key holds its last value, which its
     /// member tag renders; the value it replaces renders through no member
-    /// tag, so it escapes and keeps every option. `__proto__: X` sets the
-    /// object's prototype: no slot, and X escapes.
+    /// tag, so it escapes and keeps every option. A later definition that is
+    /// no plain identifier (a member, a cast, an accessor, a method) drops the
+    /// slot, and a later spread or computed key drops every slot before it.
+    /// `__proto__: X` sets the object's prototype: no slot, and X escapes.
     #[test]
     fn a_repeated_compose_slot_key_holds_its_last_value() {
         let render = ("d.tsx", "import { R } from './r';\nexport const D = () => <R size=\"sm\" busy />;\n");
@@ -19346,6 +19348,18 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(kept("{ Root: Plain, Cell: Other, Cell: R }", "Cell"), followed);
         assert_eq!(kept("{ Root: Other, Root: R }", "Root"), followed);
         assert_eq!(kept("{ Root: Plain, Cell: R, Cell: Other }", "Cell"), every);
+        for slots in [
+            "{ Root: Plain, Cell: R, Cell: maybe.x }",
+            "{ Root: Plain, Cell: R, Cell: Other as any }",
+            "{ Root: Plain, Cell: R, get Cell() { return Other; } }",
+            "{ Root: Plain, Cell: R, Cell() { return null; } }",
+            "{ Root: Plain, Cell: R, ...more }",
+            "{ Root: Plain, Cell: R, [key]: Other }",
+        ] {
+            assert_eq!(kept(slots, "Cell"), every, "{slots}");
+        }
+        assert_eq!(kept("{ Root: R, ...more }", "Root"), every);
+        assert_eq!(kept("{ ...more, Root: Plain, Cell: R }", "Cell"), followed);
         assert_eq!(kept("{ Root: R, __proto__: Other }", "Root"), followed);
         assert_eq!(kept("{ Root: Plain, __proto__: R }", "Root"), every);
         // A shorthand `__proto__` is a plain member.

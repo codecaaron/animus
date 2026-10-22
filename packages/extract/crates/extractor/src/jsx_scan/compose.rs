@@ -300,48 +300,56 @@ fn extract_compose_family(
 
     let mut slots: Vec<(String, String)> = Vec::new();
     let mut slot_values: Vec<(u32, u32)> = Vec::new();
-    let mut root_binding = String::new();
     let mut open = false;
 
+    // Each property defines its key as `Object.entries` reads it: the last
+    // definition wins. One whose value is no plain identifier (a member, a
+    // cast, a call, an accessor, a method) holds what the scan cannot name,
+    // so it drops the slot it defines, and an earlier value escapes. A spread
+    // or a key the scan cannot read may define any key before it, so it drops
+    // every slot so far.
     for prop in &obj.properties {
-        if let ObjectPropertyKind::ObjectProperty(prop) = prop {
-            let slot_name = match eval_property_key(&prop.key) {
-                Some(name) => name,
-                None => {
-                    open = true;
-                    continue;
-                }
-            };
-            // `__proto__: X` sets the slots object's prototype, which
-            // compose's `Object.entries` never reads: no slot, and its value
-            // renders through no member tag. A shorthand is a plain member.
-            if slot_name == "__proto__" && !prop.shorthand && !prop.computed {
-                continue;
-            }
-            let Expression::Identifier(id) = &prop.value else {
-                open = true;
-                continue;
-            };
-            let binding_name = id.name.to_string();
-            if slot_name == "Root" {
-                root_binding = binding_name.clone();
-            }
-            // A repeated key holds its last value, as `Object.entries` reads
-            // it; the value it replaces renders through no member tag.
-            match slots.iter().position(|(slot, _)| *slot == slot_name) {
-                Some(at) => {
-                    slots[at].1 = binding_name;
-                    slot_values[at] = (id.span.start, id.span.end);
-                }
-                None => {
-                    slots.push((slot_name, binding_name));
-                    slot_values.push((id.span.start, id.span.end));
-                }
-            }
-        } else {
+        let ObjectPropertyKind::ObjectProperty(prop) = prop else {
             open = true;
+            slots.clear();
+            slot_values.clear();
+            continue;
+        };
+        let Some(slot_name) = eval_property_key(&prop.key) else {
+            open = true;
+            slots.clear();
+            slot_values.clear();
+            continue;
+        };
+        // `__proto__: X` sets the slots object's prototype, which compose's
+        // `Object.entries` never reads: no slot, and its value renders
+        // through no member tag. A shorthand is a plain member.
+        if slot_name == "__proto__" && !prop.shorthand && !prop.computed {
+            continue;
+        }
+        let at = slots.iter().position(|(slot, _)| *slot == slot_name);
+        let Expression::Identifier(id) = &prop.value else {
+            open = true;
+            if let Some(at) = at {
+                slots.remove(at);
+                slot_values.remove(at);
+            }
+            continue;
+        };
+        // A repeated key holds its last value; the value it replaces renders
+        // through no member tag.
+        match at {
+            Some(at) => {
+                slots[at].1 = id.name.to_string();
+                slot_values[at] = (id.span.start, id.span.end);
+            }
+            None => {
+                slots.push((slot_name, id.name.to_string()));
+                slot_values.push((id.span.start, id.span.end));
+            }
         }
     }
+    let root_binding = slots.iter().find(|(slot, _)| slot == "Root").map(|(_, binding)| binding.clone()).unwrap_or_default();
 
     if root_binding.is_empty() || slots.is_empty() {
         return;
