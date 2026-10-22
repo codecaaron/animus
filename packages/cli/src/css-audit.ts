@@ -1962,7 +1962,9 @@ function callerValues(
     }
     if (!attr.optional) return { values };
   }
-  if (spread !== undefined) return throughSpread(undefined);
+  // Left out by the spread's callers, the prop takes what leaving it out
+  // here does.
+  if (spread !== undefined) return throughSpread(omitted);
   take(omitted);
   return { values };
 }
