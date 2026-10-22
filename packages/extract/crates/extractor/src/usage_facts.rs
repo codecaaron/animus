@@ -6797,7 +6797,8 @@ struct FactCollector<'a, 's> {
     /// reaches its declarator.
     local_origins: FxHashMap<SymbolId, ValueOrigin>,
     /// The module has no `with` statement, whose object can stand in for
-    /// any name read inside it, so a `const` named there is the `const`.
+    /// any name read inside it, so a name read is the binding its scope
+    /// gives: a `const`, a parameter, the props object.
     locals: bool,
 }
 
@@ -6863,7 +6864,7 @@ impl<'a> FactCollector<'a, '_> {
                     })),
                     None => {
                         spread = Some(attrs.len());
-                        spread_forward = self.enrich.then(|| self.spread_forward_of(&spread_attribute.argument)).flatten();
+                        spread_forward = (self.enrich && self.locals).then(|| self.spread_forward_of(&spread_attribute.argument)).flatten();
                     }
                 }
             }
@@ -6871,6 +6872,7 @@ impl<'a> FactCollector<'a, '_> {
                 let JSXAttributeName::Identifier(id) = &attr.name else {
                     continue;
                 };
+                replace_earlier(&mut attrs, &mut spread, &id.name);
                 let written = attribute_expression(&attr.value).map(crate::chain_walk::unwrap_type_assertions);
                 // An explicit `undefined` is an omitted prop, as at runtime.
                 if written.is_some_and(|expression| is_absent(expression, self.origins)) {
@@ -7330,6 +7332,9 @@ impl FactCollector<'_, '_> {
     /// enclosing component passed on unchanged, a React state hook's state
     /// slot, or a value computed from the component's props.
     fn value_origin(&self, expression: &Expression<'_>) -> ValueOrigin {
+        if !self.locals {
+            return ValueOrigin::Unknown;
+        }
         if let Some(forwarded) = self.forwarded_prop(expression) {
             return ValueOrigin::Forwarded(forwarded);
         }
@@ -7866,6 +7871,18 @@ fn state_slots(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<SymbolId, 
     let mut scan = Scan { scoping, hooks, states: FxHashMap::default() };
     scan.visit_program(program);
     scan.states
+}
+
+/// An attribute replaces what every earlier one of its name wrote, the
+/// branches of a listed spread included, as the last of duplicate JSX
+/// attributes wins at run time (JSX accepts them; TypeScript alone rejects
+/// them), whether or not it is then recorded: one that writes nothing is
+/// the prop left out.
+fn replace_earlier(attrs: &mut Vec<AttrFact>, spread: &mut Option<usize>, name: &str) {
+    if let Some(before) = spread {
+        *before -= attrs[..*before].iter().filter(|attr| attr.name == name).count();
+    }
+    attrs.retain(|attr| attr.name != name);
 }
 
 /// Whether `program` has a `with` statement anywhere (sloppy scripts only).

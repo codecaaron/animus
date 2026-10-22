@@ -2525,22 +2525,59 @@ mod tests {
         }
     }
 
-    /// Contract: a module with a `with` statement proves no `const` by its
-    /// declarator, since the statement's object can stand in for the name.
+    /// Contract: the last of an element's attributes of one name decides
+    /// what it writes, as a later duplicate replaces an earlier one at run
+    /// time (JSX accepts them; TypeScript alone rejects them). A later value
+    /// that is or may be `undefined` keeps the default though an earlier
+    /// attribute sets the prop, at the element and through a wrapper whose
+    /// element its callers render; and a wrapper's attribute the rest
+    /// cannot carry settles the prop only where it is never nullish.
     #[test]
-    fn a_const_read_where_a_with_statement_may_shadow_it_is_not_proven() {
+    fn the_last_attribute_of_a_name_decides_whether_the_default_is_kept() {
+        for site in [
+            "export default ({ on }) => <Chip size=\"lg\" size={on ? 'sm' : undefined} />;",
+            "export default () => <Chip size=\"lg\" size={undefined} />;",
+            "const W = ({ on, ...rest }) => <Chip {...rest} size=\"lg\" size={on ? 'sm' : undefined} />;\nexport default () => <W on />;",
+            "const W = ({ on, size, ...rest }) => <Chip size={on ? 'sm' : undefined} {...rest} />;\nexport default () => <W on />;",
+        ] {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let source = format!(
+                "export const Chip = ds.variant({{ prop: 'size', defaultVariant: 'md', variants: {{ sm: {{ color: 'red' }}, md: {{ color: 'green' }}, lg: {{ color: 'blue' }} }} }}).asElement('div');\n{site}\n"
+            );
+            let manifest: serde_json::Value = serde_json::from_str(
+                &engine.analyze_full(serde_json::json!([{ "path": "a.jsx", "source": source }]).to_string(), None).unwrap(),
+            )
+            .unwrap();
+            let css = manifest["css"].as_str().unwrap();
+            assert!(css.contains("--size-default {\n    color: green"), "{site}: {css}");
+        }
+    }
+
+    /// Contract: a module with a `with` statement proves no `const` by its
+    /// declarator and names no origin for a value, since the statement's
+    /// object can stand in for any name read inside it: a `const`, a
+    /// parameter, the props object.
+    #[test]
+    fn a_name_read_where_a_with_statement_may_shadow_it_is_not_proven_or_traced() {
         let mut engine = ExtractEngine::new(None).unwrap();
         let source = "function Page({ on }) {\n\
                         const size = on ? 'sm' : 'lg';\n\
                         with ({ size: 'md' }) { return <Chip size={size} />; }\n\
-                      }\n";
+                      }\n\
+                      function Outer({ size }) { with ({ size: 'lg' }) { return <Chip size={size} />; } }\n\
+                      function Tag(props) { with ({ props: { size: 'lg' } }) { return <Chip size={props.size} />; } }\n\
+                      function Spread(props) { with ({ props: { size: 'lg' } }) { return <Chip {...props} />; } }\n";
         let manifest: serde_json::Value = serde_json::from_str(
             &engine.analyze_full(serde_json::json!([{ "path": "a.js", "source": source }]).to_string(), None).unwrap(),
         )
         .unwrap();
-        let attr = &manifest["fileFacts"]["a.js"]["proven"][0]["element"]["attrs"][0];
-        assert_eq!(attr["name"], "size", "{manifest:#}");
-        assert_eq!(attr["proven"], false);
+        let element = |index: usize| manifest["fileFacts"]["a.js"]["proven"][index]["element"].clone();
+        assert_eq!(element(0)["attrs"][0]["name"], "size", "{manifest:#}");
+        assert_eq!(element(0)["attrs"][0]["proven"], false);
+        for (index, why) in [(1, "a parameter"), (2, "a member of the props object")] {
+            assert!(element(index)["attrs"][0].get("forwarded").is_none(), "{why} under `with` forwards nothing: {:#}", element(index));
+        }
+        assert!(element(3).get("spreadForward").is_none(), "a spread of the props under `with` forwards nothing: {:#}", element(3));
     }
 
     /// Contract: the manifest names the component's own prop a runtime

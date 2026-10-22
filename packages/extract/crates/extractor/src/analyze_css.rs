@@ -5514,13 +5514,14 @@ fn spread_wrapper_targets(
                         paths.entry(named.clone()).or_default().extend(ids);
                     }
                     // An attribute after the spread, or one the rest cannot
-                    // carry, is the element's own.
+                    // carry and never nullish, is the element's own.
                     match self.elements.get(span) {
                         Some(UsageFact::Element { attrs, spread, .. }) => attrs
                             .iter()
                             .enumerate()
                             .filter(|(index, attr)| {
-                                attr.settles(*index, *spread) || (!attr.optional && named.contains(&attr.name))
+                                attr.settles(*index, *spread)
+                                    || (!attr.optional && !attr.absent && named.contains(&attr.name))
                             })
                             .map(|(_, attr)| attr.name.clone())
                             .collect(),
