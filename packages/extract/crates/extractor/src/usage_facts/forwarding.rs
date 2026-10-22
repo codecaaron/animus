@@ -294,6 +294,10 @@ pub(super) const NATIVE_CONSTRUCTORS: [&str; 33] = [
     "EvalError", "URIError", "AggregateError", "Node", "Element", "HTMLElement", "SVGElement", "Event", "Window",
 ];
 
+/// The read methods that return a new array of the built-in kind when the
+/// array they read is one.
+const NEW_ARRAY_METHODS: [&str; 8] = ["filter", "map", "slice", "concat", "flat", "flatMap", "toSorted", "toReversed"];
+
 /// The array methods that store what they get in the array, and call
 /// nothing.
 const ARRAY_WRITE_METHODS: [&str; 4] = ["push", "unshift", "splice", "fill"];
@@ -1191,10 +1195,14 @@ struct Declarations<'r> {
     slot_renders: &'r FxHashSet<SymbolId>,
     setters: FxHashMap<SymbolId, Vec<SymbolId>>,
     hook_states: FxHashMap<u32, Vec<SymbolId>>,
-    /// `const`s declared to an array literal: at the module's top, and in a
-    /// function.
+    /// `const`s declared to an array literal, or to a `NEW_ARRAY_METHODS`
+    /// call on one of these declared before (`derived_arrays`): at the
+    /// module's top, and in a function.
     module_arrays: FxHashSet<SymbolId>,
     local_arrays: FxHashSet<SymbolId>,
+    /// Each array of `module_arrays` and `local_arrays` a method call builds,
+    /// with the array the call reads: built-in only while that one is.
+    derived_arrays: FxHashMap<SymbolId, SymbolId>,
     classes: FxHashMap<u32, ClassFacts>,
     /// The binding each class is declared to.
     class_bindings: FxHashMap<SymbolId, u32>,
@@ -1325,6 +1333,7 @@ impl<'r> Declarations<'r> {
             hook_states: FxHashMap::default(),
             module_arrays: FxHashSet::default(),
             local_arrays: FxHashSet::default(),
+            derived_arrays: FxHashMap::default(),
             classes: FxHashMap::default(),
             class_bindings: FxHashMap::default(),
             tag_references: FxHashMap::default(),
@@ -1408,6 +1417,18 @@ impl<'r> Declarations<'r> {
 
     fn symbol(&self, id: &IdentifierReference<'_>) -> Option<SymbolId> {
         super::symbol_of(self.scoping, id)
+    }
+
+    /// The array `init` reads when it is a `NEW_ARRAY_METHODS` call on an
+    /// array declared before (`module_arrays`, `local_arrays`).
+    fn array_source(&self, init: &Expression<'_>) -> Option<SymbolId> {
+        let Expression::CallExpression(call) = init else { return None };
+        let Expression::StaticMemberExpression(member) = unwrap_type_assertions(&call.callee) else { return None };
+        let Expression::Identifier(array) = unwrap_type_assertions(&member.object) else { return None };
+        let source = self.symbol(array)?;
+        (NEW_ARRAY_METHODS.contains(&member.property.name.as_str())
+            && (self.module_arrays.contains(&source) || self.local_arrays.contains(&source)))
+        .then_some(source)
     }
 
     fn declare_params(&mut self, scope: ScopeId, params: &oxc::ast::ast::FormalParameters<'_>) {
@@ -2954,12 +2975,17 @@ impl<'a> Visit<'a> for Declarations<'a> {
                     if let Some(callee) = top_level_callee(self.scoping, init).filter(|_| constant) {
                         self.call_consts.insert(symbol, callee);
                     }
+                    let derived = self.array_source(init);
                     match init {
                         Expression::ArrayExpression(_) if constant && self.depth == 0 => {
                             self.module_arrays.insert(symbol);
                         }
                         Expression::ArrayExpression(_) if constant => {
                             self.local_arrays.insert(symbol);
+                        }
+                        _ if constant && derived.is_some() => {
+                            (if self.depth == 0 { &mut self.module_arrays } else { &mut self.local_arrays }).insert(symbol);
+                            self.derived_arrays.extend(derived.map(|source| (symbol, source)));
                         }
                         _ => {}
                     }
@@ -4625,16 +4651,34 @@ impl Arrays {
         // A direct `eval` leaves no usage proven (`FileFacts::direct_eval`).
         let name = |symbol: &SymbolId| scoping.symbol_name(*symbol).to_string();
         let allowed = |symbol: &SymbolId, kinds: &[Use]| uses[symbol.index()] & !kinds.iter().fold(0, |bits, kind| bits | kind.bit()) == 0;
-        let (exported_arrays, private_arrays): (Vec<SymbolId>, Vec<SymbolId>) =
-            declarations.module_arrays.iter().partition(|symbol| exported.contains(scoping.symbol_name(**symbol)));
+        // An exported array a method call builds is as unknown as before.
+        let (exported_arrays, private_arrays): (Vec<SymbolId>, Vec<SymbolId>) = declarations
+            .module_arrays
+            .iter()
+            .filter(|symbol| !(declarations.derived_arrays.contains_key(symbol) && exported.contains(scoping.symbol_name(**symbol))))
+            .partition(|symbol| exported.contains(scoping.symbol_name(**symbol)));
         // A module array outlives every call, so only what keeps it where it
         // is leaves its methods the built-in ones; a function's own array is
         // also returned before anyone else can change it.
-        let built = private_arrays
+        let mut built: FxHashSet<SymbolId> = private_arrays
             .into_iter()
             .filter(|symbol| allowed(symbol, &[Use::Read, Use::Write, Use::Rendered]))
             .chain(declarations.local_arrays.iter().copied().filter(|symbol| allowed(symbol, &[Use::Read, Use::Write, Use::Rendered, Use::Returned])))
             .collect();
+        // A method of an array that is not built may return anything.
+        loop {
+            let unbuilt: Vec<SymbolId> = built
+                .iter()
+                .copied()
+                .filter(|symbol| declarations.derived_arrays.get(symbol).is_some_and(|source| !built.contains(source)))
+                .collect();
+            if unbuilt.is_empty() {
+                break;
+            }
+            for symbol in unbuilt {
+                built.remove(&symbol);
+            }
+        }
         // Another module may read an exported array or an import: each must
         // read it in place, and the analysis checks them all.
         let held: FxHashSet<SymbolId> =

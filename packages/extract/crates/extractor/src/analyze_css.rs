@@ -15763,6 +15763,17 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ("const items = ['a'];\nconst Frame = ({ children }) => <section>{children}</section>;\nconst Render = ({ children }) => <ul><Frame>{items}</Frame>{items.map((item) => <li key={item}>{children}</li>)}</ul>;", "", "", true),
             ("const items = ['a'];\nfunction get() { return items; }\nconst Render = ({ children }) => <ul>{items.map((item) => <li key={item}>{children}</li>)}</ul>;", "", "", true),
             ("import { rows } from './other';\nconst Render = () => <ul>{rows.map((row) => <Box key={row} p={4} />)}</ul>;", "", "import { pad } from 'outside';\nexport const rows = ['a'];\n(rows[0] as any) = pad;\n", true),
+            // So is an array a new-array method of one returns, while that
+            // one keeps the built-in methods; an exported one is unknown.
+            ("const rows = [...new Set(['a', 'b'])];\nconst Render = () => { const shown = rows.filter((row) => row !== 'b'); return <ul>{shown.map((row) => <Box key={row} p={4} />)}</ul>; };", "", "", false),
+            ("const rows = ['a'];\nconst kept = rows.slice(1);\nconst Render = () => <ul>{kept.map((row) => <Box key={row} p={4} />)}</ul>;", "", "", false),
+            ("const rows = ['a'];\nconst Render = () => { const once = rows.filter((row) => row !== 'b'); const twice = once.map((row) => row); return <ul>{twice.map((row) => <Box key={row} p={4} />)}</ul>; };", "", "", false),
+            ("const rows = ['a'];\ndecorate(rows);\nconst Render = () => { const shown = rows.filter((row) => row !== 'b'); return <ul>{shown.map((row) => <Box key={row} p={4} />)}</ul>; };", "", "", true),
+            ("const rows = ['a'];\nconst Render = () => { const shown = rows.filter((row) => row !== 'b'); shown.map = decorate; return <ul>{shown.map((row) => <Box key={row} p={4} />)}</ul>; };", "", "", true),
+            ("const rows = ['a'];\nconst Render = () => { const shown = rows.filter((row) => row !== 'b'); decorate(shown); return <ul>{shown.map((row) => <Box key={row} p={4} />)}</ul>; };", "", "", true),
+            ("const Render = () => { const rows = ['a']; const shown = rows.fill('b'); return <ul>{shown.map((row) => <Box key={row} p={4} />)}</ul>; };", "", "", true),
+            ("const rows = ['a'];\nexport const kept = rows.slice(1);\nconst Render = () => <ul>{kept.map((row) => <Box key={row} p={4} />)}</ul>;", "", "", true),
+            ("import { rows } from './other';\nconst Render = () => { const shown = rows.filter((row) => row !== 'b'); return <ul>{shown.map((row) => <Box key={row} p={4} />)}</ul>; };", "", "export const rows = ['a'];\n", true),
             // A call carries the elements its callee returns, however the
             // callee reaches it.
             ("import { useCallback } from 'react';\nconst Render = () => { const r = useCallback(() => <Box p={4} />, []); return <Foreign>{r()}</Foreign>; };", "", "", true),
