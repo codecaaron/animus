@@ -20793,6 +20793,72 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// Contract: a record of components a module uses only by identity
+    /// (`usage_facts::identity_records`) hands none of them on. Iterating it,
+    /// comparing its components and keying a Map or Set with them, read back
+    /// only to look up, keeps `R` to the options its renders write; anything
+    /// that may render, call, store, convert or hand on a component from it
+    /// keeps every option.
+    #[test]
+    fn a_record_used_only_by_identity_hands_on_none_of_its_components() {
+        let pruned = (vec!["sm"], vec!["active"]);
+        let every = (vec!["sm", "md", "lg"], vec!["active", "busy"]);
+        for (setup, kept) in [
+            // The inspector's name table: spellings by identity, a cache keyed by component.
+            (
+                "const table: Record<string, unknown> = { R };\n\
+                 const isComponent = (value: unknown): value is object => typeof value === 'function' || (typeof value === 'object' && value !== null && '$$typeof' in value);\n\
+                 function spellings(entries: Record<string, unknown>[]) {\n\
+                   const names = new Map<object, string[]>();\n\
+                   const add = (value: object, name: string) => names.set(value, [...(names.get(value) ?? []), name]);\n\
+                   for (const entry of entries) {\n\
+                     for (const [key, value] of Object.entries(entry)) {\n\
+                       if (value === null || (typeof value !== 'object' && typeof value !== 'function')) continue;\n\
+                       if (isComponent(value)) add(value, key);\n\
+                       for (const [member, part] of Object.entries(value as Record<string, unknown>)) if (isComponent(part)) add(part, `${key}.${member}`);\n\
+                     }\n\
+                   }\n\
+                   return names;\n\
+                 }\n\
+                 const canonical = (all: string[]) => all.find((name) => name.includes('.')) ?? all[0]!;\n\
+                 let cache: Map<object, string> | null = null;\n\
+                 export function partName(type: unknown): string | undefined {\n\
+                   cache ??= new Map([...spellings([table])].map(([value, names]) => [value, canonical(names)]));\n\
+                   return typeof type === 'function' ? cache.get(type as object) : undefined;\n\
+                 }",
+                &pruned,
+            ),
+            ("const table = { R };\nexport const isPart = (x: unknown) => Object.values(table).includes(x);", &pruned),
+            ("const table = { R };\nconst parts = new Set(Object.values(table));\nexport const isPart = (x: unknown) => parts.has(x);", &pruned),
+            ("const table = { R };\nexport const nameOf = (x: unknown) => Object.entries(table).find(([, c]) => c === x)?.[0];", &pruned),
+            ("const table = { R };\nconst t = table;\nexport const isPart = (x: unknown) => Object.values(t).includes(x);", &pruned),
+            // A Map value read and rendered.
+            ("const table = { R };\nconst byName = new Map(Object.entries(table));\nexport const Pick = ({ k }: { k: string }) => { const C = byName.get(k)!; return <C size=\"lg\" />; };", &every),
+            // Keys read back and rendered.
+            ("const table = { R };\nconst seen = new Map(Object.values(table).map((c) => [c, 1]));\nexport const All = () => <>{[...seen.keys()].map((C) => <C key=\"k\" size=\"lg\" />)}</>;", &every),
+            // Handed to code outside the analysis.
+            ("import { register } from 'lib';\nconst table = { R };\nregister(table);", &every),
+            // A component called, stored, or converted.
+            ("const table = { R };\nObject.values(table).forEach((c) => (c as () => void)());", &every),
+            ("const table = { R };\nexport const holder: Record<string, unknown> = {};\nfor (const c of Object.values(table)) holder.c = c;", &every),
+            ("const table = { R };\nexport const label = () => Object.values(table).map((c) => `${c}`);", &every),
+            // A receiver the module did not build, whose methods code may
+            // replace, or a callee anyone may replace.
+            ("import { leak } from 'lib';\nconst table = { R };\nconst seen: unknown[] = [];\n(seen as any).includes = (c: unknown) => leak(c);\nexport const isPart = () => Object.values(table).some((c) => seen.includes(c));", &every),
+            ("import { register } from 'lib';\nconst table = { R };\nconst seen = new Set<unknown>();\nregister(seen);\nexport const isPart = () => Object.values(table).some((c) => seen.has(c));", &every),
+            ("import { foreign } from 'lib';\nconst table = { R };\nlet lookup = new Map<unknown, number>();\nlookup = foreign;\nfor (const c of Object.values(table)) lookup.set(c, 1);", &every),
+            ("import { keys } from 'lib';\nconst table = { R };\nkeys.map(() => Object.values(table)[0]);", &every),
+            ("const table = { R };\nlet same = (c: unknown) => c === null;\nexport const swap = (f: typeof same) => { same = f; };\nfor (const c of Object.values(table)) same(c);", &every),
+            // A Map of them, or a function returning one, that other modules read.
+            ("const table = { R };\nexport const lookup = new Map(Object.values(table).map((c) => [c, 1]));", &every),
+            ("const table = { R };\nexport function first() { return Object.values(table)[0]; }", &every),
+            ("const table = { R };\nexport const first = function inner() { return Object.values(table)[0]; };", &every),
+        ] {
+            let app = format!("import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n");
+            assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]), kept, "{setup}");
+        }
+    }
+
     /// An escape opens the component the escaping file names through its own
     /// imports, never a project component that only shares the name.
     #[test]

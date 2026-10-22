@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 mod forwarding;
+mod identity_records;
 mod renders_through;
 
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
@@ -1628,9 +1629,15 @@ pub(crate) fn collect_enriched_usage(
         .zip(react_imports.as_ref())
         .map(|(scoping, react)| ordinary_components(program, scoping, react, &BTreeSet::new(), direct_eval))
         .unwrap_or_default();
+    // Records of components the module uses only by identity hand none on.
+    let identity_records = match origins {
+        Some(scoping) if !direct_eval => identity_records::identity_records(program, scoping, module),
+        _ => FxHashSet::default(),
+    };
     let (escapes, terminal_escapes, deferred_escapes) = match &scoping {
         Some(scoping) if may_escape => {
             let mut scan = EscapeScan {
+                identity_records: &identity_records,
                 admissible: &admissible,
                 react_bindings: admissible_wrappers.keys().chain(admissible_aliases.keys()).cloned().collect(),
                 scoping,
@@ -1710,7 +1717,9 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
-    let records = origins.map(|scoping| forwarding::forwarding(program, scoping, chains, &exported, &aliases)).unwrap_or_default();
+    let records = origins
+        .map(|scoping| forwarding::forwarding(program, scoping, chains, &exported, &aliases, &identity_records))
+        .unwrap_or_default();
     let (prop_tags, name_uses, namespace_member_uses) =
         origins.map(|scoping| prop_tags_and_uses(program, scoping, &react)).unwrap_or_default();
     let builder_import_references =
@@ -6396,6 +6405,8 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
 /// its dotted path (`Card.Body`).
 struct EscapeScan<'a, 's> {
     scoping: &'s Scoping,
+    /// See `identity_records`: their references hand nothing over.
+    identity_records: &'s FxHashSet<SymbolId>,
     chains: &'s [&'s ChainDescriptor],
     /// See `ComposeFamilyInfo::slot_values`, for every family of the
     /// module's facts that usage follows (`ComposeFamilyInfo::addressable`).
@@ -6520,7 +6531,7 @@ impl<'a> Visit<'a> for EscapeScan<'a, '_> {
             return;
         }
         let name = self.scoping.symbol_name(symbol);
-        if !self.is_candidate(name) || self.aliases.followed(ident.span) {
+        if !self.is_candidate(name) || self.aliases.followed(ident.span) || self.identity_records.contains(&symbol) {
             return;
         }
         let Some(Escape { path, deferral }) = self.escape_path(name, ident.span) else { return };

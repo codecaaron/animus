@@ -432,9 +432,11 @@ pub(super) fn forwarding<'a>(
     chains: &[&ChainDescriptor],
     exported: &FxHashSet<&str>,
     aliases: &super::LocalAliases,
+    identity_records: &FxHashSet<SymbolId>,
 ) -> Records {
     let mut module = Module::of(program, scoping, chains, exported);
     module.aliases = aliases.elements.clone();
+    module.identity_records = identity_records.clone();
     let tops: Vec<Rc<[String]>> = program.body.iter().map(|statement| top_level_names(statement).into()).collect();
     let mut contexts: FxHashMap<u32, Context<'a>> = FxHashMap::default();
     // Every statement is walked once, in order; then each unit that read
@@ -549,6 +551,8 @@ struct Module<'s> {
     element_tags: FxHashMap<u32, BTreeSet<Name>>,
     /// See `LocalAliases::elements`: each alias element's tags.
     aliases: FxHashMap<u32, Vec<(String, TagOrigin)>>,
+    /// See `identity_records`: reads of these hand nothing on.
+    identity_records: FxHashSet<SymbolId>,
     names: Names,
     /// The functions a top-level statement declares (a component, a helper,
     /// a class method): their parameters are inputs, and React or the
@@ -831,6 +835,7 @@ impl<'s> Module<'s> {
             arguments: FxHashMap::default(),
             element_tags: FxHashMap::default(),
             aliases: FxHashMap::default(),
+            identity_records: FxHashSet::default(),
             names: Names::default(),
             roots: FxHashSet::default(),
             unit: Unit::Statement(0),
@@ -4483,6 +4488,9 @@ impl<'a> Visit<'a> for Walk<'_, '_, 'a> {
             return;
         }
         let value = match super::binding_of(self.module.scoping, reference) {
+            // A record of components the module uses only by identity
+            // (`identity_records`) hands none on.
+            Some(symbol) if self.module.identity_records.contains(&symbol) => None,
             // A function bound to a local carries what it returns to whoever
             // calls it.
             Some(symbol) => {
