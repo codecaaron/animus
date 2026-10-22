@@ -6396,6 +6396,20 @@ fn bounded_prop_tags(
     // Code given a namespace `opened_modules` names may also set a
     // component's `defaultProps`, its `as` among them.
     let opened: OnceCell<BTreeSet<String>> = OnceCell::new();
+    // The declarations the elements handed to code outside the analysis
+    // name, read once: an element of one may be cloned with any prop.
+    let delivered_targets: OnceCell<FxHashSet<(String, String)>> = OnceCell::new();
+    let delivered_target_set = || {
+        let mut targets = FxHashSet::default();
+        for delivery in delivered_tags.iter().filter(|delivery| files.contains_key(&delivery.file)) {
+            let (file, tag) = (delivery.file.as_str(), delivery.tag.as_str());
+            let ff = &files[file];
+            targets.extend(declared(file, ff, tag));
+            targets.extend(ordinary_members.get(&(file.to_string(), tag.to_string())).cloned());
+            targets.extend(namespace_declared(file, ff, tag));
+        }
+        targets
+    };
     let mut bounded: FxHashMap<(String, String, String), bool> = FxHashMap::default();
     let mut renders_bounded = |module: &String, function: &String, prop: &String| -> bool {
         let target = (module.clone(), function.clone());
@@ -6414,15 +6428,15 @@ fn bounded_prop_tags(
         if opened.get_or_init(|| opened_modules(files, inputs, false)).iter().any(|opened| reexports_from(opened, module)) {
             return false;
         }
-        // An element of it handed to code outside the analysis may be cloned
-        // with any prop.
         let names_target = |file: &str, tag: &str| {
             let ff = &files[file];
             declared(file, ff, tag).as_ref() == Some(&target)
                 || ordinary_members.get(&(file.to_string(), tag.to_string())) == Some(&target)
                 || namespace_declared(file, ff, tag).as_ref() == Some(&target)
         };
-        if delivered_tags.iter().any(|delivery| files.contains_key(&delivery.file) && names_target(&delivery.file, &delivery.tag)) {
+        // An element of it handed to code outside the analysis may be cloned
+        // with any prop.
+        if delivered_targets.get_or_init(delivered_target_set).contains(&target) {
             return false;
         }
         // Each render that analysed code is seen making: an outer component's
@@ -11524,6 +11538,7 @@ fn run_with_system_floor(
     });
 
     let typed_system_props = utility_classes.typed_props().clone();
+    let scales = crate::dynamic_meta::ScaleValues::default();
     let mut dynamic_props: HashMap<String, DynamicPropMeta> = HashMap::new();
     for prop_name in &dynamic_prop_names {
         if let Some(prop_config) = inputs.config.get(prop_name.as_str()) {
@@ -11544,6 +11559,7 @@ fn run_with_system_floor(
                     &inputs.theme,
                     &inputs.contextual_vars,
                     &inputs.numeric_properties,
+                    &scales,
                 ),
             );
         }
@@ -11795,6 +11811,7 @@ fn run_with_system_floor(
                         &inputs.theme,
                         &inputs.contextual_vars,
                         &inputs.numeric_properties,
+                        &scales,
                     ),
                 );
             }

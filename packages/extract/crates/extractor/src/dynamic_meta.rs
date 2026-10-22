@@ -163,6 +163,7 @@ impl DynamicPropMeta {
         theme: &FlatTheme,
         contextual_vars: &ContextualVarsMap,
         numeric_properties: &rustc_hash::FxHashSet<String>,
+        scales: &ScaleValues,
     ) -> Self {
         let strict = is_strict_scale(config, theme);
         Self::Value(ValuePropMeta {
@@ -184,7 +185,7 @@ impl DynamicPropMeta {
             transform_name: config.transform.clone(),
             transform_id: config.transform_id.clone(),
             transform_fn_source: config.transform_fn_source.clone(),
-            scale_values: scale_values(config, theme, contextual_vars),
+            scale_values: scales.of(config, theme, contextual_vars),
             current_var: config
                 .current_var
                 .as_deref()
@@ -290,6 +291,26 @@ pub fn share_slots(metas: &mut HashMap<String, DynamicPropMeta>) {
     }
 }
 
+/// Each named scale's `scale_values`, read off the theme once per analysis
+/// however many props name it: a named scale's entries depend on its name,
+/// the theme and the contextual variables alone.
+#[derive(Default)]
+pub struct ScaleValues(std::cell::RefCell<rustc_hash::FxHashMap<String, BTreeMap<String, Value>>>);
+
+impl ScaleValues {
+    fn of(&self, config: &PropConfig, theme: &FlatTheme, contextual_vars: &ContextualVarsMap) -> BTreeMap<String, Value> {
+        let Some(Value::String(name)) = &config.scale else {
+            return scale_values(config, theme, contextual_vars);
+        };
+        if let Some(values) = self.0.borrow().get(name) {
+            return values.clone();
+        }
+        let values = scale_values(config, theme, contextual_vars);
+        self.0.borrow_mut().insert(name.clone(), values.clone());
+        values
+    }
+}
+
 /// Keep named and inline scale entries identical for system and custom slots.
 /// A named scale's contextual variables are tokens that resolve to themselves.
 fn scale_values(
@@ -356,7 +377,7 @@ mod tests {
         .unwrap();
         let theme: FlatTheme = [("colors.red".to_string(), "#f00".to_string())].into_iter().collect();
         let contextual_vars: ContextualVarsMap = serde_json::from_str(contextual_vars).unwrap();
-        let meta = DynamicPropMeta::new("--animus-tint".into(), "animus-dyn-tint".into(), &config, &theme, &contextual_vars, &Default::default());
+        let meta = DynamicPropMeta::new("--animus-tint".into(), "animus-dyn-tint".into(), &config, &theme, &contextual_vars, &Default::default(), &ScaleValues::default());
         meta.value().unwrap().clone()
     }
 
