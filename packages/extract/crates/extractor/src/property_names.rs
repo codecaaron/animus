@@ -35,6 +35,9 @@ pub struct ContextualVarsMap {
     /// Exact final spelling → declared name, unless that spelling is itself
     /// declared: a declared name always wins, so nothing is renamed twice.
     aliases: FxHashMap<String, String>,
+    /// Whether any declared name emits a different name, kept with
+    /// `aliases` since both change only with `finals`.
+    renames: bool,
 }
 
 impl<'de> Deserialize<'de> for ContextualVarsMap {
@@ -92,6 +95,7 @@ impl ContextualVarsMap {
     }
 
     fn rebuild_aliases(&mut self) {
+        self.renames = self.finals.iter().any(|(name, final_name)| name != final_name);
         self.aliases = self
             .finals
             .iter()
@@ -124,11 +128,6 @@ impl ContextualVarsMap {
     pub fn in_scale(&self, scale: &str, spelling: &str) -> Option<&ContextualVar> {
         let identity = self.identity(spelling)?;
         self.scale(scale).iter().find(|var| var.name == identity)
-    }
-
-    /// Whether any declared name emits a different name.
-    fn renames(&self) -> bool {
-        self.finals.iter().any(|(name, final_name)| name != final_name)
     }
 
     /// The custom property an authored `--name` emits: a declared contextual
@@ -164,7 +163,8 @@ impl ContextualVarsMap {
     /// `url()` and comments are copied unchanged.
     pub fn rename_authored<'a>(&self, css: &'a str) -> Cow<'a, str> {
         // A custom-property name is spelled with `--` or with an escape.
-        if !self.renames() || !(css.contains("--") || css.contains('\\')) {
+        debug_assert_eq!(self.renames, self.finals.iter().any(|(name, final_name)| name != final_name));
+        if !self.renames || !(css.contains("--") || css.contains('\\')) {
             return Cow::Borrowed(css);
         }
         let mut out = String::new();
