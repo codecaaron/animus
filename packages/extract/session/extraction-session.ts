@@ -86,6 +86,7 @@ import {
   resolveVerbosity,
   runProjectAnalysis,
   serializeStaticCss,
+  unitFallbackMemo,
   sharesVolumeRoot,
   snapshotFilePlans,
   diffFilePlans,
@@ -544,6 +545,9 @@ export class ExtractionSession {
   private kitInstanceMap: Readonly<Record<string, string>> = {};
   /** Each file's alias comparison, kept by content hash across analyses. */
   private readonly aliasCache = new AliasAgreementCache();
+  /** The unit fallback of this session's development passes, through the
+   *  last pass's blocks. */
+  private readonly unitFallback = unitFallbackMemo();
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
   /** The host's aliases are the project's tsconfig `paths`: each full pass
@@ -3211,6 +3215,7 @@ export class ExtractionSession {
         ...(await this.compareAliasesWithHost(fileEntries)),
       ],
       kitDescriptors: this.kitDescriptors,
+      ...(devMode && { unitFallback: this.unitFallback }),
     });
     if (result.manifest) {
       assertRuntimeImportSuppliesTerminals(this.runtimeImport, result.manifest);

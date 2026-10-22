@@ -6,6 +6,32 @@ import { isUnitlessProperty } from '@animus-ui/properties';
  *  in step. */
 const WORD_CHAR = /[A-Za-z0-9_#+-]/;
 
+/**
+ * `applyUnitFallback` through the last stylesheet's blocks: no rewrite spans
+ * a `}` (its value is `[^;{}]+`), so each block's result is its own, and a
+ * block the last call saw is not read again. A session's development passes
+ * share one, so an edit reads only the blocks it changed.
+ */
+export function unitFallbackMemo(): (css: string) => string {
+  let kept = new Map<string, string>();
+  return (css) => {
+    const next = new Map<string, string>();
+    let out = '';
+    for (let at = 0; at < css.length;) {
+      const end = css.indexOf('}', at);
+      const stop = end === -1 ? css.length : end + 1;
+      const block = css.slice(at, stop);
+      const fixed =
+        next.get(block) ?? kept.get(block) ?? applyUnitFallback(block);
+      next.set(block, fixed);
+      out += fixed;
+      at = stop;
+    }
+    kept = next;
+    return out;
+  };
+}
+
 export function applyUnitFallback(css: string): string {
   return css.replace(
     /(--[\w-]+|[a-z-]+)\s*:\s*([^;{}]+);/g,

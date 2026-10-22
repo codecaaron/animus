@@ -101,6 +101,9 @@ export interface AnalysisOptions {
   /** Diagnostics gathered outside analysis, surfaced through the same
    *  policy point as the manifest's own. */
   extraDiagnostics?: import('./manifest-diagnostics').ManifestDiagnostic[];
+  /** The unit fallback to apply: a session's `unitFallbackMemo` on its
+   *  development passes, else `applyUnitFallback`. */
+  unitFallback?: (css: string) => string;
   /** The analysed kits' descriptors, which discovery read. */
   kitDescriptors?: readonly KitDescriptorRecord[];
 }
@@ -418,7 +421,7 @@ export function runProjectAnalysis(
       ...(manifest.diagnostics ?? []),
     ];
   }
-  const componentCss = applyUnitFallback(manifest.css);
+  const componentCss = (opts.unitFallback ?? applyUnitFallback)(manifest.css);
   const propertyDiagnostics = checkCustomProperties({
     system: opts.system,
     manifest,
