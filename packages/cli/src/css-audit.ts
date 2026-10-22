@@ -192,6 +192,17 @@ export interface Unproven {
     /** The matched callers that pass a React state hook's state slot,
      *  which changes at run time: the hook and its call, `file:line`. */
     runtimeState: Array<{ hook: string; at: string }>;
+    /** The matched callers that pass a value computed from their own
+     *  component's props, which those components' callers decide. */
+    derived: Array<{
+      at: string;
+      component: string;
+      props: string[];
+      through: string | null;
+    }>;
+    /** A matched caller passes a value the audit cannot read and cannot
+     *  say where it comes from. */
+    unexplained: boolean;
   } | null;
   /** The build-wide hold (`CssAuditReport.restructures.pruningHold`) keeps
    *  every option of this component, so no change at a site can remove one
@@ -278,6 +289,8 @@ interface UsageAttr {
   skip?: boolean;
   /** Written by only some branches of a spread, so it may be left out. */
   optional?: boolean;
+  /** A proven value may also be `undefined` or `null`. */
+  absent?: boolean;
   /** Where a runtime value is written, in UTF-8 bytes of its file. */
   dynamicSpan?: { start: number; end: number };
   /** The enclosing component's own prop a runtime value passes on
@@ -289,15 +302,21 @@ interface UsageAttr {
   runtimeState?: { hook: string; at: number };
 }
 
+/** The props of its component a value is computed from (`UsageAttr`). */
+type Derived = NonNullable<UsageAttr['derived']>;
+
 /** A prop of the enclosing component a value passes on: the prop as a
  *  caller writes it, or a member of the object it holds (`path`); left
- *  out, `default`, or `nullish`, which also replaces `null`. */
+ *  out, `default`, or `nullish`, which also replaces `null`; with
+ *  `nullToUndefined` (`prop ?? undefined`), a `null` passed on as
+ *  `undefined`. */
 interface ForwardedFact {
   component: string;
   prop: string;
   path?: string[];
   default?: Literal;
   nullish?: Literal;
+  nullToUndefined?: boolean;
 }
 
 interface UsageFact {
@@ -1684,6 +1703,8 @@ function reachedByCallers(
     throughImports: false,
     chain: [],
     states: [],
+    derived: [],
+    unexplained: false,
   };
   const read = { byDeclaration, routes, reading };
   for (const { axis, options, dynamic } of kept) {
@@ -1705,7 +1726,7 @@ function reachedByCallers(
       options: options.filter((option) => passed.has(option)),
     });
   }
-  const { unread, states, ...matched } = reading;
+  const { unread, states, derived, ...matched } = reading;
   if (!matched.inModule && !matched.throughImports) return none;
   return {
     reachedByCallers: reached,
@@ -1716,6 +1737,12 @@ function reachedByCallers(
       runtimeState: states.map(({ site, hook, at }) => ({
         hook,
         at: locate({ site, start: at }),
+      })),
+      derived: derived.map(({ site, at, derived: from }) => ({
+        at: locate({ site, start: at }),
+        component: from.component,
+        props: from.props,
+        through: from.through ?? null,
       })),
     },
   };
@@ -1735,6 +1762,11 @@ interface CallerReading {
   chain: string[];
   /** The matched callers that pass a React state hook's state slot. */
   states: Array<{ site: Site; hook: string; at: number }>;
+  /** The matched callers that pass a value computed from their own
+   *  component's props, where it is written. */
+  derived: Array<{ site: Site; at: number | null; derived: Derived }>;
+  /** A matched caller passes a value no origin explains. */
+  unexplained: boolean;
 }
 
 /** Every value the matched callers of `forwarded`, declared in `file`, pass
@@ -1758,6 +1790,7 @@ function forwardedValues(
   const declaration = `${file}::${forwarded.component}`;
   if (onPath.has(declaration)) {
     reading.unread = true;
+    reading.unexplained = true;
     return values;
   }
   onPath.add(declaration);
@@ -1771,10 +1804,15 @@ function forwardedValues(
     if (caller.file === file) reading.inModule = true;
     else reading.throughImports = true;
     const passed = callerValues(caller, forwarded);
-    if (passed === null) reading.unread = true;
-    else if ('state' in passed) {
+    if (passed === null) {
+      reading.unread = true;
+      reading.unexplained = true;
+    } else if ('state' in passed) {
       reading.unread = true;
       reading.states.push({ site: caller, ...passed.state });
+    } else if ('derived' in passed) {
+      reading.unread = true;
+      reading.derived.push({ site: caller, ...passed });
     } else if ('forwarded' in passed) {
       const inner = forwardedValues(
         caller.file,
@@ -1806,11 +1844,12 @@ function memberAt(
 }
 
 /** Every value `site` passes as `forwarded`'s prop, or the prop of its own
- *  component it passes on there, or `null` where one may be a value the
- *  audit cannot read: no proven literal, a member it cannot read, or a
- *  spread that can replace the attribute or deliver the prop. A prop left
- *  out takes its default, else its `nullish` literal; `null` and a missing
- *  member take the `nullish` literal. */
+ *  component it passes on there, or the origin a caller's value has (React
+ *  state, or computed from its own component's props), or `null` where one
+ *  may be a value the audit cannot read: no proven literal, a member it
+ *  cannot read, or a spread that can replace the attribute or deliver the
+ *  prop. A prop left out takes its default, else its `nullish` literal;
+ *  `null` and a missing member take the `nullish` literal. */
 function callerValues(
   site: Site,
   forwarded: ForwardedFact
@@ -1818,8 +1857,10 @@ function callerValues(
   | { values: Set<string> }
   | { forwarded: ForwardedFact }
   | { state: NonNullable<UsageAttr['runtimeState']> }
+  | { derived: Derived; at: number | null }
   | null {
-  const { prop, path = [], nullish } = forwarded;
+  const { prop, path = [] } = forwarded;
+  let nullish = forwarded.nullish;
   let omitted = forwarded.default ?? nullish;
   if (site.attrs === null) return null;
   const values = new Set<string>();
@@ -1832,7 +1873,12 @@ function callerValues(
   const passing = site.through?.(prop);
   if (passing === 'kept') return leftOut();
   if (passing === 'unread') return null;
-  if (passing !== undefined) omitted = passing.omitted;
+  // The runtime fills a forwarded option's default for `undefined` and
+  // `null` alike (`??=`); one without a default arrives as written.
+  if (passing !== undefined && passing.omitted !== undefined) {
+    omitted = passing.omitted;
+    nullish = passing.omitted;
+  }
   // A spread that may hold the prop: any but a rest that never carries it.
   const spread =
     site.spread !== undefined &&
@@ -1840,7 +1886,7 @@ function callerValues(
       ? site.spread
       : undefined;
   // A spread of the enclosing component's props passes on what its
-  // callers write, or `fallback` where they leave it out.
+  // callers write, `null` included, or `fallback` where they leave it out.
   const throughSpread = (fallback: Literal | undefined) =>
     site.spreadForward === undefined || path.length > 0 || values.size > 0
       ? null
@@ -1849,6 +1895,7 @@ function callerValues(
             component: site.spreadForward.component,
             prop,
             ...(fallback !== undefined && { default: fallback }),
+            ...(nullish !== undefined && { nullish }),
           },
         };
   // Walking back, an attribute settles the prop unless a branch of a
@@ -1858,17 +1905,21 @@ function callerValues(
     if (attr.name !== prop || attr.skip) continue;
     if (spread !== undefined && index < spread) {
       const [only] = attr.values;
-      if (!attr.proven || attr.values.length !== 1 || only === undefined) {
+      if (
+        !attr.proven ||
+        attr.absent ||
+        attr.values.length !== 1 ||
+        only === undefined
+      ) {
         return null;
       }
       return isLiteral(only) ? throughSpread(only) : null;
     }
-    if (
-      attr.runtimeState !== undefined &&
-      !attr.optional &&
-      values.size === 0
-    ) {
-      return { state: attr.runtimeState };
+    if (!attr.optional && values.size === 0) {
+      if (attr.runtimeState !== undefined) return { state: attr.runtimeState };
+      if (attr.derived !== undefined) {
+        return { derived: attr.derived, at: attr.dynamicSpan?.start ?? null };
+      }
     }
     const inner = attr.forwarded;
     if (
@@ -1878,12 +1929,16 @@ function callerValues(
       path.length === 0
     ) {
       // What the caller leaves out or makes null falls through to this
-      // forward's own fallbacks, then this prop's.
+      // forward's own fallbacks, then this prop's; a `null` it passes on
+      // as `undefined` arrives here left out.
+      const { nullToUndefined, ...passedOn } = inner;
       const fallback = inner.default ?? inner.nullish ?? omitted;
-      const nullFallback = inner.nullish ?? nullish;
+      const nullFallback = nullToUndefined
+        ? omitted
+        : (inner.nullish ?? nullish);
       return {
         forwarded: {
-          ...inner,
+          ...passedOn,
           ...(fallback !== undefined && { default: fallback }),
           ...(nullFallback !== undefined && { nullish: nullFallback }),
         },
@@ -1898,6 +1953,13 @@ function callerValues(
       } else if (isLiteral(value)) take(value ?? nullish);
       else return null;
     }
+    // A value that may be `undefined` or `null` also selects what leaving
+    // the prop out does, and what `null` does.
+    if (attr.absent) {
+      if (path.length > 0) return null;
+      take(omitted);
+      take(nullish);
+    }
     if (!attr.optional) return { values };
   }
   if (spread !== undefined) return throughSpread(undefined);
@@ -1910,7 +1972,11 @@ function derivedPhrase({
   component,
   props,
   through,
-}: Unproven['derived'][number]): string {
+}: {
+  component: string;
+  props: string[];
+  through: string | null;
+}): string {
   const named = props.map((prop) => `${component}'s ${prop}`).join(' and ');
   return `derived from ${named}${through === null ? '' : ` through ${through}`}`;
 }
@@ -1940,9 +2006,27 @@ function keptSuggestion(unproven: Unproven): string {
         unproven.forwards.map(({ component, prop }) => `${component}'s ${prop}`)
       ),
     ];
-    parts.push(
-      `${props.join(' and ')} ${props.length === 1 ? 'passes' : 'pass'} on what ${components.size === 1 ? 'its callers write' : 'their callers write'}: literals at those callers would let the engine see which options they reach.`
-    );
+    // A caller whose value is React state, or computed from its own
+    // component's props, gets no literal remedy: one would replace it.
+    const matched = unproven.matchedCallers;
+    const origins =
+      matched !== null &&
+      matched.runtimeState.length + matched.derived.length > 0;
+    if (!origins || matched.unexplained) {
+      parts.push(
+        `${props.join(' and ')} ${props.length === 1 ? 'passes' : 'pass'} on what ${components.size === 1 ? 'its callers write' : 'their callers write'}: literals at ${origins ? 'the callers whose value the audit cannot read' : 'those callers'} would let the engine see which options they reach.`
+      );
+    }
+    for (const { hook, at } of matched?.runtimeState ?? []) {
+      parts.push(
+        `A matched caller passes runtime state (${hook} at ${at}): no change is suggested there.`
+      );
+    }
+    for (const from of matched?.derived ?? []) {
+      parts.push(
+        `A matched caller passes a value ${derivedPhrase(from)} (at ${from.at}): what ${from.component}'s callers pass decides it, so a change belongs at those callers; a literal there would drop ${from.component}'s ${from.props.length === 1 ? 'prop' : 'props'}.`
+      );
+    }
   }
   for (const derived of unproven.derived) {
     const { component, props } = derived;
@@ -1990,11 +2074,20 @@ function callerEvidence(unproven: Unproven | undefined): string | null {
   return [
     `callers matched ${where}${through} pass ${passed.length > 0 ? passed.join('; ') : 'none of the options listed'}`,
     notPassed === null
-      ? matched.runtimeState.length > 0 && !matched.unmatchedRoute
-        ? `a matched caller passes runtime state (${matched.runtimeState.map(({ hook, at }) => `${hook} at ${at}`).join(', ')})`
-        : matched.unmatchedRoute
-          ? 'a forwarding component is also reached where the audit cannot match its callers (a dynamic import, a use other than as a tag, a namespace member, or an element handed to code the analysis does not read), so no list of options left out is given'
-          : 'a matched caller passes a value the audit cannot read'
+      ? [
+          matched.runtimeState.length > 0 &&
+            `a matched caller passes runtime state (${matched.runtimeState.map(({ hook, at }) => `${hook} at ${at}`).join(', ')})`,
+          ...matched.derived.map(
+            (from) =>
+              `a matched caller passes a value ${derivedPhrase(from)} (at ${from.at})`
+          ),
+          matched.unexplained &&
+            'a matched caller passes a value the audit cannot read',
+          matched.unmatchedRoute &&
+            'a forwarding component is also reached where the audit cannot match its callers (a dynamic import, a use other than as a tag, a namespace member, or an element handed to code the analysis does not read), so no list of options left out is given',
+        ]
+          .filter(Boolean)
+          .join('; ')
       : notPassed.length > 0
         ? `options no matched caller passes: ${notPassed.join(', ')}`
         : 'matched callers already pass every listed option',

@@ -739,8 +739,12 @@ async function forwardAudit(
  *  named, however many times it renders the forward; a member of an object
  *  prop is read off the object a caller writes; a `prop ?? literal`
  *  forward takes the literal where a caller leaves the prop out or passes
- *  null; an `.asComponent()` component's sites are its target's callers,
- *  without what it keeps back (`forward: true` keeps nothing back); a
+ *  null, and a `prop ?? undefined` one passes a null on as left out, which
+ *  takes the next component's default; a caller's value that may be
+ *  `undefined` also passes what leaving it out does; an `.asComponent()`
+ *  component's sites are its target's callers, without what it keeps back
+ *  (`forward: true` keeps nothing back), and with its forwarded default
+ *  for a null as for a prop left out; a
  *  component also reached by a route the matching misses gives no options
  *  left out; and callers in the forwarding component's own module are
  *  named so. */
@@ -800,6 +804,48 @@ test("a forward's callers are read through what passes their values on", async (
     expect(chained.text).toContain(
       '(with the callers of Outer, Spread, which pass it on)'
     );
+    // A caller's proven value that may be `undefined` also passes what
+    // leaving the prop out does.
+    const maybe = await forwardAudit(
+      root,
+      forward({ component: 'Wrap', prop: 'size', default: 'lg' }),
+      {
+        'src/app.tsx': [
+          tag('Wrap', [
+            { name: 'size', values: ['sm'], proven: true, absent: true },
+          ]),
+        ],
+      },
+      declared({ 'src/app.tsx': { Wrap: 'src/wrap.tsx::Wrap' } })
+    );
+    expect(maybe.reachedByCallers).toEqual([
+      { axis: 'size', options: ['sm', 'lg'] },
+    ]);
+    // `size ?? undefined` passes a `null` on as `undefined`, which takes
+    // the next component's parameter default.
+    const nullToDefault = await forwardAudit(
+      root,
+      forward({ component: 'Inner', prop: 'size', default: 'lg' }),
+      {
+        'src/outer.tsx': [
+          tag('Inner', [
+            forward({
+              component: 'Outer',
+              prop: 'size',
+              nullToUndefined: true,
+            }),
+          ]),
+        ],
+        'src/app.tsx': [tag('Outer', [literal('size', null)])],
+      },
+      declared({
+        'src/outer.tsx': { Inner: 'src/wrap.tsx::Inner' },
+        'src/app.tsx': { Outer: 'src/outer.tsx::Outer' },
+      })
+    );
+    expect(nullToDefault.reachedByCallers).toEqual([
+      { axis: 'size', options: ['lg'] },
+    ]);
     // A component that renders the forward twice is read once per render.
     const twice = await forwardAudit(
       root,
@@ -903,6 +949,25 @@ test("a forward's callers are read through what passes their values on", async (
     expect(forwardAll.reachedByCallers).toEqual([
       { axis: 'size', options: ['sm'] },
     ]);
+    // It fills a forwarded default for `null` as for a prop left out.
+    const filled = await forwardAudit(
+      root,
+      wrap,
+      { 'src/app.tsx': [tag('Pass', [literal('size', null)])] },
+      {
+        components: {
+          'src/ui.tsx::Pass': asComponent(
+            'Pass',
+            '"variants":{"size":{"options":["sm"],"default":"sm"}},"forward":true'
+          ),
+        },
+        tag_components: { 'src/app.tsx': { Pass: 'src/ui.tsx::Pass' } },
+        as_component_targets: { 'src/ui.tsx::Pass': 'src/wrap.tsx::Wrap' },
+      }
+    );
+    expect(filled.reachedByCallers).toEqual([
+      { axis: 'size', options: ['sm'] },
+    ]);
 
     // A caller that passes a React state hook's state slot.
     const stateful = await forwardAudit(
@@ -953,7 +1018,9 @@ test("a forward's callers are read through what passes their values on", async (
  *  hold blocks every remedy. A value computed from its component's props
  *  names those props and points at its callers, never a literal at the
  *  site, which would drop them; a React state hook's state slot is kept as
- *  runtime state, with no remedy; no remedy promises that options prune;
+ *  runtime state, with no remedy; a forward whose matched callers pass such
+ *  a value gets no literal remedy at them; no remedy promises that options
+ *  prune;
  *  and where code may patch a built-in every render reads through, the
  *  report says once that pruning is off and blocks each remedy. */
 test('a derived or runtime-state site gets no site remedy, and the hold blocks every remedy', async () => {
@@ -997,6 +1064,35 @@ test('a derived or runtime-state site gets no site remedy, and the hold blocks e
       'kept: runtime state (useState at src/wrap.tsx:2)'
     );
     expect(state.suggestion).toBe('');
+
+    // So does a forward whose matched caller passes state, or a value
+    // computed from its own component's props: no literal at the callers.
+    const caller = (more: { [key: string]: JsonValue }) =>
+      forwardAudit(
+        root,
+        site({ forwarded: { component: 'Wrap', prop: 'size' } }),
+        {
+          'src/outer.tsx': [
+            { element: { tag: { ident: 'Wrap' }, attrs: [site(more)] } },
+          ],
+        },
+        {
+          tag_declarations: { 'src/outer.tsx': { Wrap: 'src/wrap.tsx::Wrap' } },
+        },
+        { 'src/outer.tsx': "const [size] = useState('sm');\n" }
+      );
+    const stateCaller = await caller({
+      runtimeState: { hook: 'useState', at: 0 },
+    });
+    expect(stateCaller.suggestion).toBe(
+      'A matched caller passes runtime state (useState at src/outer.tsx:1): no change is suggested there.'
+    );
+    const derivedCaller = await caller({
+      derived: { component: 'Outer', props: ['mode'], through: 'parseSize' },
+    });
+    expect(derivedCaller.suggestion).toBe(
+      "A matched caller passes a value derived from Outer's mode through parseSize (at src/outer.tsx:1): what Outer's callers pass decides it, so a change belongs at those callers; a literal there would drop Outer's prop."
+    );
 
     const computed = await forwardAudit(root, site({}), {});
     expect(computed.suggestion).toContain(
