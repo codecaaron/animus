@@ -79,6 +79,11 @@ pub struct AttrFact {
     /// Enriched collection only.
     #[serde(skip)]
     pub value_origin: ValueOrigin,
+    /// A proven runtime value may also be `undefined` or `null`
+    /// (`on ? 'sm' : undefined`), which selects what leaving the prop out
+    /// does: a variant's default, a state off.
+    #[serde(skip)]
+    pub absent: bool,
 }
 
 /// Where an attribute's runtime value comes from (`AttrFact::value_origin`).
@@ -115,6 +120,11 @@ pub struct ForwardedProp {
     /// prop out or passes `null`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nullish: Option<Value>,
+    /// `prop ?? undefined`: a caller's `null` is passed on as `undefined`,
+    /// which an Animus lookup reads as it reads `null`, but which takes an
+    /// ordinary component's parameter default where `null` would not.
+    #[serde(rename = "nullToUndefined", skip_serializing_if = "std::ops::Not::not")]
+    pub null_to_undefined: bool,
 }
 
 /// The props of the enclosing component an attribute's value is computed
@@ -151,9 +161,10 @@ pub struct SpreadForward {
 
 impl AttrFact {
     /// Whether the element always sets the prop to this value itself: no
-    /// spread after it can replace it, and no branch leaves it out.
+    /// spread after it can replace it, and no branch leaves it out or makes
+    /// it nullish.
     pub(crate) fn settles(&self, index: usize, spread: Option<usize>) -> bool {
-        !self.optional && spread.is_none_or(|before| index >= before)
+        !self.optional && !self.absent && spread.is_none_or(|before| index >= before)
     }
 
     /// Every value the attribute can write, when they are known: its
@@ -312,6 +323,7 @@ pub enum UsageFact {
 /// is known, and is `proven` only where the analysis's pruning trusts those
 /// to be all it writes (`AttrFact::proven_values`): a value evaluated
 /// through statics that may name a changed object is listed, not proven.
+/// One that may also be `undefined` or `null` is `absent`.
 pub(crate) fn serialize_proven<S: serde::Serializer>(
     usage: &Option<Vec<UsageFact>>,
     serializer: S,
@@ -339,6 +351,8 @@ pub(crate) fn serialize_proven<S: serde::Serializer>(
         skip: bool,
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         optional: bool,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        absent: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         dynamic_span: Option<&'u UsageSpan>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -366,6 +380,7 @@ pub(crate) fn serialize_proven<S: serde::Serializer>(
                     proven: attr.proven_values().is_some(),
                     skip: attr.skip,
                     optional: attr.optional,
+                    absent: attr.absent,
                     dynamic_span: attr.dynamic_span.as_ref(),
                     forwarded,
                     derived,
@@ -1488,6 +1503,7 @@ pub(crate) fn collect_enriched_usage(
         declaring: oxc::ast::ast::VariableDeclarationKind::Var,
         local_consts: FxHashMap::default(),
         local_origins: FxHashMap::default(),
+        locals: !contains_with(program),
     };
     collector.visit_program(program);
     let declared_hints = std::mem::take(&mut collector.declared_hints);
@@ -6780,6 +6796,9 @@ struct FactCollector<'a, 's> {
     /// component unchanged, or a value computed from its props, as the walk
     /// reaches its declarator.
     local_origins: FxHashMap<SymbolId, ValueOrigin>,
+    /// The module has no `with` statement, whose object can stand in for
+    /// any name read inside it, so a `const` named there is the `const`.
+    locals: bool,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -6840,6 +6859,7 @@ impl<'a> FactCollector<'a, '_> {
                         optional: true,
                         at: spread_attribute.span.start,
                         value_origin: ValueOrigin::Unknown,
+                        absent: false,
                     })),
                     None => {
                         spread = Some(attrs.len());
@@ -6867,6 +6887,7 @@ impl<'a> FactCollector<'a, '_> {
                 let mut literal = static_value.is_some();
                 let mut enumerable_values = Vec::new();
                 let mut value_origin = ValueOrigin::Unknown;
+                let mut absent = false;
                 if dynamic && self.enrich {
                     if let Some(expression) = attribute_expression(&attr.value) {
                         let expression = crate::chain_walk::unwrap_type_assertions(expression);
@@ -6947,11 +6968,12 @@ impl<'a> FactCollector<'a, '_> {
                         // resolved is proven only when no leaf reads an
                         // object, which may have changed since.
                         match self.finite_class_values(expression) {
-                            Some(values) if dynamic => {
-                                if values.is_empty() {
+                            Some(set) if dynamic => {
+                                if set.values.is_empty() {
                                     continue;
                                 }
-                                enumerable_values = values;
+                                absent = set.absent;
+                                enumerable_values = set.values;
                                 static_value = None;
                                 dynamic = false;
                                 dynamic_kind = None;
@@ -7001,6 +7023,7 @@ impl<'a> FactCollector<'a, '_> {
                     optional: false,
                     at: attr.span.start,
                     value_origin,
+                    absent,
                 });
             }
         }
@@ -7074,6 +7097,7 @@ fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
             optional: false,
             at,
             value_origin: ValueOrigin::Unknown,
+            absent: false,
         },
         None => AttrFact {
             name: "children".to_string(),
@@ -7089,6 +7113,7 @@ fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
             optional: false,
             at,
             value_origin: ValueOrigin::Unknown,
+            absent: false,
         },
     })
 }
@@ -7335,18 +7360,24 @@ impl FactCollector<'_, '_> {
                 let object = symbol(object)?;
                 let key = member.property.name.to_string();
                 if let Some(component) = self.params.objects.get(&object) {
-                    return Some(ForwardedProp { component: component.clone(), prop: key, path: Vec::new(), default: None, nullish: None });
+                    return Some(ForwardedProp { component: component.clone(), prop: key, path: Vec::new(), default: None, nullish: None, null_to_undefined: false });
                 }
                 let held = self.params.props.get(&object).filter(|_| self.params.object_props.contains(&object))?;
                 (held.default.is_none() && held.path.is_empty()).then(|| ForwardedProp { path: vec![key], ..held.clone() })
             }
             Expression::LogicalExpression(logical) if logical.operator.is_coalesce() => {
                 let left = self.forwarded_prop(&logical.left)?;
+                // `?? undefined` passes a caller's `null` on as `undefined`;
+                // a left side that is never nullish passes on unchanged.
                 if is_absent(&logical.right, self.origins) {
-                    return Some(left);
+                    return Some(match left.nullish.is_some() || left.null_to_undefined {
+                        true => left,
+                        false => ForwardedProp { null_to_undefined: true, ..left },
+                    });
                 }
                 let literal = default_value(&logical.right)?;
-                (left.default.is_none() && left.nullish.is_none()).then(|| ForwardedProp { nullish: Some(literal), ..left })
+                (left.default.is_none() && left.nullish.is_none() && !left.null_to_undefined)
+                    .then(|| ForwardedProp { nullish: Some(literal), ..left })
             }
             _ => None,
         }
@@ -7475,15 +7506,16 @@ impl FactCollector<'_, '_> {
     /// The literals whose classes stand for `expression`'s every value: a
     /// finite set's values, or for an object literal with static keys and
     /// finite leaves, each leaf value at its breakpoint (`{ sm: 8 }`) or,
-    /// under `_`, bare; the runtime composes those classes. `None` when the
-    /// values are not proven few.
-    fn finite_class_values(&self, expression: &Expression<'_>) -> Option<Vec<Value>> {
+    /// under `_`, bare; the runtime composes those classes; and whether any
+    /// may be absent. `None` when the values are not proven few.
+    fn finite_class_values(&self, expression: &Expression<'_>) -> Option<FiniteSet> {
         use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
         let expression = crate::chain_walk::unwrap_type_assertions(expression);
         let Expression::ObjectExpression(object) = expression else {
-            return Some(self.finite_set(expression)?.values);
+            return self.finite_set(expression);
         };
         let mut values = Vec::new();
+        let mut absent = false;
         for property in &object.properties {
             let ObjectPropertyKind::ObjectProperty(property) = property else {
                 return None;
@@ -7492,7 +7524,9 @@ impl FactCollector<'_, '_> {
                 return None;
             }
             let key = eval_property_key(&property.key)?;
-            for value in self.finite_set(&property.value)?.values {
+            let leaf = self.finite_set(&property.value)?;
+            absent |= leaf.absent;
+            for value in leaf.values {
                 push_unique(
                     &mut values,
                     match key.as_str() {
@@ -7502,7 +7536,7 @@ impl FactCollector<'_, '_> {
                 );
             }
         }
-        Some(values)
+        Some(FiniteSet { values, absent })
     }
 }
 
@@ -7595,7 +7629,7 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
             if uses.tracked.contains_key(&symbol) && uses.passes_on(symbol) {
                 params.object_props.insert(symbol);
             }
-            params.props.insert(symbol, ForwardedProp { component: name.clone(), prop: key, path: Vec::new(), default, nullish: None });
+            params.props.insert(symbol, ForwardedProp { component: name.clone(), prop: key, path: Vec::new(), default, nullish: None, null_to_undefined: false });
         }
         for (symbol, tracked) in &uses.tracked {
             // A rest the body takes copies the props object as it then is.
@@ -7832,6 +7866,22 @@ fn state_slots(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<SymbolId, 
     let mut scan = Scan { scoping, hooks, states: FxHashMap::default() };
     scan.visit_program(program);
     scan.states
+}
+
+/// Whether `program` has a `with` statement anywhere (sloppy scripts only).
+fn contains_with(program: &Program<'_>) -> bool {
+    struct Find(bool);
+    impl<'a> Visit<'a> for Find {
+        fn visit_with_statement(&mut self, _statement: &oxc::ast::ast::WithStatement<'a>) {
+            self.0 = true;
+        }
+    }
+    if !program.source_text.contains("with") {
+        return false;
+    }
+    let mut find = Find(false);
+    find.visit_program(program);
+    find.0
 }
 
 /// The symbol `id` binds, where nothing writes it after.
@@ -8100,7 +8150,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
 
     fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
         if let (true, oxc::ast::ast::VariableDeclarationKind::Const, oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init)) =
-            (self.enrich, self.declaring, &declarator.id, &declarator.init)
+            (self.enrich && self.locals, self.declaring, &declarator.id, &declarator.init)
         {
             if let Some(symbol) = id.symbol_id.get() {
                 if let Some(set) = self.finite_set(init) {
@@ -9217,6 +9267,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         declaring: oxc::ast::ast::VariableDeclarationKind::Var,
         local_consts: FxHashMap::default(),
         local_origins: FxHashMap::default(),
+        locals: false,
     };
     collector.visit_program(program);
     collector.finish()

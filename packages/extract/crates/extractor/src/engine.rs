@@ -2495,6 +2495,52 @@ mod tests {
         assert!(!css.contains("--tone-heavy"), "an option no branch names prunes: {css}");
     }
 
+    /// Contract: a proven value that may be `undefined` or `null` also
+    /// selects what leaving the prop out does, inline or through `const`s:
+    /// the variant's default keeps its CSS, and so does a compound keyed on
+    /// the default option; an option no branch names still prunes.
+    #[test]
+    fn a_proven_value_that_may_be_absent_keeps_the_default() {
+        for site in [
+            "const size = on ? 'sm' : undefined; return <Chip size={size} />;",
+            "return <Chip size={on ? 'sm' : null} />;",
+            "const picked = on ? 'sm' : undefined; const size = picked; return <Chip size={size} />;",
+        ] {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let source = format!(
+                "export const Chip = ds.variant({{ prop: 'size', defaultVariant: 'md', variants: {{ sm: {{ color: 'red' }}, md: {{ color: 'green' }}, lg: {{ color: 'blue' }} }} }}).compound({{ size: 'md' }}, {{ order: 2 }}).asElement('div');\n\
+                 export default ({{ on }}) => {{ {site} }};\n"
+            );
+            let manifest: serde_json::Value = serde_json::from_str(
+                &engine.analyze_full(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string(), None).unwrap(),
+            )
+            .unwrap();
+            let attr = &manifest["fileFacts"]["a.tsx"]["proven"][0]["element"]["attrs"][0];
+            assert_eq!((&attr["values"], &attr["proven"], &attr["absent"]), (&serde_json::json!(["sm"]), &serde_json::json!(true), &serde_json::json!(true)), "{site}");
+            let css = manifest["css"].as_str().unwrap();
+            assert!(css.contains("color: red") && css.contains("--size-default {\n    color: green") && css.contains("order: 2"), "{site}: {css}");
+            assert!(!css.contains("color: blue"), "{site}: an option no branch names prunes: {css}");
+        }
+    }
+
+    /// Contract: a module with a `with` statement proves no `const` by its
+    /// declarator, since the statement's object can stand in for the name.
+    #[test]
+    fn a_const_read_where_a_with_statement_may_shadow_it_is_not_proven() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let source = "function Page({ on }) {\n\
+                        const size = on ? 'sm' : 'lg';\n\
+                        with ({ size: 'md' }) { return <Chip size={size} />; }\n\
+                      }\n";
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine.analyze_full(serde_json::json!([{ "path": "a.js", "source": source }]).to_string(), None).unwrap(),
+        )
+        .unwrap();
+        let attr = &manifest["fileFacts"]["a.js"]["proven"][0]["element"]["attrs"][0];
+        assert_eq!(attr["name"], "size", "{manifest:#}");
+        assert_eq!(attr["proven"], false);
+    }
+
     /// Contract: the manifest names the component's own prop a runtime
     /// value passes on unchanged, destructured or read off its props
     /// object, so a reader can tell a forward, which its callers write,
@@ -2549,25 +2595,28 @@ mod tests {
         assert!(manifest["fileFacts"]["a.tsx"]["usage"][0]["element"]["attrs"][0].get("forwarded").is_none(), "raw usage names no forward");
     }
 
-    /// Contract: `?? undefined` forwards when null and undefined select
-    /// alike. The runtime reads a variant as `props[prop] ?? default`
-    /// (packages/system/src/runtime/resolveClasses.ts `applyVariantClasses`
-    /// and `applyCompoundClasses`), a state by truthiness
-    /// (`applyStateClasses`), a system or custom prop only where it is
-    /// `!= null` (`resolveClasses`' slot loop), and fills a forwarded
-    /// variant's default with `??=` (runtime/index.ts), so `null` selects
-    /// what `undefined` does for every kind of prop: `size ?? undefined`
-    /// passes the caller's option on.
+    /// Contract: `?? undefined` forwards, passing a caller's `null` on as
+    /// `undefined`. An Animus lookup reads the two alike: a variant as
+    /// `props[prop] ?? default` (packages/system/src/runtime/resolveClasses.ts
+    /// `applyVariantClasses` and `applyCompoundClasses`), a state by
+    /// truthiness (`applyStateClasses`), a system or custom prop only where
+    /// it is `!= null` (`resolveClasses`' slot loop), a forwarded variant's
+    /// default filled with `??=` (runtime/index.ts). An ordinary component's
+    /// parameter default takes `undefined` and not `null`, so the forward
+    /// says the `null` is changed (`nullToUndefined`), and a prop a
+    /// left side never makes nullish passes on unchanged.
     #[test]
-    fn coalescing_to_undefined_forwards_when_null_and_undefined_select_alike() {
+    fn coalescing_to_undefined_passes_null_on_as_undefined() {
         let mut engine = ExtractEngine::new(None).unwrap();
-        let source = "export const Coalesce = ({ size }) => <Box p={size ?? undefined} />;\n";
+        let source = "export const Coalesce = ({ size }) => <Box p={size ?? undefined} />;\n\
+                      export const Kept = ({ size }) => <Box p={(size ?? 'md') ?? undefined} />;\n";
         let manifest: serde_json::Value = serde_json::from_str(
             &engine.analyze_full(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string(), None).unwrap(),
         )
         .unwrap();
-        let attr = &manifest["fileFacts"]["a.tsx"]["proven"][0]["element"]["attrs"][0];
-        assert_eq!(attr["forwarded"], serde_json::json!({ "component": "Coalesce", "prop": "size" }));
+        let attr = |index: usize| manifest["fileFacts"]["a.tsx"]["proven"][index]["element"]["attrs"][0].clone();
+        assert_eq!(attr(0)["forwarded"], serde_json::json!({ "component": "Coalesce", "prop": "size", "nullToUndefined": true }));
+        assert_eq!(attr(1)["forwarded"], serde_json::json!({ "component": "Kept", "prop": "size", "nullish": "md" }));
     }
 
     /// Contract: the manifest says where a runtime value comes from: a prop
