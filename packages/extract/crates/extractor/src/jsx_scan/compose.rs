@@ -312,20 +312,32 @@ fn extract_compose_family(
                     continue;
                 }
             };
-            let binding_name = match &prop.value {
-                Expression::Identifier(id) => {
-                    slot_values.push((id.span.start, id.span.end));
-                    id.name.to_string()
-                }
-                _ => {
-                    open = true;
-                    continue;
-                }
+            // `__proto__: X` sets the slots object's prototype, which
+            // compose's `Object.entries` never reads: no slot, and its value
+            // renders through no member tag. A shorthand is a plain member.
+            if slot_name == "__proto__" && !prop.shorthand && !prop.computed {
+                continue;
+            }
+            let Expression::Identifier(id) = &prop.value else {
+                open = true;
+                continue;
             };
+            let binding_name = id.name.to_string();
             if slot_name == "Root" {
                 root_binding = binding_name.clone();
             }
-            slots.push((slot_name, binding_name));
+            // A repeated key holds its last value, as `Object.entries` reads
+            // it; the value it replaces renders through no member tag.
+            match slots.iter().position(|(slot, _)| *slot == slot_name) {
+                Some(at) => {
+                    slots[at].1 = binding_name;
+                    slot_values[at] = (id.span.start, id.span.end);
+                }
+                None => {
+                    slots.push((slot_name, binding_name));
+                    slot_values.push((id.span.start, id.span.end));
+                }
+            }
         } else {
             open = true;
         }

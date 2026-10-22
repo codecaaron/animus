@@ -19326,6 +19326,40 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// Contract: a family's slots are what compose's `Object.entries` reads of
+    /// its slots object. A repeated key holds its last value, which its
+    /// member tag renders; the value it replaces renders through no member
+    /// tag, so it escapes and keeps every option. `__proto__: X` sets the
+    /// object's prototype: no slot, and X escapes.
+    #[test]
+    fn a_repeated_compose_slot_key_holds_its_last_value() {
+        let render = ("d.tsx", "import { R } from './r';\nexport const D = () => <R size=\"sm\" busy />;\n");
+        let kept = |slots: &str, tag: &str| {
+            let page = format!(
+                "import {{ R }} from './r';\nconst Plain = ds.styles({{}}).asElement('div');\nconst Other = ds.styles({{}}).asElement('span');\nexport const Page = compose({slots});\n"
+            );
+            let app = format!("import {{ Page }} from './page';\nexport const App = () => <Page.{tag} size=\"lg\" active />;\n");
+            kept_options(&[("r.tsx", RECIPE), render, ("page.tsx", page.as_str()), ("app.tsx", app.as_str())])
+        };
+        let followed = (vec!["sm", "lg"], vec!["active", "busy"]);
+        let every = (vec!["sm", "md", "lg"], vec!["active", "busy"]);
+        assert_eq!(kept("{ Root: Plain, Cell: Other, Cell: R }", "Cell"), followed);
+        assert_eq!(kept("{ Root: Other, Root: R }", "Root"), followed);
+        assert_eq!(kept("{ Root: Plain, Cell: R, Cell: Other }", "Cell"), every);
+        assert_eq!(kept("{ Root: R, __proto__: Other }", "Root"), followed);
+        assert_eq!(kept("{ Root: Plain, __proto__: R }", "Root"), every);
+        // A shorthand `__proto__` is a plain member.
+        assert_eq!(
+            kept_options(&[
+                ("r.tsx", RECIPE),
+                render,
+                ("page.tsx", "import { R } from './r';\nconst __proto__ = ds.styles({}).asElement('i');\nexport const Page = compose({ Root: R, __proto__ });\n"),
+                ("app.tsx", "import { Page } from './page';\nexport const App = () => <Page.Root size=\"lg\" active />;\n"),
+            ]),
+            followed
+        );
+    }
+
     /// Contract: a member an `Object.assign` adds to a followed family is
     /// the binding it holds, so its member tag renders that component (an
     /// Animus one, or an ordinary one) with the tag's props and children.
