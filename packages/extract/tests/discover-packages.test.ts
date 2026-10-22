@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -16,6 +17,7 @@ import {
   extractSystemFilePackages,
   firstOwners,
   importedKitDiagnostics,
+  kitSourceModuleSideEffects,
   probeAbsolutePathSpecifier,
   staleDistIncludesDiagnostic,
   unresolvableIncludesDiagnostic,
@@ -1249,4 +1251,30 @@ test('an imported kit the system does not include is an error', () => {
   expect(found.map((d) => [d.file, d.component, d.code, d.severity])).toEqual([
     ['src/App.tsx', '@acme/stray', KIT_SYSTEM_NOT_INCLUDED, 'error'],
   ]);
+});
+
+describe('kitSourceModuleSideEffects', () => {
+  test('a failed manifest read is never cached', () => {
+    const root = mkdtempSync(join(tmpdir(), 'animus-kit-effects-'));
+    try {
+      const manifest = join(root, 'package.json');
+      writeFileSync(manifest, JSON.stringify({ sideEffects: ['./dist/*'] }));
+      // Written long enough ago that a successful answer would be kept.
+      const past = new Date(Date.now() - 3_600_000);
+      utimesSync(manifest, past, past);
+      mkdirSync(join(root, 'src'));
+      const source = join(root, 'src', 'effect.ts');
+      writeFileSync(source, 'export {};\n');
+
+      // A read can fail (EMFILE) while the manifest's stat is unchanged.
+      const failing = (): JsonValue | null => null;
+      const reading = (pkgRoot: string): JsonValue | null =>
+        JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'));
+      expect(kitSourceModuleSideEffects(source, failing)).toBeUndefined();
+      // Its list names shipped code.
+      expect(kitSourceModuleSideEffects(source, reading)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

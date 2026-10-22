@@ -18,6 +18,7 @@ import {
   unresolvableAssetDiagnostic,
   writeAssetCopy,
   toWatchKeys,
+  withinAnyRoot,
 } from '@animus-ui/extract/pipeline';
 import {
   CoalescingWindow,
@@ -207,6 +208,20 @@ export class PluginContext {
   get externalPackageDirs(): string[] {
     return this.served?.externalPackageDirs ?? [];
   }
+
+  /** Whether a path lies under a published kit source directory: the
+   *  directories resolved once for each publication that lists them. */
+  get inKitSource(): (path: string) => boolean {
+    const dirs = this.externalPackageDirs;
+    if (this.kitSourceTest?.dirs !== dirs) {
+      this.kitSourceTest = { dirs, test: withinAnyRoot(dirs) };
+    }
+    return this.kitSourceTest.test;
+  }
+
+  private kitSourceTest:
+    | { dirs: readonly string[]; test: (path: string) => boolean }
+    | undefined;
 
   /** specifier → whether its redirected source entry has side effects, from
    *  the owning package's `sideEffects`; absent leaves Vite's default. */

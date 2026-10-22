@@ -29,6 +29,33 @@ export function isPathWithinRoot(
 }
 
 /**
+ * `isPathWithinRoot` against each of `roots`, with each root resolved once:
+ * a target is resolved once and is within a root it equals or extends past
+ * a separator, compared as `relative()` compares, case-insensitively on
+ * win32. A host asks this of every module and import a build sees.
+ */
+export function withinAnyRoot(
+  roots: readonly string[],
+  pathApi: PlatformPath = path
+): (target: string) => boolean {
+  const fold =
+    pathApi.sep === '\\'
+      ? (p: string): string => p.toLowerCase()
+      : (p: string): string => p;
+  const resolved = roots.map((root) => fold(pathApi.resolve(root)));
+  const prefixes = resolved.map((root) =>
+    root.endsWith(pathApi.sep) ? root : root + pathApi.sep
+  );
+  return (target) => {
+    if (resolved.length === 0) return false;
+    const at = fold(pathApi.resolve(target));
+    return resolved.some(
+      (root, index) => at === root || at.startsWith(prefixes[index])
+    );
+  };
+}
+
+/**
  * True when two paths share a platform root (win32 drive letter or UNC
  * share; always true on posix). Drive letters compare case-insensitively.
  */

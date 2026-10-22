@@ -4,8 +4,7 @@ import {
   assertSupportedEngine,
   DUPLICATE_FONT_PRELOAD,
   hostFinding,
-  isPathWithinRoot,
-  keepsKitSourceEffects,
+  keepsKitSourceEffectsWithin,
   keptDirFeatures,
   loweredDirDiagnostic,
   resolveMode,
@@ -488,23 +487,14 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       }
       // A kit module's import, which the package's list may misclassify.
       const importerPath = importer.split('?')[0];
-      if (
-        !ctx.externalPackageDirs.some((dir) =>
-          isPathWithinRoot(dir, importerPath)
-        )
-      ) {
-        return null;
-      }
+      if (!ctx.inKitSource(importerPath)) return null;
       const resolved = await this.resolve(id, importer, { skipSelf: true });
       // The module it reaches must itself be kit source; an external
       // resolution stays as another resolver leaves it.
       if (
         resolved === null ||
         resolved.external ||
-        !keepsKitSourceEffects(
-          resolved.id.split('?')[0],
-          ctx.externalPackageDirs
-        )
+        !keepsKitSourceEffectsWithin(resolved.id.split('?')[0], ctx.inKitSource)
       ) {
         return null;
       }

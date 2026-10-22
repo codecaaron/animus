@@ -99,6 +99,7 @@ export {
   nativeKitSourceRoot,
   nativePackageLocator,
   keepsKitSourceEffects,
+  keepsKitSourceEffectsWithin,
   kitSourceModuleSideEffects,
   firstOwners,
   importedKitDiagnostics,
@@ -123,6 +124,7 @@ export type { ResolvedSourceId, SourceIdentity } from './source-identity';
 export {
   createSourceIdentity,
   isPathWithinRoot,
+  withinAnyRoot,
   sharesVolumeRoot,
 } from './source-identity';
 export type {

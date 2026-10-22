@@ -456,13 +456,65 @@ function expandBraces(glob: string): string[] | null {
  * the list against the source path can drop a listed effect. Undefined
  * leaves the bundler's own reading, which no list naming code can mislead.
  */
-export function kitSourceModuleSideEffects(absFile: string): true | undefined {
-  const manifest = readPackageManifest(findPackageRoot(absFile));
+export function kitSourceModuleSideEffects(
+  absFile: string,
+  /** Reads a package root's manifest, null where it cannot. */
+  readManifest: (pkgRoot: string) => JsonValue | null = readPackageManifest
+): true | undefined {
+  const pkgRoot = findPackageRoot(absFile);
+  // Stamped before the read: a write between the two leaves a stamp the
+  // next question does not match.
+  const stamp = manifestStamp(pkgRoot);
+  const kept = stamp === null ? undefined : sideEffectsByRoot.get(pkgRoot);
+  if (kept !== undefined && kept.stamp === stamp?.key) return kept.effects;
+  const manifest = readManifest(pkgRoot);
   const field = isJsonBlock(manifest) ? manifest.sideEffects : undefined;
-  if (!Array.isArray(field)) return undefined;
-  return field.some((glob) => isJsonString(glob) && globNamesCode(glob))
-    ? true
-    : undefined;
+  const effects =
+    Array.isArray(field) &&
+    field.some((glob) => isJsonString(glob) && globNamesCode(glob))
+      ? true
+      : undefined;
+  // Only a read that succeeded, of a manifest written long enough ago that
+  // a rewrite would change its stamp, is kept: a failed read is answered
+  // again, and so is a manifest still within one timestamp bucket.
+  if (stamp?.settled && manifest !== null) {
+    sideEffectsByRoot.set(pkgRoot, { stamp: stamp.key, effects });
+  }
+  return effects;
+}
+
+/** Each package root's answer, with the stamp of the manifest it read: a
+ *  host asks of every module it resolves under a kit, and a package's
+ *  manifest changes far less often than its modules are resolved. */
+const sideEffectsByRoot = new Map<
+  string,
+  { stamp: string; effects: true | undefined }
+>();
+
+/** How long ago a manifest must have been written for its stamp to vouch
+ *  for its bytes: a same-size rewrite within one timestamp bucket keeps
+ *  every field of the stamp, so a newer manifest is read again, as git
+ *  reads a racily clean entry. */
+const SETTLED_NS = 2_000_000_000n;
+
+/** A manifest's inode, size and modification and change times (`key`):
+ *  any write changes one once the filesystem's timestamps move, and a
+ *  replacement (a reinstall's extraction, whose files keep the tarball's
+ *  fixed modification time) gets a new inode and change time. `settled`
+ *  where it was last written `SETTLED_NS` or more before now. Null where
+ *  none is read. */
+function manifestStamp(
+  pkgRoot: string
+): { key: string; settled: boolean } | null {
+  try {
+    const stat = statSync(join(pkgRoot, 'package.json'), { bigint: true });
+    return {
+      key: `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`,
+      settled: BigInt(Date.now()) * 1_000_000n - stat.mtimeNs >= SETTLED_NS,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Whether a host keeps the module at `file` side-effectful: it lies under
@@ -473,10 +525,18 @@ export function keepsKitSourceEffects(
   file: string,
   kitDirs: readonly string[]
 ): boolean {
-  return (
-    kitDirs.some((dir) => isPathWithinRoot(dir, file)) &&
-    kitSourceModuleSideEffects(file) === true
+  return keepsKitSourceEffectsWithin(file, (path) =>
+    kitDirs.some((dir) => isPathWithinRoot(dir, path))
   );
+}
+
+/** `keepsKitSourceEffects`, where `inKit` answers whether a path lies under
+ *  a kit source directory (`withinAnyRoot` of them, built once). */
+export function keepsKitSourceEffectsWithin(
+  file: string,
+  inKit: (file: string) => boolean
+): boolean {
+  return inKit(file) && kitSourceModuleSideEffects(file) === true;
 }
 
 function matchesSideEffects(
