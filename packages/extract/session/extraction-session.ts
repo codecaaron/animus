@@ -125,6 +125,7 @@ import {
 import { foreignPackages } from '../pipeline/registry-packages';
 import { slotProvenanceLines } from '../pipeline/slot-provenance';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
+import { LazyWatchKeys } from '../pipeline/watch-keys';
 import { writeAtomically } from '../pipeline/write-atomically';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import { buildPropOrderFile } from './prop-order';
@@ -515,7 +516,7 @@ export type SessionOutcome =
 /** The files a system load read: its watch keys, paths and content
  *  hashes. */
 interface SystemDependencies {
-  keys: Set<string>;
+  keys: LazyWatchKeys;
   paths: string[];
   /** Paths the load looked for and found absent. */
   missing: string[];
@@ -744,8 +745,9 @@ export class ExtractionSession {
   }
 
   // Membership keys (lexical + canonical) for the system's evaluated module
-  // files. A failed reload keeps the last set — the stale config still serves.
-  private systemDependencyKeys: Set<string> = new Set();
+  // files, resolved on first use: a build never asks. A failed reload keeps
+  // the last set — the stale config still serves.
+  private systemDependencyKeys = new LazyWatchKeys([]);
 
   /** What a host watches for this Session, one list for every host: the
    *  files whose change it acts on (the system module and the modules it
@@ -862,7 +864,7 @@ export class ExtractionSession {
   /** The system dependencies the last committed full pass recorded: a
    *  failed reload watches these and its own, never an earlier failure's. */
   private lastGoodSystemDependencies: SystemDependencies = {
-    keys: new Set(),
+    keys: new LazyWatchKeys([]),
     paths: [],
     missing: [],
     hashes: new Map(),
@@ -1868,10 +1870,7 @@ export class ExtractionSession {
     dependencies: string[],
     missing: string[]
   ): void {
-    const keys = new Set<string>();
-    for (const path of [systemPath, ...dependencies, ...missing]) {
-      for (const key of toWatchKeys(path)) keys.add(key);
-    }
+    const keys = new LazyWatchKeys([systemPath, ...dependencies, ...missing]);
     const hashes = new Map<string, string>();
     for (const dep of dependencies.length > 0 ? dependencies : [systemPath]) {
       try {
@@ -1944,10 +1943,7 @@ export class ExtractionSession {
     this.systemMissingPaths = [
       ...new Set([...lastGood.missing, ...this.systemMissingPaths]),
     ];
-    this.systemDependencyKeys = new Set([
-      ...lastGood.keys,
-      ...this.systemDependencyKeys,
-    ]);
+    this.systemDependencyKeys = lastGood.keys.union(this.systemDependencyKeys);
     this.systemDependencyPaths = [
       ...new Set([...lastGood.paths, ...this.systemDependencyPaths]),
     ];
