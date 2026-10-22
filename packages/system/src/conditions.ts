@@ -32,11 +32,23 @@ export interface RegistryBrand<
   readonly [SELS_BRAND]?: S;
 }
 
+// A registry with no entries leaves its optional brand field nothing to
+// infer from, so `infer` falls back to the constraint `string`: that is no
+// alias name, and an augmentation built from it (`Record<ConditionsOf<…>,
+// true>`) would make every key a condition.
 export type ConditionsOf<Sys> =
-  Sys extends RegistryBrand<infer C, string> ? C : never;
+  Sys extends RegistryBrand<infer C, string>
+    ? string extends C
+      ? never
+      : C
+    : never;
 
 export type SelectorsOf<Sys> =
-  Sys extends RegistryBrand<string, infer S> ? S : never;
+  Sys extends RegistryBrand<string, infer S>
+    ? string extends S
+      ? never
+      : S
+    : never;
 
 /**
  * Branded rejection for a `_` block key that no registry owns. Not a bare

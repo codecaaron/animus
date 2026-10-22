@@ -86,6 +86,8 @@ PROJECTS=(
   "packages/system/__tests__/published/tsconfig.exact.json system"
   "packages/system/__tests__/published/scale/tsconfig.json system"
   "packages/system/__tests__/published/scale/tsconfig.exact.json system"
+  "packages/system/__tests__/published/aliases/tsconfig.json system"
+  "packages/system/__tests__/published/aliases/tsconfig.exact.json system"
   "packages/test-ds/__tests__/published/tsconfig.json system test-ds"
 )
 REPORTS="$(mktemp -d)"

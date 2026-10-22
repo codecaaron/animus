@@ -330,10 +330,11 @@ export type ThemedPropValue<Config extends SystemProp> = [Config] extends [
 
 type RawSelectorKey = `${string}&${string}`;
 
-type PublishedAliasKeys = Extract<
-  keyof Conditions | keyof Selectors,
-  `_${string}`
->;
+// Each registry on its own: a `string` key set in one would absorb the
+// other's names in a union, and extract to nothing.
+type PublishedAliasKeys =
+  | Extract<keyof Conditions, `_${string}`>
+  | Extract<keyof Selectors, `_${string}`>;
 
 type KnownUnderscoreKey = [PublishedAliasKeys] extends [never]
   ? `_${string}`
