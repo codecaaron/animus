@@ -19442,8 +19442,17 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     fn kept_options_with(entries: &[(&str, &str)], inputs: &CssInputs) -> (Vec<&'static str>, Vec<&'static str>) {
+        kept_options_in(entries, inputs, "r.tsx::R")
+    }
+
+    /// `kept_options` for the recipe declared as component `id`.
+    fn kept_options_of(entries: &[(&str, &str)], id: &str) -> (Vec<&'static str>, Vec<&'static str>) {
+        kept_options_in(entries, &test_inputs(), id)
+    }
+
+    fn kept_options_in(entries: &[(&str, &str)], inputs: &CssInputs, id: &str) -> (Vec<&'static str>, Vec<&'static str>) {
         let out = analyze(entries, inputs);
-        let class = class_of(&out, "r.tsx::R");
+        let class = class_of(&out, id);
         let sizes = ["sm", "md", "lg"]
             .into_iter()
             .filter(|size| out.css.contains(&format!(".{class}--size-{size}")))
@@ -20875,11 +20884,22 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let app = format!("import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n");
             assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]), kept, "{setup}");
         }
-        // A `with` object may supply any name the record's uses resolve.
-        let with = "import { R } from './r';\nimport { register } from 'lib';\nconst table = { R };\n\
-                    function run() { const check = (c) => c === null; with ({ check: register }) { for (const c of Object.values(table)) check(c); } }\n\
-                    run();\nexport const App = () => <R size=\"sm\" active />;\n";
-        assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.js", with)]), every, "{with}");
+        // A classic script proves no record: a `with` object may supply any
+        // name, a block function assigns its var binding (Annex B), and
+        // another script may assign its global functions.
+        let recipe = RECIPE.replacen("export ", "", 1);
+        let site = "const app = <R size=\"sm\" active />;\n";
+        let with = format!(
+            "{recipe}const table = {{ R }};\nfunction run() {{ const check = (c) => c === null; with ({{ check: globalThis.leak }}) {{ for (const c of Object.values(table)) check(c); }} }}\nrun();\n{site}"
+        );
+        let block = format!(
+            "{recipe}const table = {{ R }};\nfunction run() {{ function check(c) {{ return c === null; }} {{ function check(c) {{ return globalThis.leak(c); }} }} for (const c of Object.values(table)) check(c); }}\nrun();\n{site}"
+        );
+        let global = format!("{recipe}const table = {{ R }};\nfunction check(c) {{ return c === null; }}\nfunction run() {{ for (const c of Object.values(table)) check(c); }}\nsetTimeout(run);\n{site}");
+        for script in [&with, &block] {
+            assert_eq!(kept_options_of(&[("app.js", script.as_str())], "app.js::R"), every, "{script}");
+        }
+        assert_eq!(kept_options_of(&[("app.js", global.as_str()), ("other.js", "check = globalThis.leak;\n")], "app.js::R"), every, "{global}");
     }
 
     /// An escape opens the component the escaping file names through its own

@@ -66,6 +66,12 @@ use crate::chain_walk::unwrap_type_assertions;
 /// (see the module): each record proven, and each module binding its proof
 /// judged every use of.
 pub(super) fn identity_records(program: &Program<'_>, scoping: &Scoping, module: &ModuleRecord<'_>) -> FxHashSet<SymbolId> {
+    // Only module code is strict and has a scope of its own: a classic
+    // script's block function assigns its var binding (Annex B), and another
+    // script may assign its global functions.
+    if !module.has_module_syntax {
+        return FxHashSet::default();
+    }
     // The bindings other modules may read: each an export names, declared
     // with it or not (`export const m`, `export { m }`, `export default function f`).
     let exported: FxHashSet<SymbolId> = module
