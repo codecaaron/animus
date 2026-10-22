@@ -367,6 +367,22 @@ struct Collector<'f, 'a, 's> {
 }
 
 impl<'a> Collector<'_, 'a, '_> {
+    /// Whether the declarator being entered is in the head of a `for…of` or
+    /// `for…in` (its declaration is the loop's `left`).
+    fn in_loop_head(&self) -> bool {
+        let ancestors = &self.facts.ancestors;
+        let (Some(AstKind::VariableDeclaration(declaration)), Some(statement)) =
+            (ancestors.last(), ancestors.len().checked_sub(2).map(|index| ancestors[index]))
+        else {
+            return false;
+        };
+        match statement {
+            AstKind::ForOfStatement(statement) => statement.left.span() == declaration.span,
+            AstKind::ForInStatement(statement) => statement.left.span() == declaration.span,
+            _ => false,
+        }
+    }
+
     /// Whether the read at `span` only calls a trusted method, reads
     /// `length` or `size`, or iterates.
     fn plain_read(&self, span: Span) -> bool {
@@ -414,7 +430,9 @@ impl<'a> Visit<'a> for Collector<'_, 'a, '_> {
             AstKind::VariableDeclarator(declarator) => {
                 if let BindingPattern::BindingIdentifier(id) = &declarator.id {
                     if let Some(symbol) = id.symbol_id.get() {
-                        if declarator.init.as_ref().is_none_or(|init| genuine_expression(init, scoping)) {
+                        // A `for…of` or `for…in` head binds each item, whatever it is.
+                        let iterated = self.in_loop_head();
+                        if !iterated && declarator.init.as_ref().is_none_or(|init| genuine_expression(init, scoping)) {
                             self.inits.insert(symbol);
                         }
                         if let Some(function) = declarator.init.as_ref().and_then(Function::of_expression) {
