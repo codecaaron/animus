@@ -20857,6 +20857,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("import { register } from 'lib';\nconst table = { R };\nconst seen = new Set(Object.values(table));\nfor (const C of seen.values()) register(C);", &every),
             ("import { register } from 'lib';\nconst table = { R };\nconst seen = new Set(Object.values(table));\nseen.forEach((C) => register(C));", &every),
             ("import { register } from 'lib';\nconst table = { R };\nconst seen = new Set(Object.values(table));\nfor (const [, C] of seen.entries()) register(C);", &every),
+            // A receiver another module may change.
+            ("const table = { R };\nexport const seen: unknown[] = [];\nexport const isPart = () => Object.values(table).some((c) => seen.includes(c));", &every),
+            ("const table = { R };\nexport const seen = new Map<unknown, number>();\nexport const isPart = () => Object.values(table).some((c) => seen.has(c));", &every),
         ] {
             let app = format!("import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n");
             assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]), kept, "{setup}");

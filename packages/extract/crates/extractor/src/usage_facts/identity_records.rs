@@ -319,11 +319,12 @@ impl<'a, 's> ModuleFacts<'a, 's> {
         let mut writes: FxHashMap<SymbolId, usize> = FxHashMap::default();
         let mut inits = FxHashSet::default();
         facts.collect(program, &mut writes, &mut inits);
+        // Another module may replace an exported receiver's methods.
         facts.genuine = inits
             .into_iter()
             .filter(|symbol| {
                 let all = scoping.get_resolved_references(*symbol).filter(|reference| reference.is_write()).count();
-                all == writes.get(symbol).copied().unwrap_or(0)
+                all == writes.get(symbol).copied().unwrap_or(0) && !facts.exported.contains(symbol)
             })
             .collect();
         facts.functions.retain(|symbol, _| !crate::identity::reassigned(scoping, *symbol));
