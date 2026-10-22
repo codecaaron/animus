@@ -6847,6 +6847,11 @@ fn foreign_site(
     }
 }
 
+/// What extraction does with a member of an object a call it does not
+/// follow builds.
+const UNFOLLOWED_CALL: &str =
+    "which extraction does not follow: static values of its props are not extracted and reach the page through runtime slots";
+
 /// What a tag usage cannot match to an Animus component is, as far as the
 /// file's scopes and the analysed declarations prove it.
 fn uncertain_tag_reason(
@@ -6898,17 +6903,30 @@ fn uncertain_tag_reason(
                     },
                 ),
             };
-            proved.unwrap_or_else(|| {
-                (
+            // A member of an object a call builds names the call.
+            let built = match member {
+                true => resolve_declaration(file, ff, root, files, inputs, links)
+                    .and_then(|(declaring_file, binding, _)| files.get(&declaring_file)?.call_built.get(&binding).cloned()),
+                false => None,
+            };
+            proved.unwrap_or_else(|| match built {
+                Some(call) => (class(TagClass::Unfollowed), format!("{whose}, built by `{call}`, {UNFOLLOWED_CALL}")),
+                None => (
                     class(TagClass::Unfollowed),
                     format!("{whose}, and extraction cannot follow it to a function or class declaration"),
-                )
+                ),
             })
         }
-        Some(TagOrigin::TopLevel) if member => (
-            TagClass::Member,
-            format!("is a member of '{root}', declared in this file, that extraction cannot follow to a component"),
-        ),
+        Some(TagOrigin::TopLevel) if member => match ff.call_built.get(root) {
+            Some(call) => (
+                TagClass::Member,
+                format!("is a member of '{root}', declared in this file by `{call}`, {UNFOLLOWED_CALL}"),
+            ),
+            None => (
+                TagClass::Member,
+                format!("is a member of '{root}', declared in this file, that extraction cannot follow to a component"),
+            ),
+        },
         Some(TagOrigin::TopLevel) => declared(file, tag, "this file").unwrap_or_else(|| {
             (
                 TagClass::OtherDeclaration,
@@ -20043,6 +20061,48 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             assert!(production[0].2.starts_with(&format!("{cost}{tags}")), "{production:#?}");
             assert_eq!(production[1..], records);
             assert_eq!(reported(&entries, true), vec![]);
+        }
+    }
+
+    /// Contract: a member tag of an object a call extraction does not follow
+    /// builds names the call and what it costs, imported or declared in the
+    /// file: static values of its props are not extracted and reach the page
+    /// through runtime slots. It stays informational. An object a
+    /// `createContext` call builds is a context, whose members are no Animus
+    /// component's: it names no call.
+    #[test]
+    fn a_member_of_a_call_built_object_names_the_call() {
+        let kit = "export const Plain = ds.styles({ display: 'flex' }).asElement('div');\n\
+                   export const Fam = makeFamily({ Root: Plain }, 'Fam');\n";
+        let app = "import { Fam } from './kit';\nexport const App = () => <Fam.Root />;\n";
+        let local = "const Plain = ds.styles({ display: 'flex' }).asElement('div');\n\
+                     const Fam = makeFamily({ Root: Plain }, 'Fam');\n\
+                     export const App = () => <Fam.Root />;\n";
+        let cost = "which extraction does not follow: static values of its props are not extracted and reach the page through runtime slots";
+        for (entries, want) in [
+            (
+                vec![("kit.tsx", kit), ("app.tsx", app)],
+                format!("<Fam.Root> is a member of 'Fam', imported from './kit', built by `makeFamily(…, …)`, {cost}"),
+            ),
+            (vec![("app.tsx", local)], format!("<Fam.Root> is a member of 'Fam', declared in this file by `makeFamily(…, …)`, {cost}")),
+            (
+                vec![(
+                    "app.tsx",
+                    "const Plain = ds.styles({ display: 'flex' }).asElement('div');\n\
+                     function createContext(value) { return { Panel: () => value }; }\n\
+                     const Ctx = createContext(null);\n\
+                     export const App = () => <><Plain /><Ctx.Panel value={1} /></>;\n",
+                )],
+                "<Ctx.Panel> is a member of 'Ctx', declared in this file, that extraction cannot follow to a component".to_string(),
+            ),
+        ] {
+            let records: Vec<_> = analyze(&entries, &test_inputs())
+                .diagnostics
+                .into_iter()
+                .filter(|d| d.code.as_deref() == Some(IDENTITY_UNCERTAIN_TAG))
+                .map(|d| (d.severity.unwrap_or_default(), d.message.split(';').next().unwrap_or_default().to_string()))
+                .collect();
+            assert_eq!(records, [("info".to_string(), want)]);
         }
     }
 

@@ -757,6 +757,11 @@ pub struct FileFacts {
     /// it is followed anywhere.
     #[serde(skip)]
     pub(crate) rewrites_object: bool,
+    /// Each top-level `const` whose initializer is a call, with the call
+    /// written short (`Object.assign(RecordTable, compose(…))`): a member
+    /// tag extraction cannot follow names the call that builds its object.
+    #[serde(skip)]
+    pub(crate) call_built: BTreeMap<String, String>,
     /// The top-level components that clone their own `children` input in
     /// place with `renderAsChild(children, …)`, whose config no usage lists,
     /// with nothing but what their callers wrote, never `asChild`, each
@@ -812,6 +817,55 @@ fn unbound_create_system_calls(ast: &OwnedAst) -> Vec<(usize, usize)> {
         .into_iter()
         .map(|span| line_column(ast.source(), span.start))
         .collect()
+}
+
+/// Each top-level `const` a call initializes, with the call written short:
+/// its callee as written, an identifier argument by name, a call argument
+/// by its callee, any other argument as `…`. A context `createContext`
+/// builds holds no Animus component, so it is left out.
+fn call_built(program: &Program<'_>) -> BTreeMap<String, String> {
+    use oxc::ast::ast::{BindingPattern, Declaration, Statement};
+    let text = |span: oxc::span::Span| program.source_text.get(span.start as usize..span.end as usize).unwrap_or("…");
+    let short = |call: &oxc::ast::ast::CallExpression<'_>| {
+        let arguments: Vec<String> = call
+            .arguments
+            .iter()
+            .map(|argument| match argument.as_expression().map(crate::chain_walk::unwrap_type_assertions) {
+                Some(Expression::Identifier(id)) => id.name.to_string(),
+                Some(Expression::CallExpression(inner)) => format!("{}(…)", text(inner.callee.span())),
+                _ => "…".to_string(),
+            })
+            .collect();
+        format!("{}({})", text(call.callee.span()), arguments.join(", "))
+    };
+    let mut built = BTreeMap::new();
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::VariableDeclaration(declaration) => declaration,
+            Statement::ExportDeclaration(export) => match &export.declaration {
+                Declaration::VariableDeclaration(declaration) => declaration,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        if !declaration.kind.is_const() {
+            continue;
+        }
+        for declarator in &declaration.declarations {
+            let (BindingPattern::BindingIdentifier(id), Some(init)) = (&declarator.id, &declarator.init) else { continue };
+            if let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(init) {
+                let context = match &call.callee {
+                    Expression::Identifier(callee) => callee.name == "createContext",
+                    Expression::StaticMemberExpression(callee) => callee.property.name == "createContext",
+                    _ => false,
+                };
+                if !context {
+                    built.insert(id.name.to_string(), short(call));
+                }
+            }
+        }
+    }
+    built
 }
 
 /// In MDX's TSX view, each reference to the Animus builder: only MDX is
@@ -1557,6 +1611,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         keyed_stores: Vec::new(),
         untraced_stores: Vec::new(),
         rewrites_object: false,
+        call_built: BTreeMap::new(),
         child_cloners: BTreeMap::new(),
         opaque_tags: Vec::new(),
         transforms: Vec::new(),
@@ -2371,6 +2426,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         keyed_stores,
         untraced_stores,
         rewrites_object,
+        call_built: call_built(ast.program()),
         child_cloners,
         unbound_create_system_calls: unbound_create_system_calls(ast),
         builder_references: builder_references(ast),
