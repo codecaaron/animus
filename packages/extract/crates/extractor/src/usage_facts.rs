@@ -254,6 +254,11 @@ pub enum UsageFact {
         /// which `asChild` renders in this element's place.
         #[serde(skip)]
         element_child: Option<(u32, u32)>,
+        /// The props an attribute after a spread writes as nothing
+        /// (`size={undefined}`): it replaces what the spread delivers, so
+        /// the element renders them left out whatever its callers pass.
+        #[serde(skip)]
+        unset: Vec<String>,
     },
     /// createElement(X, ...) / React.createElement(X, ...): the first
     /// argument as a raw name or dotted key (None = unattributable form).
@@ -6841,6 +6846,7 @@ impl<'a> FactCollector<'a, '_> {
         let mut attrs = Vec::new();
         let mut spread = None;
         let mut spread_forward = None;
+        let mut unset = Vec::new();
         for attr_item in &elem.attributes {
             if let JSXAttributeItem::SpreadAttribute(spread_attribute) = attr_item {
                 // A spread of object literals with listed literal entries
@@ -6872,7 +6878,11 @@ impl<'a> FactCollector<'a, '_> {
                 let JSXAttributeName::Identifier(id) = &attr.name else {
                     continue;
                 };
-                replace_earlier(&mut attrs, &mut spread, &id.name);
+                replace_earlier(&mut attrs, &mut spread, &mut unset, &id.name);
+                // Until it is recorded, the attribute writes nothing.
+                if spread.is_some() {
+                    unset.push(id.name.to_string());
+                }
                 let written = attribute_expression(&attr.value).map(crate::chain_walk::unwrap_type_assertions);
                 // An explicit `undefined` is an omitted prop, as at runtime.
                 if written.is_some_and(|expression| is_absent(expression, self.origins)) {
@@ -7011,6 +7021,7 @@ impl<'a> FactCollector<'a, '_> {
                     Some(value) if !dynamic => (!value.is_object()).then(|| BTreeSet::from([BASE_CONDITION.to_string()])),
                     _ => written.and_then(|expression| write_conditions(expression, self.origins)),
                 };
+                unset.retain(|name| name != id.name.as_str());
                 attrs.push(AttrFact {
                     name: id.name.to_string(),
                     static_value,
@@ -7046,6 +7057,7 @@ impl<'a> FactCollector<'a, '_> {
                 [JSXChild::Element(child)] => Some((child.opening_element.span.start, child.opening_element.span.end)),
                 _ => None,
             },
+            unset,
         });
     }
 }
@@ -7878,11 +7890,12 @@ fn state_slots(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<SymbolId, 
 /// attributes wins at run time (JSX accepts them; TypeScript alone rejects
 /// them), whether or not it is then recorded: one that writes nothing is
 /// the prop left out.
-fn replace_earlier(attrs: &mut Vec<AttrFact>, spread: &mut Option<usize>, name: &str) {
+fn replace_earlier(attrs: &mut Vec<AttrFact>, spread: &mut Option<usize>, unset: &mut Vec<String>, name: &str) {
     if let Some(before) = spread {
         *before -= attrs[..*before].iter().filter(|attr| attr.name == name).count();
     }
     attrs.retain(|attr| attr.name != name);
+    unset.retain(|unset| unset != name);
 }
 
 /// Whether `program` has a `with` statement anywhere (sloppy scripts only).
@@ -9885,7 +9898,7 @@ pub fn filter_usage_scan(
                 result.open_components.entry(binding.clone()).or_insert(OpenSite { kind: "default-props", file: None, at: *at });
                 record_unwritten_options(&mut result, &mut fully_open, &binding, config, &FxHashSet::default(), true);
             }
-            UsageFact::Element { tag, attrs, spread, span, origin, written_as_call, .. } => {
+            UsageFact::Element { tag, attrs, spread, span, origin, written_as_call, unset, .. } => {
                 let uncertain = |result: &mut UsageScanResult, name: &str| {
                     result.identity_uncertain = true;
                     result.uncertain_tags.push(UncertainTag {
@@ -10060,11 +10073,25 @@ pub fn filter_usage_scan(
                             spread.is_some() && !omitted,
                         );
                     }
-                    if let (Some(config), Some(deleted)) = (component_configs.get(tag_name), proxies.deleted.get(span)) {
-                        for key in deleted.iter().filter(|key| config.variants.contains_key(*key) && !written.contains(key.as_str())) {
+                    // A prop the wrapper deletes from its rest, or one the
+                    // element writes after its spread as nothing or a value
+                    // that may be nullish, replaces what the callers pass:
+                    // the render may leave it out whatever they write.
+                    let after_spread = spread.map_or(&attrs[..0], |before| &attrs[before..]);
+                    let left_out: BTreeSet<&str> = proxies
+                        .deleted
+                        .get(span)
+                        .into_iter()
+                        .flatten()
+                        .map(String::as_str)
+                        .chain(unset.iter().map(String::as_str))
+                        .chain(after_spread.iter().filter(|attr| attr.absent).map(|attr| attr.name.as_str()))
+                        .collect();
+                    if let Some(config) = component_configs.get(tag_name) {
+                        for key in left_out.iter().filter(|key| config.variants.contains_key(**key) && !written.contains(**key)) {
                             result.variant_usages.push(VariantUsage {
                                 component_binding: binding.to_string(),
-                                variant_prop: key.clone(),
+                                variant_prop: key.to_string(),
                                 value: VariantValue::Default,
                             });
                         }

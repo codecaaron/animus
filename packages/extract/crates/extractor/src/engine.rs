@@ -2530,14 +2530,19 @@ mod tests {
     /// time (JSX accepts them; TypeScript alone rejects them). A later value
     /// that is or may be `undefined` keeps the default though an earlier
     /// attribute sets the prop, at the element and through a wrapper whose
-    /// element its callers render; and a wrapper's attribute the rest
-    /// cannot carry settles the prop only where it is never nullish.
+    /// element its callers render. An attribute after a spread replaces
+    /// what the spread delivers, so one that is or may be `undefined` keeps
+    /// the default whatever the wrapper's callers pass, and one that
+    /// settles it still prunes the default; and a wrapper's attribute the
+    /// rest cannot carry settles the prop only where it is never nullish.
     #[test]
     fn the_last_attribute_of_a_name_decides_whether_the_default_is_kept() {
         for site in [
             "export default ({ on }) => <Chip size=\"lg\" size={on ? 'sm' : undefined} />;",
             "export default () => <Chip size=\"lg\" size={undefined} />;",
             "const W = ({ on, ...rest }) => <Chip {...rest} size=\"lg\" size={on ? 'sm' : undefined} />;\nexport default () => <W on />;",
+            "const W = ({ on, ...rest }) => <Chip {...rest} size=\"lg\" size={on ? 'sm' : undefined} />;\nexport default () => <W on={false} size=\"lg\" />;",
+            "const W = (props) => <Chip {...props} size={undefined} />;\nexport default () => <W size=\"lg\" />;",
             "const W = ({ on, size, ...rest }) => <Chip size={on ? 'sm' : undefined} {...rest} />;\nexport default () => <W on />;",
         ] {
             let mut engine = ExtractEngine::new(None).unwrap();
@@ -2551,6 +2556,16 @@ mod tests {
             let css = manifest["css"].as_str().unwrap();
             assert!(css.contains("--size-default {\n    color: green"), "{site}: {css}");
         }
+        // One that settles the prop after the spread still prunes it.
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let source = "export const Chip = ds.variant({ prop: 'size', defaultVariant: 'md', variants: { sm: { color: 'red' }, md: { color: 'green' }, lg: { color: 'blue' } } }).asElement('div');\n\
+                      const W = (props) => <Chip {...props} size=\"sm\" />;\nexport default () => <W size=\"lg\" />;\n";
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine.analyze_full(serde_json::json!([{ "path": "a.jsx", "source": source }]).to_string(), None).unwrap(),
+        )
+        .unwrap();
+        let css = manifest["css"].as_str().unwrap();
+        assert!(css.contains("color: red") && !css.contains("--size-default"), "{css}");
     }
 
     /// Contract: a module with a `with` statement proves no `const` by its

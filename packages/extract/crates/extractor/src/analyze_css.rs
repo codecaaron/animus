@@ -4732,6 +4732,7 @@ fn as_child_renders<'f>(
             written_as_call: false,
             element_child: None,
             spread_forward: None,
+            unset: Vec::new(),
         });
     }
     (renders, passed)
