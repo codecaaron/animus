@@ -319,12 +319,14 @@ impl<'a, 's> ModuleFacts<'a, 's> {
         let mut writes: FxHashMap<SymbolId, usize> = FxHashMap::default();
         let mut inits = FxHashSet::default();
         facts.collect(program, &mut writes, &mut inits);
-        // Another module may replace an exported receiver's methods.
+        // Another module may replace an exported receiver's methods, and a
+        // second declaration (`var seen = []; var seen = { includes }`) may
+        // give it others.
         facts.genuine = inits
             .into_iter()
             .filter(|symbol| {
                 let all = scoping.get_resolved_references(*symbol).filter(|reference| reference.is_write()).count();
-                all == writes.get(symbol).copied().unwrap_or(0) && !facts.exported.contains(symbol)
+                all == writes.get(symbol).copied().unwrap_or(0) && declared_once(scoping, *symbol) && !facts.exported.contains(symbol)
             })
             .collect();
         facts.functions.retain(|symbol, _| !crate::identity::reassigned(scoping, *symbol));
@@ -446,6 +448,11 @@ impl<'a> Visit<'a> for Collector<'_, 'a, '_> {
             self.facts.exposed.insert(symbol);
         }
     }
+}
+
+/// Whether `symbol` has one declaration, runtime or ambient.
+fn declared_once(scoping: &Scoping, symbol: SymbolId) -> bool {
+    scoping.symbol_redeclarations(symbol).len() <= 1
 }
 
 /// Parentheses, type syntax and optional chains: the expression inside is
