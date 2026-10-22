@@ -663,8 +663,10 @@ impl<'p, 'a, 's> Proof<'p, 'a, 's> {
     /// where the argument is no list of entries the module built.
     fn constructed(set: bool, argument: Kind) -> Option<Kind> {
         let item = argument.item()?;
+        // A Set's `values`, `forEach` and `entries` yield its items as its
+        // `keys` do.
         if set {
-            return Some(Kind::map(item, Kind::Plain));
+            return Some(Kind::map(item.clone(), item));
         }
         match item {
             Kind::Plain => Some(Kind::Plain),

@@ -20853,6 +20853,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("const table = { R };\nexport const lookup = new Map(Object.values(table).map((c) => [c, 1]));", &every),
             ("const table = { R };\nexport function first() { return Object.values(table)[0]; }", &every),
             ("const table = { R };\nexport const first = function inner() { return Object.values(table)[0]; };", &every),
+            // A Set yields its items from `values`, `forEach` and `entries`.
+            ("import { register } from 'lib';\nconst table = { R };\nconst seen = new Set(Object.values(table));\nfor (const C of seen.values()) register(C);", &every),
+            ("import { register } from 'lib';\nconst table = { R };\nconst seen = new Set(Object.values(table));\nseen.forEach((C) => register(C));", &every),
+            ("import { register } from 'lib';\nconst table = { R };\nconst seen = new Set(Object.values(table));\nfor (const [, C] of seen.entries()) register(C);", &every),
         ] {
             let app = format!("import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n");
             assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]), kept, "{setup}");
