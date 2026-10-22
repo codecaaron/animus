@@ -334,6 +334,8 @@ pub(crate) struct ObjectMembers<'f> {
     /// What the uses in the analysed modules may change, closed once, on
     /// the first question.
     changed: Option<ValueEffects>,
+    /// See `this_free_calls`.
+    this_free_calls: Option<Rc<FxHashSet<(String, String, String)>>>,
 }
 
 impl<'f> ObjectMembers<'f> {
@@ -356,6 +358,7 @@ impl<'f> ObjectMembers<'f> {
             tables: FxHashMap::default(),
             building: FxHashSet::default(),
             changed: None,
+            this_free_calls: None,
         }
     }
 
@@ -828,6 +831,32 @@ impl<'f> ObjectMembers<'f> {
         table
     }
 
+    /// The method calls of the analysed modules (`FileFacts::method_calls`)
+    /// that hand their object nowhere, by module, binding and member: calls
+    /// of a member an `Object.assign` adds to a compose family, which
+    /// `compose` admits only when no such member can run with the family as
+    /// `this` (`ComposeFamilyInfo::extras`). A later write of the member is a
+    /// change of the family's own.
+    pub(crate) fn this_free_calls(&mut self) -> Rc<FxHashSet<(String, String, String)>> {
+        if let Some(calls) = &self.this_free_calls {
+            return Rc::clone(calls);
+        }
+        let mut calls = FxHashSet::default();
+        for (module, ff) in self.files {
+            for (binding, made) in &ff.method_calls {
+                let Some(Object::Family(id)) = self.local_object(module, binding) else { continue };
+                for call in made {
+                    if self.families.extras[id].iter().any(|(key, _)| *key == call.member) {
+                        calls.insert((module.clone(), binding.clone(), call.member.clone()));
+                    }
+                }
+            }
+        }
+        let calls = Rc::new(calls);
+        self.this_free_calls = Some(Rc::clone(&calls));
+        calls
+    }
+
     /// What the uses in the analysed modules may change, closed once, on
     /// the first question.
     pub(crate) fn changes(&mut self) -> &ValueEffects {
@@ -893,8 +922,10 @@ impl<'f> ObjectMembers<'f> {
         let mut by_name: Option<FxHashMap<String, Vec<Object>>> = None;
         // A config file runs in its tool, never in the app (`config_files`).
         let config_files = crate::analyze_css::config_files(files, inputs);
+        let this_free = self.this_free_calls();
         for (module, ff) in files.iter().filter(|(module, _)| !config_files.contains(*module)) {
-            for (name, used) in ff.changing_uses(module, self.evaluated) {
+            let settled = |binding: &str, member: &str| this_free.contains(&(module.clone(), binding.to_string(), member.to_string()));
+            for (name, used) in ff.changing_uses(module, self.evaluated, &settled) {
                 let reason = used.said(name, module);
                 let reach: Reach = match name.split_once('.') {
                     // A member of a namespace import.

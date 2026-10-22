@@ -534,6 +534,12 @@ pub struct FileFacts {
     /// call survives and runs whatever `extend` the object holds.
     #[serde(skip)]
     pub(crate) extend_calls: BTreeMap<String, Vec<crate::usage_facts::ObjectUse>>,
+    /// Module-scope bindings with a member called as a method, other than
+    /// `extend`, each with every such call, kept apart from
+    /// `unsafe_object_uses`: a call of a member that cannot run with the
+    /// object as `this` hands the object nowhere (`changing_uses`).
+    #[serde(skip)]
+    pub(crate) method_calls: BTreeMap<String, Vec<crate::usage_facts::MethodCall>>,
     /// Each object binding the module passes whole to a module-scope
     /// function nothing writes, which the engine judges once every module's
     /// parameter readings are known: a hand-off to a parameter that does
@@ -1096,13 +1102,16 @@ impl FileFacts {
     }
 
     /// The uses of `path`, this module, that may change a module-scope
-    /// object or hand it outside the analysis: `unsafe_object_uses`, and
-    /// each binding's first `.extend()` call that heads no extension chain
-    /// among `evaluated`, which the transform replaces.
+    /// object or hand it outside the analysis: `unsafe_object_uses`, each
+    /// binding's first `.extend()` call that heads no extension chain among
+    /// `evaluated`, which the transform replaces, and its first method call
+    /// `settled` does not name, by binding and member, as one of a member
+    /// that cannot run with the object as `this`.
     pub(crate) fn changing_uses<'a>(
         &'a self,
         path: &'a str,
         evaluated: &'a rustc_hash::FxHashSet<String>,
+        settled: &'a dyn Fn(&str, &str) -> bool,
     ) -> impl Iterator<Item = (&'a String, &'a crate::usage_facts::ObjectUse)> + 'a {
         // An extension chain starts at its parent's name, where the call is.
         let replaced = move |call: &crate::usage_facts::ObjectUse| {
@@ -1117,7 +1126,12 @@ impl FileFacts {
             .iter()
             .filter(|(name, _)| !self.unsafe_object_uses.contains_key(*name))
             .filter_map(move |(name, calls)| Some((name, calls.iter().find(|call| !replaced(call))?)));
-        self.unsafe_object_uses.iter().chain(extends)
+        let methods = self
+            .method_calls
+            .iter()
+            .filter(|(name, _)| !self.unsafe_object_uses.contains_key(*name))
+            .filter_map(move |(name, calls)| Some((name, &calls.iter().find(|call| !settled(name, &call.member))?.used)));
+        self.unsafe_object_uses.iter().chain(extends).chain(methods)
     }
 }
 
@@ -1512,6 +1526,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         context_consts,
         unsafe_object_uses,
         extend_calls,
+        method_calls,
         object_handoffs,
         written_namespaces,
         written_bindings,
@@ -1556,6 +1571,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         facades: const_initializers.facades,
         unsafe_object_uses,
         extend_calls,
+        method_calls,
         object_handoffs,
         written_bindings,
         written_member_uses,

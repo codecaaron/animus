@@ -11010,8 +11010,10 @@ fn run_with_system_floor(
     // or hands on may no longer render its children in place: each name
     // or path a module hands on or changes, and each object along it.
     let mut changed_ids: FxHashSet<String> = FxHashSet::default();
+    let this_free = object_members.this_free_calls();
     for (path, ff) in files {
-        for used in value_escapes.of(path, ff).chain(ff.changing_uses(path, &evaluated_ids).map(|(name, _)| name)) {
+        let settled = |binding: &str, member: &str| this_free.contains(&(path.clone(), binding.to_string(), member.to_string()));
+        for used in value_escapes.of(path, ff).chain(ff.changing_uses(path, &evaluated_ids, &settled).map(|(name, _)| name)) {
             let prefixes = used.match_indices('.').map(|(dot, _)| &used[..dot]).chain(std::iter::once(used.as_str()));
             for prefix in prefixes {
                 changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, links, &evaluated_ids));
@@ -18159,6 +18161,44 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let other = format!("import {{ R }} from './kit';\n{other}\n");
             let files = [("kit.tsx", kit), ("app.tsx", render), ("other.tsx", other.as_str())];
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{other}");
+        }
+    }
+
+    /// A call of a member an `Object.assign` adds to a compose family runs a
+    /// value `compose` proved cannot read the family as `this`, so it hands
+    /// the family nowhere and its slots keep their receivers' trust; any
+    /// other method call, or a write of the member, still changes it.
+    #[test]
+    fn a_call_of_a_member_an_assign_adds_to_a_family_changes_none_of_its_slots() {
+        let kit = |page: &str| {
+            format!("export const Box = ds.system({{ space: true }}).asElement('div');\nexport const R = ds.styles({{ display: 'block' }}).asElement('div');\n{page}")
+        };
+        let render = "import { Box, R } from './kit';\nexport const App = () => <R><Box p={8} /></R>;\n";
+        let assigned = "function useFrame() { return null; }\nexport const Page = Object.assign(compose({ Root: R }), { useFrame });\n";
+        let trusted: &[&str] = &[];
+        let kept: &[&str] = &["p"];
+        for (page, other, want) in [
+            (assigned, "import { Page } from './kit';\nexport const f = () => Page.useFrame();\n", trusted),
+            ("const useFrame = () => null;\nexport const Page = Object.assign(compose({ Root: R }), { useFrame });\n", "import { Page } from './kit';\nexport const f = () => Page.useFrame();\n", trusted),
+            (assigned, "import { Page as P } from './kit';\nexport const f = () => P.useFrame();\n", trusted),
+            // A member the assign does not add, a family it does not build, a
+            // plain object, or the member written.
+            (assigned, "import { Page } from './kit';\nexport const f = () => (Page as any).other();\n", kept),
+            ("export const Page = compose({ Root: R });\n", "import { Page } from './kit';\nexport const f = () => (Page as any).useFrame();\n", kept),
+            ("function useFrame() { return null; }\nexport const Page = { Root: R, useFrame };\n", "import { Page } from './kit';\nexport const f = () => Page.useFrame();\n", kept),
+            (assigned, "import { Page } from './kit';\n(Page as any).useFrame = globalThis.leak;\nexport const f = () => Page.useFrame();\n", kept),
+            // A member that reads `this` where the call gives it: a parameter
+            // default, or a nested class's computed key.
+            ("import { register } from 'lib';\nfunction useFrame(self: any = this) { register(self); return null; }\nexport const Page = Object.assign(compose({ Root: R }), { useFrame });\n", "import { Page } from './kit';\nexport const f = () => Page.useFrame();\n", kept),
+            ("import { register } from 'lib';\nfunction useFrame(get = () => this) { register(get()); return null; }\nexport const Page = Object.assign(compose({ Root: R }), { useFrame });\n", "import { Page } from './kit';\nexport const f = () => Page.useFrame();\n", kept),
+            ("import { register } from 'lib';\nfunction useFrame() { class X { [register(this)] = 1; } return X; }\nexport const Page = Object.assign(compose({ Root: R }), { useFrame });\n", "import { Page } from './kit';\nexport const f = () => Page.useFrame();\n", kept),
+            // A later use that changes or hands on the family, after a settled call.
+            (assigned, "import { Page } from './kit';\nexport const f = () => Page.useFrame();\n(Page as any).extra = 1;\n", kept),
+            (assigned, "import { register } from 'lib';\nimport { Page } from './kit';\nexport const f = () => Page.useFrame();\nregister(Page);\n", kept),
+        ] {
+            let kit = kit(page);
+            let files = [("kit.tsx", kit.as_str()), ("app.tsx", render), ("other.tsx", other)];
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{page}{other}");
         }
     }
 

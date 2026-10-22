@@ -1510,6 +1510,14 @@ pub struct ObjectUse {
     pub what: String,
 }
 
+/// A call of an object's member as a method (`Page.useFrame()`), which runs
+/// the member with the object as `this`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MethodCall {
+    pub member: String,
+    pub used: ObjectUse,
+}
+
 impl ObjectUse {
     /// The use said of `subject` in `file`: `x is passed to decorate() in
     /// a.tsx on line 3`.
@@ -2100,6 +2108,8 @@ pub(crate) struct ObjectUses {
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::extend_calls`.
     pub extend_calls: BTreeMap<String, Vec<ObjectUse>>,
+    /// See `FileFacts::method_calls`.
+    pub method_calls: BTreeMap<String, Vec<MethodCall>>,
     /// See `FileFacts::object_handoffs`.
     pub object_handoffs: Vec<Handoff>,
     /// See `FileFacts::written_namespaces`.
@@ -2204,6 +2214,7 @@ fn scan_object_uses(
         react: ReactImports::of(program, scoping),
         uses: BTreeMap::new(),
         extend_calls: BTreeMap::new(),
+        method_calls: BTreeMap::new(),
         ancestors: Vec::new(),
         style: false,
         containers: Vec::new(),
@@ -2227,6 +2238,7 @@ fn scan_object_uses(
     ObjectUses {
         unsafe_object_uses: scan.uses,
         extend_calls: scan.extend_calls,
+        method_calls: scan.method_calls,
         object_handoffs: scan.handoffs,
         written_namespaces: scan.written_namespaces,
         written_bindings: scan.written_bindings,
@@ -2339,6 +2351,7 @@ pub(crate) fn style_object_uses(
         react: ReactImports::of(program, scoping),
         uses: BTreeMap::new(),
         extend_calls: BTreeMap::new(),
+        method_calls: BTreeMap::new(),
         ancestors: Vec::new(),
         style: true,
         containers: Vec::new(),
@@ -4732,6 +4745,8 @@ struct ObjectUseScan<'a, 's> {
     uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::extend_calls`.
     extend_calls: BTreeMap<String, Vec<ObjectUse>>,
+    /// See `FileFacts::method_calls`.
+    method_calls: BTreeMap<String, Vec<MethodCall>>,
     ancestors: Vec<AstKind<'a>>,
     /// Style-value rules (see `style_object_uses`) instead of a facade's.
     style: bool,
@@ -5458,9 +5473,17 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 // extracts is replaced with it, so nothing of it runs: that
                 // is known once chains evaluate (`FileFacts::changing_uses`).
                 // Style mode returned above.
+                // Any other method call is judged once the analysis knows the
+                // function the member holds (`FileFacts::changing_uses`).
                 let extends = matches!(member, Some((_, Some("extend")))) && writes_nothing(&used_at.what);
+                let method = match member {
+                    Some((_, Some(name))) if used_at.what == format!("has its member {name} called as a method") => Some(name),
+                    _ => None,
+                };
                 if extends {
                     self.extend_calls.entry(binding.name.clone()).or_default().push(used_at);
+                } else if let Some(member) = method {
+                    self.method_calls.entry(binding.name.clone()).or_default().push(MethodCall { member: member.to_string(), used: used_at });
                 } else {
                     self.uses.insert(binding.name.clone(), used_at);
                 }
