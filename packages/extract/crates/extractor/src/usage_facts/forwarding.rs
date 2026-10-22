@@ -891,7 +891,7 @@ impl<'s> Module<'s> {
                 if let Some(rest) = &object.rest {
                     let mut held = value.clone();
                     if let Inputs::AllBut(except) = &mut held.inputs {
-                        std::rc::Rc::make_mut(except).extend(named);
+                        std::sync::Arc::make_mut(except).extend(named);
                     }
                     self.hold_pattern(&rest.argument, &held);
                 }

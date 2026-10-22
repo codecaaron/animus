@@ -61,6 +61,17 @@ impl AstStore {
     pub fn get(&self, idx: usize) -> Option<&OwnedAst> {
         self.asts.get(idx)
     }
+
+    /// `step` on each module with its input from `inputs` (in store
+    /// order), in parallel: a module is not shared between threads, so each
+    /// task holds its own alone. Results come back in store order.
+    pub(crate) fn par_map<I: Send, R: Send>(
+        &mut self,
+        inputs: Vec<I>,
+        step: impl Fn(&OwnedAst, I) -> R + Sync + Send,
+    ) -> Vec<R> {
+        self.asts.par_iter_mut().zip(inputs).map(|(ast, input)| step(ast, input)).collect()
+    }
 }
 
 #[cfg(test)]

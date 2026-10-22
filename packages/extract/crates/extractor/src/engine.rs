@@ -1204,7 +1204,7 @@ impl ExtractEngine {
     #[napi]
     pub fn analyze_prepared(&mut self, probe_evidence_json: Option<String>) -> napi::Result<String> {
         let mut clock = PhaseClock::start();
-        let Prepared { identity, mut synthesized, store, modules } = self
+        let Prepared { identity, mut synthesized, mut store, modules } = self
             .prepared
             .take()
             .ok_or_else(|| napi::Error::from_reason("analyzePrepared needs a prepare first, once per analysis"))?;
@@ -1544,6 +1544,26 @@ impl ExtractEngine {
         }
 
         clock.mark("enrich");
+        // A module's chain walk and usage read its own parse and statics
+        // alone, so the workers collect them, each task holding its module;
+        // its chains are evaluated after, through the transform references
+        // that read across modules.
+        let empty = rustc_hash::FxHashMap::default();
+        let owned = store
+            .iter()
+            .map(|ast| (lowered_by_file.remove(&ast.path), structural_by_file.remove(&ast.path)))
+            .collect();
+        let usages = store.par_map(owned, |ast, (lowered, structural)| {
+            let lowered = lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
+            let structural = structural
+                .unwrap_or_else(|| facts::structural_facts(ast, &lowered, facts::object_facts(ast.program(), &lowered)));
+            let local_usage_statics = complete_statics_by_file
+                .get(&ast.path)
+                .expect("Pass A must record complete local statics for every file");
+            let usage_extra = usage_enriched_by_file.get(&ast.path).unwrap_or(&empty);
+            let usage = facts::collect_file_usage(ast, lowered, &structural, local_usage_statics, usage_extra);
+            (structural, usage)
+        });
         let mut references = crate::transforms::TransformReferences::new(&self.opts.css_inputs);
         for ast in store.iter() {
             let (imports, exports) = &imports_by_file[&ast.path];
@@ -1561,9 +1581,8 @@ impl ExtractEngine {
                 global_declarations.entry(source).or_default().insert(declared_by.to_string());
             }
         }
-        let empty = rustc_hash::FxHashMap::default();
         let none_unsettled = rustc_hash::FxHashMap::default();
-        for ast in store.iter() {
+        for (ast, (structural, usage)) in store.iter().zip(usages) {
             self.order.push(ast.path.clone());
             let extra = enriched_by_file.get(&ast.path).unwrap_or(&empty);
             let usage_extra = usage_enriched_by_file.get(&ast.path).unwrap_or(&empty);
@@ -1583,8 +1602,8 @@ impl ExtractEngine {
                 unsettled_by_file.get(&ast.path).unwrap_or(&none_unsettled),
                 unsettled_imports_by_file.get(&ast.path).unwrap_or(&none_unsettled),
                 &references,
-                lowered_by_file.remove(&ast.path),
-                structural_by_file.remove(&ast.path),
+                Some(structural),
+                Some(usage),
             );
             if let Some(names) = global_declarations.get(ast.path.as_str()) {
                 file_facts.global_keys = facts::declaration_keys(ast.program(), ast.source(), names);

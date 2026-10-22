@@ -1269,27 +1269,28 @@ pub(crate) enum Polymorphic {
 /// props object itself, or a rest of it, whose members are those props), or
 /// every one by a route whose members are no props (`this.props`,
 /// `arguments`). The walk copies a value at every position it reaches, so
-/// the names are shared until a join grows them.
+/// the names are shared until a join grows them, behind an `Arc`: the
+/// engine's workers build the facts that hold them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) enum Inputs<N: Ord + Clone> {
     #[default]
     None,
-    Named(std::rc::Rc<BTreeSet<N>>),
-    AllBut(std::rc::Rc<BTreeSet<N>>),
+    Named(std::sync::Arc<BTreeSet<N>>),
+    AllBut(std::sync::Arc<BTreeSet<N>>),
     Every,
 }
 
 impl<N: Ord + Clone> Inputs<N> {
     pub(crate) fn all() -> Self {
-        Inputs::AllBut(std::rc::Rc::default())
+        Inputs::AllBut(std::sync::Arc::default())
     }
 
     pub(crate) fn named(names: BTreeSet<N>) -> Self {
-        Inputs::Named(std::rc::Rc::new(names))
+        Inputs::Named(std::sync::Arc::new(names))
     }
 
     pub(crate) fn all_but(names: BTreeSet<N>) -> Self {
-        Inputs::AllBut(std::rc::Rc::new(names))
+        Inputs::AllBut(std::sync::Arc::new(names))
     }
 
     pub(crate) fn any(&self) -> bool {
@@ -1310,7 +1311,7 @@ impl<N: Ord + Clone> Inputs<N> {
         let next = match (&mut *self, other) {
             (_, Inputs::None) | (Inputs::Every, _) => return false,
             (Inputs::Named(mine), Inputs::Named(theirs)) | (Inputs::AllBut(mine), Inputs::AllBut(theirs))
-                if std::rc::Rc::ptr_eq(mine, theirs) =>
+                if std::sync::Arc::ptr_eq(mine, theirs) =>
             {
                 return false;
             }
@@ -1318,21 +1319,21 @@ impl<N: Ord + Clone> Inputs<N> {
                 if theirs.is_subset(mine) {
                     return false;
                 }
-                std::rc::Rc::make_mut(mine).extend(theirs.iter().cloned());
+                std::sync::Arc::make_mut(mine).extend(theirs.iter().cloned());
                 return true;
             }
             (Inputs::AllBut(except), Inputs::Named(named)) => {
                 if except.is_disjoint(named) {
                     return false;
                 }
-                std::rc::Rc::make_mut(except).retain(|name| !named.contains(name));
+                std::sync::Arc::make_mut(except).retain(|name| !named.contains(name));
                 return true;
             }
             (Inputs::AllBut(mine), Inputs::AllBut(theirs)) => {
                 if mine.is_subset(theirs) {
                     return false;
                 }
-                std::rc::Rc::make_mut(mine).retain(|name| theirs.contains(name));
+                std::sync::Arc::make_mut(mine).retain(|name| theirs.contains(name));
                 return true;
             }
             (Inputs::None, other) | (_, other @ Inputs::Every) => other.clone(),

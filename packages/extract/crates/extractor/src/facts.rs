@@ -1902,6 +1902,55 @@ pub fn extract_file_facts_enriched_with_usage_statics(
     )
 }
 
+/// A module's chain walk and usage facts, which read its own parse and
+/// statics alone: the engine builds them on its workers before any chain
+/// is evaluated.
+pub(crate) struct FileUsage {
+    walked: chain_walk::WalkedProgram,
+    chains: Vec<ChainDescriptor>,
+    member_parent_extensions: Vec<chain_walk::MemberParentExtension>,
+    usage: Vec<crate::usage_facts::UsageFact>,
+    enriched: crate::usage_facts::EnrichedUsage,
+}
+
+/// `ast`'s `FileUsage`, read with its usage statics: an import's overwrite
+/// same-file ones.
+pub(crate) fn collect_file_usage(
+    ast: &OwnedAst,
+    lowered: crate::link::Lowered,
+    structural: &FileFacts,
+    local_usage_statics: &rustc_hash::FxHashMap<String, StaticValue>,
+    extra_usage_statics: &rustc_hash::FxHashMap<String, StaticValue>,
+) -> FileUsage {
+    let program = ast.program();
+    let mut walked = chain_walk::walk_program_facts(program);
+    let (chains, member_parent_extensions) = module_chains(
+        std::mem::take(&mut walked.chains),
+        std::mem::take(&mut walked.member_parents),
+        |root| structural.namespace_imports.contains_key(root),
+    );
+    let mut usage_statics = local_usage_statics.clone();
+    for (k, v) in extra_usage_statics {
+        usage_statics.insert(k.clone(), v.clone());
+    }
+    let descriptors: Vec<&ChainDescriptor> = chains.iter().collect();
+    let usage = crate::usage_facts::collect_usage_facts(program);
+    let enriched = crate::usage_facts::collect_enriched_usage(
+        lowered.scoping,
+        program,
+        ast.module_record(),
+        &usage_statics,
+        &ast.path,
+        &descriptors,
+        &structural.exports,
+        &structural.compose,
+        &structural.facades,
+        &structural.assigned_target_calls,
+        lowered.direct_eval,
+    );
+    FileUsage { walked, chains, member_parent_extensions, usage, enriched }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn extract_file_facts_from_static_maps(
     ast: &OwnedAst,
@@ -1913,17 +1962,23 @@ pub(crate) fn extract_file_facts_from_static_maps(
     local_unsettled: &rustc_hash::FxHashMap<String, eval::Unsettled>,
     extra_unsettled: &rustc_hash::FxHashMap<String, eval::Unsettled>,
     references: &TransformReferences<'_>,
-    lowered: Option<crate::link::Lowered>,
     structural: Option<FileFacts>,
+    usage: Option<FileUsage>,
 ) -> FileFacts {
     let program = ast.program();
-    // The engine lowers every file before static enrichment; any other
-    // caller lowers this one here.
-    let lowered = lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
-    let structural =
-        structural.unwrap_or_else(|| structural_facts(ast, &lowered, object_facts(program, &lowered)));
-    let calls_eval = lowered.direct_eval;
-    let scoping = lowered.scoping;
+    // The engine lowers every file and collects its usage first
+    // (`collect_file_usage`); any other caller does both here.
+    let (structural, usage) = match usage {
+        Some(usage) => (structural.expect("a module's usage comes with its structural facts"), usage),
+        None => {
+            let lowered = crate::link::Lowered::of(ast);
+            let structural =
+                structural.unwrap_or_else(|| structural_facts(ast, &lowered, object_facts(program, &lowered)));
+            let usage = collect_file_usage(ast, lowered, &structural, local_usage_statics, extra_usage_statics);
+            (structural, usage)
+        }
+    };
+    let FileUsage { walked, chains: walked_chains, member_parent_extensions, usage, enriched } = usage;
     let source = ast.source();
     let directive_prologue = program.directives.last().map(|last| {
         let end = extend_directive_trailing_trivia(source, last.span.end);
@@ -1949,18 +2004,11 @@ pub(crate) fn extract_file_facts_from_static_maps(
         statics_fx.remove(k);
     }
     let statics = eval::Statics::new(&statics_fx, &unsettled_fx, &ast.path);
-    let mut usage_statics_fx = local_usage_statics.clone();
-    for (k, v) in extra_usage_statics {
-        usage_statics_fx.insert(k.clone(), v.clone());
-    }
     let object_index = build_object_index(program);
     let undefined_bound = eval::module_binds(program, "undefined");
 
     let identifier_index = build_identifier_index(program);
 
-    let walked = chain_walk::walk_program_facts(program);
-    let (walked_chains, member_parent_extensions) =
-        module_chains(walked.chains, walked.member_parents, |root| structural.namespace_imports.contains_key(root));
     let create_transform_locals: rustc_hash::FxHashSet<String> = structural
         .imports
         .iter()
@@ -2229,8 +2277,6 @@ pub(crate) fn extract_file_facts_from_static_maps(
 
     let transforms =
         crate::transforms::extract_transforms(program, source, &ast.path, &create_transform_locals);
-    let descriptors: Vec<&ChainDescriptor> = chains.iter().map(|chain| &chain.descriptor).collect();
-    let usage = crate::usage_facts::collect_usage_facts(program);
     let crate::usage_facts::EnrichedUsage {
         usage: usage_enriched,
         declared_hints,
@@ -2262,19 +2308,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         builder_import_references,
         first_that_works_uses,
         builder_proof,
-    } = crate::usage_facts::collect_enriched_usage(
-        scoping,
-        program,
-        ast.module_record(),
-        &usage_statics_fx,
-        &ast.path,
-        &descriptors,
-        &structural.exports,
-        &structural.compose,
-        &structural.facades,
-        &structural.assigned_target_calls,
-        calls_eval,
-    );
+    } = enriched;
 
     FileFacts {
         directive_prologue,
