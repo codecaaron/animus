@@ -146,6 +146,11 @@ suite('a production client build and the system builder', () => {
     expect(lines[0]).toMatch(
       /ℹ \S+\.js: bundle: ships the system builder \(@animus-ui\/system's createSystem\)\. It is reached through src\/main\.ts → src\/ds\.ts: /
     );
+    // The fix for each mechanism: a runtime read, and the statements that
+    // keep a builder nothing reads.
+    expect(lines[0]).toContain(
+      'Where runtime code reads a value it builds, the builder ships with it; to drop it, import what runtime code reads from a module that holds the values as data. Where nothing reads one, a module\'s statements keep it: a package without "sideEffects" (false, or a list of the files that have side effects), a system built through a `let` rather than one `const`, `.asClass()` resolvers or components in the module that builds the system, or an import of that module that `verbatimModuleSyntax` keeps after extraction has replaced every read of it'
+    );
   });
 
   it('reports nothing where the bundle drops the builder', async () => {

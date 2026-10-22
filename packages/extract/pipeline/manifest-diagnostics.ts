@@ -548,7 +548,8 @@ export interface ShippedBuilders {
 /** `chunk` ships `builders`. Each chain shows how the bundle reaches a
  *  module holding its builder, not which read keeps it. Informational: an
  *  app that reads its system or theme at runtime ships its builder by
- *  design. */
+ *  design, and the record names the statements that keep one nothing
+ *  reads. */
 export function systemBuilderShippedDiagnostic(
   chunk: string,
   builders: ShippedBuilders
@@ -581,7 +582,7 @@ export function systemBuilderShippedDiagnostic(
     file: chunk,
     component: 'bundle',
     kind: 'info',
-    message: `ships ${what}.${via} A client build drops a builder only where no runtime code reads a value it builds, and the module that builds that value declares "sideEffects" truthfully (false, or a list of the files that have side effects); to keep it out, import what runtime code reads from a module that does not build it`,
+    message: `ships ${what}.${via} Where runtime code reads a value it builds, the builder ships with it; to drop it, import what runtime code reads from a module that holds the values as data. Where nothing reads one, a module's statements keep it: a package without "sideEffects" (false, or a list of the files that have side effects), a system built through a \`let\` rather than one \`const\`, \`.asClass()\` resolvers or components in the module that builds the system, or an import of that module that \`verbatimModuleSyntax\` keeps after extraction has replaced every read of it`,
     code: SYSTEM_BUILDER_SHIPPED,
     severity: severityFor(SYSTEM_BUILDER_SHIPPED),
   };
