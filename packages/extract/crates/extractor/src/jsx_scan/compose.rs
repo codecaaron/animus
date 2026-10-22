@@ -122,7 +122,8 @@ impl AssignSources<'_, '_> {
                 Declaration::FunctionDeclaration(function) => {
                     function.id.as_ref().is_some_and(|id| id.name == name)
                         && !function.generator
-                        && function.body.as_ref().is_some_and(|body| !reads_own_this(body))
+                        && function.body.is_some()
+                        && !reads_own_this(function)
                 }
                 Declaration::VariableDeclaration(declaration) if declaration.kind == oxc::ast::ast::VariableDeclarationKind::Const => {
                     declaration.declarations.iter().any(|declarator| {
@@ -145,9 +146,11 @@ fn animus_component(init: &Expression<'_>) -> bool {
         if matches!(member.property.name.as_str(), "asElement" | "asComponent")))
 }
 
-/// Whether a function's body reads `this` of its own: anywhere but inside a
-/// nested function or class, which has its own.
-fn reads_own_this(body: &oxc::ast::ast::FunctionBody<'_>) -> bool {
+/// Whether a function reads `this` of its own: in its parameters or body,
+/// anywhere but inside a nested function, which has its own. A nested
+/// class counts as reading it, since its `extends` clause and computed keys
+/// run with it.
+fn reads_own_this(function: &oxc::ast::ast::Function<'_>) -> bool {
     use oxc::ast_visit::Visit;
     struct Reads(bool);
     impl<'a> Visit<'a> for Reads {
@@ -155,10 +158,15 @@ fn reads_own_this(body: &oxc::ast::ast::FunctionBody<'_>) -> bool {
             self.0 = true;
         }
         fn visit_function(&mut self, _: &oxc::ast::ast::Function<'a>, _: oxc::syntax::scope::ScopeFlags) {}
-        fn visit_class(&mut self, _: &oxc::ast::ast::Class<'a>) {}
+        fn visit_class(&mut self, _: &oxc::ast::ast::Class<'a>) {
+            self.0 = true;
+        }
     }
     let mut reads = Reads(false);
-    reads.visit_function_body(body);
+    reads.visit_formal_parameters(&function.params);
+    if let Some(body) = &function.body {
+        reads.visit_function_body(body);
+    }
     reads.0
 }
 

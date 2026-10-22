@@ -19279,6 +19279,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "function Busy() { const draw = () => createElement(this.Root, { size: 'md' }); return draw(); }\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\nexport const X = () => Page.Busy();\n",
             "export const Page = Object.assign(compose({ Root: R }), { Busy() { return createElement(this.Root, { size: 'md' }); } });\nexport const X = () => Page.Busy();\n",
             "export const Page = Object.assign(compose({ Root: R }), { Busy: function () { return createElement(this.Root, { size: 'md' }); } });\nexport const X = () => Page.Busy();\n",
+            // `this` read in a parameter default, or by a nested class's
+            // computed key, which runs with the call's.
+            "function Busy(self = this) { return createElement(self.Root, { size: 'md' }); }\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\nexport const X = () => Page.Busy();\n",
+            "function Busy(get = () => this) { return createElement(get().Root, { size: 'md' }); }\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\nexport const X = () => Page.Busy();\n",
+            "function Busy() { let out; class X { [(out = createElement(this.Root, { size: 'md' }), 'k')] = 1; } return out; }\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\nexport const X = () => Page.Busy();\n",
             "import { Busy } from './busy';\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\n",
             "const Busy = make();\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\n",
             "let Busy = () => null;\nBusy = make();\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\n",
