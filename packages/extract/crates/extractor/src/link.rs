@@ -17,7 +17,7 @@ use crate::facts::FileFacts;
 use crate::flow::{FlowBuilder, ReasonId, Region, RegionAtom};
 use crate::identity::{BindingKind, BindingTable, IdentityInput, LocalId, ModuleId};
 use crate::loads::LoadTarget;
-use oxc::semantic::{Scoping, SemanticBuilder};
+use oxc::semantic::{Scoping, SemanticBuilder, SymbolId};
 use rustc_hash::FxHashSet;
 
 /// A module's record with its requests as written.
@@ -49,6 +49,9 @@ pub(crate) struct Lowered {
     pub(crate) global_let_goes: Vec<String>,
     /// How the module lets a loader escape, if it does.
     pub(crate) loader_escape: Option<&'static str>,
+    /// See `usage_facts::identity_records`; empty where direct eval can
+    /// reach any binding.
+    pub(crate) identity_records: FxHashSet<SymbolId>,
 }
 
 impl Lowered {
@@ -76,6 +79,11 @@ impl Lowered {
         let readings = std::sync::Arc::new(crate::usage_facts::function_param_readings(program, &scoping, strings.direct_eval));
         let bounded_returns = std::sync::Arc::new(crate::usage_facts::bounded_returns(program, &scoping));
         let loader_escape = crate::usage_facts::loader_escape(program, &scoping);
+        let identity_records = if strings.direct_eval {
+            FxHashSet::default()
+        } else {
+            crate::usage_facts::identity_records(program, &scoping, module_record)
+        };
         let (loads, listed) = crate::loads::collect_listed(program);
         let lowered = Self {
             scoping,
@@ -90,6 +98,7 @@ impl Lowered {
             replaces_promise: strings.replaces_promise,
             global_let_goes: strings.global_let_goes,
             loader_escape,
+            identity_records,
         };
         (lowered, listed)
     }

@@ -65,7 +65,7 @@ use crate::chain_walk::unwrap_type_assertions;
 /// The module-scope bindings the reads of which hand no component over
 /// (see the module): each record proven, and each module binding its proof
 /// judged every use of.
-pub(super) fn identity_records(program: &Program<'_>, scoping: &Scoping, module: &ModuleRecord<'_>) -> FxHashSet<SymbolId> {
+pub(crate) fn identity_records(program: &Program<'_>, scoping: &Scoping, module: &ModuleRecord<'_>) -> FxHashSet<SymbolId> {
     // Only module code is strict and has a scope of its own: a classic
     // script's block function assigns its var binding (Annex B), and another
     // script may assign its global functions.

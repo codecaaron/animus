@@ -21,6 +21,8 @@ mod forwarding;
 mod identity_records;
 mod renders_through;
 
+pub(crate) use identity_records::identity_records;
+
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::static_value::StaticValue;
 use crate::jsx_scan::{
@@ -1522,6 +1524,7 @@ pub(crate) fn collect_enriched_usage(
     built: Scoping,
     program: &Program<'_>,
     module: &ModuleRecord<'_>,
+    identity_records: &FxHashSet<SymbolId>,
     static_values: &FxHashMap<String, StaticValue>,
     module_path: &str,
     chains: &[&ChainDescriptor],
@@ -1629,15 +1632,10 @@ pub(crate) fn collect_enriched_usage(
         .zip(react_imports.as_ref())
         .map(|(scoping, react)| ordinary_components(program, scoping, react, &BTreeSet::new(), direct_eval))
         .unwrap_or_default();
-    // Records of components the module uses only by identity hand none on.
-    let identity_records = match origins {
-        Some(scoping) if !direct_eval => identity_records::identity_records(program, scoping, module),
-        _ => FxHashSet::default(),
-    };
     let (escapes, terminal_escapes, deferred_escapes) = match &scoping {
         Some(scoping) if may_escape => {
             let mut scan = EscapeScan {
-                identity_records: &identity_records,
+                identity_records,
                 admissible: &admissible,
                 react_bindings: admissible_wrappers.keys().chain(admissible_aliases.keys()).cloned().collect(),
                 scoping,
@@ -1718,7 +1716,7 @@ pub(crate) fn collect_enriched_usage(
         _ => BTreeMap::new(),
     };
     let records = origins
-        .map(|scoping| forwarding::forwarding(program, scoping, chains, &exported, &aliases, &identity_records))
+        .map(|scoping| forwarding::forwarding(program, scoping, chains, &exported, &aliases, identity_records))
         .unwrap_or_default();
     let (prop_tags, name_uses, namespace_member_uses) =
         origins.map(|scoping| prop_tags_and_uses(program, scoping, &react)).unwrap_or_default();
@@ -2122,6 +2120,7 @@ pub(crate) fn object_uses(
     object_consts: &BTreeMap<&str, bool>,
     assigned_targets: &BTreeSet<&str>,
     wrapped: FxHashMap<(u32, u32), String>,
+    identity_records: &FxHashSet<SymbolId>,
     direct_eval: bool,
 ) -> ObjectUses {
     let context_consts = context_consts(program, scoping, &ReactImports::of(program, scoping));
@@ -2130,7 +2129,7 @@ pub(crate) fn object_uses(
     for context in &context_consts {
         watched.entry(context.as_str()).or_insert(false);
     }
-    let uses = scan_object_uses(program, scoping, object_bindings(program, scoping, &watched, assigned_targets), wrapped, direct_eval);
+    let uses = scan_object_uses(program, scoping, object_bindings(program, scoping, &watched, assigned_targets), wrapped, identity_records, direct_eval);
     ObjectUses { context_consts, ..uses }
 }
 
@@ -2141,7 +2140,7 @@ pub(crate) fn written_namespaces(program: &Program<'_>, scoping: &Scoping, direc
         .into_iter()
         .filter(|(_, binding)| binding.namespace)
         .collect();
-    scan_object_uses(program, scoping, namespaces, FxHashMap::default(), direct_eval).written_namespaces
+    scan_object_uses(program, scoping, namespaces, FxHashMap::default(), &FxHashSet::default(), direct_eval).written_namespaces
 }
 
 /// The uses of `candidates` that may change their objects; `context_consts`
@@ -2151,6 +2150,7 @@ fn scan_object_uses(
     scoping: &Scoping,
     candidates: FxHashMap<SymbolId, ObjectBinding>,
     wrapped: FxHashMap<(u32, u32), String>,
+    identity_records: &FxHashSet<SymbolId>,
     direct_eval: bool,
 ) -> ObjectUses {
     if candidates.is_empty() {
@@ -2194,6 +2194,7 @@ fn scan_object_uses(
     }
     let mut scan = ObjectUseScan {
         scoping,
+        identity_records,
         source: program.source_text,
         lines: std::cell::OnceCell::new(),
         candidates: candidates.into_iter().map(|(symbol, binding)| (symbol, Rc::new(binding))).collect(),
@@ -2329,6 +2330,7 @@ pub(crate) fn style_object_uses(
     let container_names = candidates.values().filter(|b| !b.namespace).map(|b| b.name.clone()).collect();
     let mut scan = ObjectUseScan {
         scoping,
+        identity_records: &FxHashSet::default(),
         source: program.source_text,
         lines: std::cell::OnceCell::new(),
         candidates: candidates.into_iter().map(|(symbol, binding)| (symbol, Rc::new(binding))).collect(),
@@ -4713,6 +4715,10 @@ fn returned_position(span: Span, ancestors: &[AstKind<'_>]) -> Option<(Span, Vec
 /// import is followed through one member, which is the object.
 struct ObjectUseScan<'a, 's> {
     scoping: &'s Scoping,
+    /// See `identity_records`: the proof judged every use of these, and a
+    /// value of one of these records' literals is stored where nothing
+    /// changes or hands it on.
+    identity_records: &'s FxHashSet<SymbolId>,
     source: &'s str,
     /// Built on the first line a use asks for.
     lines: std::cell::OnceCell<crate::facts::LineStarts>,
@@ -4847,6 +4853,22 @@ impl CalledFunctions {
 }
 
 impl<'a> ObjectUseScan<'a, '_> {
+    /// Whether the reference at `span` is in the literal a record of
+    /// `identity_records` is declared with: one of its values, since the
+    /// proof admits no other property.
+    fn in_identity_record(&self, span: Span) -> bool {
+        let mut ancestors = self.ancestors.iter().rev();
+        let (_, Some(AstKind::ObjectProperty(_))) = peel_wrappers(span, &mut ancestors) else { return false };
+        let Some(AstKind::ObjectExpression(object)) = ancestors.next() else { return false };
+        match peel_wrappers(object.span, &mut ancestors) {
+            (init, Some(AstKind::VariableDeclarator(declarator))) if declarator.init.as_ref().map(GetSpan::span) == Some(init) => {
+                matches!(&declarator.id, oxc::ast::ast::BindingPattern::BindingIdentifier(id)
+                    if id.symbol_id.get().is_some_and(|symbol| self.identity_records.contains(&symbol)))
+            }
+            _ => false,
+        }
+    }
+
     /// Judges one use of a local alias as a use of the member it holds.
     /// Follows an array of `binding`'s members (at `base`, `ANY_MEMBER`
     /// last) from the expression at `span` outward: each array method's
@@ -5153,7 +5175,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
         }
         let Some(binding) = self.candidates.get(&symbol).cloned() else { return };
         let binding = &binding;
-        if !reference.is_value() {
+        if !reference.is_value() || self.identity_records.contains(&symbol) || self.in_identity_record(ident.span) {
             return;
         }
         if self.style {
@@ -9440,7 +9462,8 @@ pub fn collect_usage_facts_with_statics(
 ) -> Vec<UsageFact> {
     let built = SemanticBuilder::new().build(program).semantic.into_scoping();
     let direct_eval = string_code(program, &built).direct_eval;
-    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[], &[], &BTreeMap::new(), &BTreeSet::new(), direct_eval)
+    let identity_records = if direct_eval { FxHashSet::default() } else { identity_records(program, &built, module) };
+    collect_enriched_usage(built, program, module, &identity_records, static_values, module_path, &[], &[], &[], &BTreeMap::new(), &BTreeSet::new(), direct_eval)
         .usage
 }
 

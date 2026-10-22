@@ -1496,7 +1496,7 @@ pub(crate) fn object_facts(program: &Program<'_>, lowered: &crate::link::Lowered
     let assigned_targets: BTreeSet<&str> = const_initializers.targets.values().map(String::as_str).collect();
     // The components the module's `.asComponent()` terminals take.
     let wrapped = chain_walk::wrapped_components(program);
-    let uses = crate::usage_facts::object_uses(program, scoping, &object_consts, &assigned_targets, wrapped, lowered.direct_eval);
+    let uses = crate::usage_facts::object_uses(program, scoping, &object_consts, &assigned_targets, wrapped, &lowered.identity_records, lowered.direct_eval);
     ObjectFacts { props_forwarding, const_initializers, compose, uses }
 }
 
@@ -1994,6 +1994,7 @@ pub(crate) fn collect_file_usage(
         lowered.scoping,
         program,
         ast.module_record(),
+        &lowered.identity_records,
         &usage_statics,
         &ast.path,
         &descriptors,

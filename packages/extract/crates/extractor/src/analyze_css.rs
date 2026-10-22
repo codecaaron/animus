@@ -18117,6 +18117,51 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         }
     }
 
+    /// A component stored in the literal of a record its module uses only by
+    /// identity is neither changed nor handed on there, so the elements it
+    /// receives keep their trust; a record the proof leaves open, or any
+    /// other literal holding it, still changes it.
+    #[test]
+    fn a_record_used_only_by_identity_changes_none_of_its_components() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                   export const R = ds.styles({ display: 'block' }).asElement('div');\n";
+        let render = "import { Box, R } from './kit';\nexport const App = () => <R><Box p={8} /></R>;\n";
+        let trusted: &[&str] = &[];
+        let kept: &[&str] = &["p"];
+        for (other, want) in [
+            ("const table = { R };\nexport const isPart = (x: unknown) => Object.values(table).includes(x);", trusted),
+            // The inspector's shape: the record handed to a function of the module in an array.
+            ("function spellings(entries: Record<string, unknown>[]) {\n  const names = new Map<unknown, string>();\n  for (const entry of entries) for (const [key, value] of Object.entries(entry)) names.set(value, key);\n  return names;\n}\nconst table: Record<string, unknown> = { R };\nlet cache: Map<unknown, string> | null = null;\nexport const partName = (x: unknown) => (cache ??= spellings([table])).get(x);", trusted),
+            ("const table = { Part: R } as const;\nconst parts = new Set(Object.values(table));\nexport const isPart = (x: unknown) => parts.has(x);", trusted),
+            ("const table = { R };\nconst t = table;\nexport const nameOf = (x: unknown) => Object.entries(t).find(([, c]) => c === x)?.[0];", trusted),
+            // A record the proof leaves open: handed on, a value rendered,
+            // called, or written through.
+            ("import { register } from 'lib';\nconst table = { R };\nregister(table);", kept),
+            ("const table = { R };\nconst byName = new Map(Object.entries(table));\nexport const Pick = ({ k }: { k: string }) => { const C = byName.get(k)!; return <C />; };", kept),
+            ("const table = { R };\nObject.values(table).forEach((c) => (c as () => void)());", kept),
+            ("const table = { R };\nfor (const c of Object.values(table)) (c as any).render = globalThis.Slot;", kept),
+            // An exported record, or a literal that is no record.
+            ("export const table = { R };\nexport const isPart = (x: unknown) => Object.values(table).includes(x);", kept),
+            ("const table = { R, n: 1 };\nexport const isPart = (x: unknown) => Object.values(table).includes(x);", kept),
+            ("const key = 'R';\nconst table = { [key]: R };\nexport const isPart = (x: unknown) => Object.values(table).includes(x);", kept),
+            // Literals no use hands on, so only the store changes it.
+            ("const table = { R, n: 1 };", kept),
+            ("const table = { R };\n(table as any).extra = 1;", kept),
+            // Another literal holding it, beside a proven record.
+            ("import { register } from 'lib';\nconst table = { R };\nconst open = { R };\nregister(open);\nexport const isPart = (x: unknown) => Object.values(table).includes(x);", kept),
+            // Direct eval may reach the record by name.
+            ("const table = { R };\neval('table');\nexport const isPart = (x: unknown) => Object.values(table).includes(x);", kept),
+            // A record the proof leaves open writes through what it yields: a
+            // Set `add` fills, a receiver a `for…of` head binds.
+            ("const table = { R };\nconst seen = new Set<any>();\nfor (const c of Object.values(table)) seen.add(c);\nseen.forEach((C) => { C.render = (globalThis as any).Slot; });", kept),
+            ("const table = { R };\nfor (const seen of [{ includes(c: any) { c.render = (globalThis as any).Slot; return false; } }]) for (const c of Object.values(table)) seen.includes(c);", kept),
+        ] {
+            let other = format!("import {{ R }} from './kit';\n{other}\n");
+            let files = [("kit.tsx", kit), ("app.tsx", render), ("other.tsx", other.as_str())];
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{other}");
+        }
+    }
+
     #[test]
     fn identical_definitions_share_a_slot_under_any_binding() {
         let copy = |binding: &str| {
