@@ -2497,8 +2497,9 @@ mod tests {
 
     /// Contract: a proven value that may be `undefined` or `null` also
     /// selects what leaving the prop out does, inline, through `const`s or
-    /// at a breakpoint: the variant's default keeps its CSS, and so does a compound keyed on
-    /// the default option; an option no branch names still prunes.
+    /// at a breakpoint: the variant's default keeps its CSS, and so does a
+    /// compound keyed on the default option; an option no branch names
+    /// still prunes.
     #[test]
     fn a_proven_value_that_may_be_absent_keeps_the_default() {
         for site in [
@@ -2620,7 +2621,7 @@ mod tests {
         let attr = |index: usize| manifest["fileFacts"]["a.tsx"]["proven"][index]["element"]["attrs"][0].clone();
         assert_eq!(attr(0)["forwarded"], serde_json::json!({ "component": "Coalesce", "prop": "size", "nullToUndefined": true }));
         assert_eq!(attr(1)["forwarded"], serde_json::json!({ "component": "Kept", "prop": "size", "nullish": "md" }));
-        assert!(attr(2).get("forwarded").is_none(), "{:#}", attr(2));
+        assert!(attr(2).get("forwarded").is_none(), "a `??` literal after `?? undefined` forwards nothing");
     }
 
     /// Contract: the manifest says where a runtime value comes from: a prop
