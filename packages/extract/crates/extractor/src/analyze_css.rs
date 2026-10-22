@@ -20862,6 +20862,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("const table = { R };\nexport const seen = new Map<unknown, number>();\nexport const isPart = () => Object.values(table).some((c) => seen.has(c));", &every),
             // A receiver a second declaration may replace.
             ("import { register } from 'lib';\nconst table = { R };\nvar seen: any = [];\nvar seen: any = { includes(c: unknown) { register(c); return false; } };\nexport const isPart = () => Object.values(table).some((c) => seen.includes(c));", &every),
+            // An ambient declaration merged with a runtime one.
+            ("import { register } from 'lib';\nconst table = { R };\ndeclare function check(c: unknown): void;\nvar check = register;\nfor (const c of Object.values(table)) check(c);", &every),
         ] {
             let app = format!("import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n");
             assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]), kept, "{setup}");

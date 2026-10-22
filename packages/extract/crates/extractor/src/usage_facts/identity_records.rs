@@ -396,7 +396,9 @@ impl<'a> Visit<'a> for Collector<'_, 'a, '_> {
     fn enter_node(&mut self, kind: AstKind<'a>) {
         let scoping = self.facts.scoping;
         match kind {
-            AstKind::Function(function) => {
+            // An ambient declaration or overload signature runs nothing: the
+            // name holds whatever a runtime declaration, or the global, holds.
+            AstKind::Function(function) if function.body.is_some() && !function.declare => {
                 if let (Some(symbol), Some(scope)) = (function.id.as_ref().and_then(|id| id.symbol_id.get()), function.scope_id.get()) {
                     self.facts.functions.insert(symbol, Function { scope, params: &function.params, span: function.span });
                     self.facts.declared.entry(scope).or_default().push(symbol);
