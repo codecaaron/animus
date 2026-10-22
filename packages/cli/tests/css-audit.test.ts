@@ -22,6 +22,15 @@ import type {
   ManifestComponentDescriptor,
 } from '@animus-ui/extract/pipeline';
 
+/** Manifest JSON, as these fixtures write it. */
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
 const brotli = (text: string): number =>
   brotliCompressSync(Buffer.from(text), {
     params: {
@@ -491,8 +500,12 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
     expect(kept?.unproven).toEqual({
       dynamicSites: ['src/app.tsx:2'],
       forwards: [],
+      derived: [],
+      runtimeState: [],
       reachedByCallers: null,
       notPassedByMatchedCallers: null,
+      matchedCallers: null,
+      blocked: false,
       savingMeans: 'removed-if-proven-unreached',
     });
     // The text names it as kept, with its site, and no total or saving
@@ -547,14 +560,6 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
 test("a forward's callers are evidence, never a verdict", async () => {
   const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
   try {
-    const { manifest, manifestPath, dist } = writeProject(root);
-    const chip: ManifestComponentDescriptor = {
-      ...component('Chip'),
-      replacement: `createComponent('div', 'animus-Chip', {"variants":{"size":{"options":["sm","md","lg"],"default":"md"}}})`,
-    };
-    const css = `@layer anm-variants{${['sm', 'md', 'lg']
-      .map((size) => `.animus-Chip--size-${size}{${WIDE};font-size:${size}}`)
-      .join('')}}`;
     const size = (value: string) => ({
       name: 'size',
       values: [value],
@@ -569,53 +574,30 @@ test("a forward's callers are evidence, never a verdict", async () => {
     };
     interface Caller {
       tag: string;
-      attrs: Array<
-        | ReturnType<typeof size>
-        | { name: string; values: never[]; proven: false }
-      >;
+      attrs: Array<ReturnType<typeof size>>;
       spread?: number;
     }
-    const element = ({ tag, attrs, spread }: Caller) => ({
-      element: { tag: { ident: tag }, attrs, spread },
-    });
-    const audit = async (
+    const audit = (
       files: Record<string, Caller[]>,
       declarations: Record<string, Record<string, string>>
-    ) => {
-      writeFileSync(
-        manifestPath,
-        JSON.stringify({
-          ...manifest,
-          css,
-          components: { 'src/ui.tsx::Chip': chip },
-          files: { 'src/ui.tsx': ['src/ui.tsx::Chip'] },
-          component_fragments: { 'src/ui.tsx::Chip': { variants: '' } },
-          tag_components: { 'src/wrap.tsx': { Chip: 'src/ui.tsx::Chip' } },
-          tag_declarations: declarations,
-          fileFacts: {
-            'src/wrap.tsx': {
-              proven: [
-                { element: { tag: { ident: 'Chip' }, attrs: [forward] } },
-              ],
-            },
-            ...Object.fromEntries(
-              Object.entries(files).map(([file, callers]) => [
-                file,
-                { proven: callers.map(element) },
-              ])
-            ),
-          },
-        })
+    ) =>
+      forwardAudit(
+        root,
+        forward,
+        Object.fromEntries(
+          Object.entries(files).map(([file, callers]) => [
+            file,
+            callers.map(({ tag, attrs, spread }) => ({
+              element: {
+                tag: { ident: tag },
+                attrs,
+                ...(spread !== undefined && { spread }),
+              },
+            })),
+          ])
+        ),
+        { tag_declarations: declarations }
       );
-      writeFileSync(join(dist, 'assets', 'index.css'), css);
-      writeFileSync(join(dist, 'assets', 'index.js'), '"animus-Chip"');
-      const report = await runCssAudit({ manifest: manifestPath, dist, root });
-      const finding = report.restructures.findings.find(
-        (found) => found.components[0] === 'src/ui.tsx::Chip'
-      );
-      const text = formatCssAudit(report);
-      return { ...finding?.unproven, suggestion: finding?.suggestion, text };
-    };
     const wrap = { 'src/app.tsx': { Wrap: 'src/wrap.tsx::Wrap' } };
     const callers = (...values: string[]) =>
       values.map((value) => ({ tag: 'Wrap', attrs: [size(value)] }));
@@ -628,7 +610,7 @@ test("a forward's callers are evidence, never a verdict", async () => {
     ]);
     expect(all.notPassedByMatchedCallers).toEqual([]);
     expect(all.text).toContain(
-      'callers matched through imports pass size: sm, lg. A caller the audit cannot match, or a branch before this render, can differ.'
+      'callers matched through imports pass size: sm, lg; matched callers already pass every listed option. A caller the audit cannot match, or a branch before this render, can differ.'
     );
     expect(all.text).not.toMatch(/nothing to narrow|would remove none/i);
     // An option no matched caller passes is a candidate.
@@ -670,6 +652,381 @@ test("a forward's callers are evidence, never a verdict", async () => {
       }
     );
     expect(elsewhere.notPassedByMatchedCallers).toEqual(['size: lg']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** The manifest sections a `forwardAudit` project adds. */
+type ForwardExtra = Partial<
+  Pick<
+    FullProjectManifest,
+    | 'tag_components'
+    | 'tag_declarations'
+    | 'as_component_targets'
+    | 'unmatched_routes'
+    | 'slot_provenance'
+    | 'components'
+  >
+>;
+
+/** A project whose `src/wrap.tsx` renders Chip (size sm, md, lg; default
+ *  md) with `site`, and whose other files hold the given proven usage. */
+async function forwardAudit(
+  root: string,
+  site: JsonValue,
+  files: Record<string, JsonValue[]>,
+  extra: ForwardExtra = {},
+  sources: Record<string, string> = {}
+) {
+  const { manifest, manifestPath, dist } = writeProject(root);
+  const chip: ManifestComponentDescriptor = {
+    ...component('Chip'),
+    replacement: `createComponent('div', 'animus-Chip', {"variants":{"size":{"options":["sm","md","lg"],"default":"md"}}})`,
+  };
+  const css = `@layer anm-variants{${['sm', 'md', 'lg']
+    .map((size) => `.animus-Chip--size-${size}{${WIDE};font-size:${size}}`)
+    .join('')}}`;
+  mkdirSync(join(root, 'src'), { recursive: true });
+  for (const [file, text] of Object.entries(sources)) {
+    writeFileSync(join(root, file), text);
+  }
+  writeFileSync(
+    manifestPath,
+    JSON.stringify({
+      ...manifest,
+      css,
+      ...extra,
+      components: { 'src/ui.tsx::Chip': chip, ...extra.components },
+      files: { 'src/ui.tsx': ['src/ui.tsx::Chip'] },
+      component_fragments: { 'src/ui.tsx::Chip': { variants: '' } },
+      tag_components: {
+        'src/wrap.tsx': { Chip: 'src/ui.tsx::Chip' },
+        ...extra.tag_components,
+      },
+      fileFacts: {
+        'src/wrap.tsx': {
+          proven: [
+            { element: { tag: { ident: 'Chip' }, attrs: [site] } },
+            ...(files['src/wrap.tsx'] ?? []),
+          ],
+        },
+        ...Object.fromEntries(
+          Object.entries(files)
+            .filter(([file]) => file !== 'src/wrap.tsx')
+            .map(([file, proven]) => [file, { proven }])
+        ),
+      },
+    })
+  );
+  writeFileSync(join(dist, 'assets', 'index.css'), css);
+  writeFileSync(join(dist, 'assets', 'index.js'), '"animus-Chip"');
+  const report = await runCssAudit({ manifest: manifestPath, dist, root });
+  const finding = report.restructures.findings.find(
+    (found) => found.components[0] === 'src/ui.tsx::Chip'
+  );
+  return {
+    ...finding?.unproven,
+    suggestion: finding?.suggestion,
+    hold: report.restructures.pruningHold,
+    text: formatCssAudit(report),
+  };
+}
+
+/** Contract: a forward's callers are read through what passes their values
+ *  on. A caller that passes on its own component's prop, by an attribute
+ *  or a spread of its props, is read through that component's callers,
+ *  named, however many times it renders the forward; a member of an object
+ *  prop is read off the object a caller writes; a `prop ?? literal`
+ *  forward takes the literal where a caller leaves the prop out or passes
+ *  null; an `.asComponent()` component's sites are its target's callers,
+ *  without what it keeps back (`forward: true` keeps nothing back); a
+ *  component also reached by a route the matching misses gives no options
+ *  left out; and callers in the forwarding component's own module are
+ *  named so. */
+test("a forward's callers are read through what passes their values on", async () => {
+  const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
+  try {
+    const forward = (fact: JsonValue) => ({
+      name: 'size',
+      values: [],
+      proven: false,
+      dynamicSpan: { start: 0, end: 4 },
+      forwarded: fact,
+    });
+    const literal = (name: string, value: JsonValue) => ({
+      name,
+      values: [value],
+      proven: true,
+    });
+    const tag = (
+      ident: string,
+      attrs: JsonValue[],
+      more: { spread?: number; spreadForward?: { component: string } } = {}
+    ) => ({ element: { tag: { ident }, attrs, ...more } });
+    const declared = (map: Record<string, Record<string, string>>) => ({
+      tag_declarations: map,
+    });
+    const wrap = forward({ component: 'Wrap', prop: 'size' });
+
+    // Outer passes its own size on to Wrap, by an attribute and by a spread.
+    const chained = await forwardAudit(
+      root,
+      wrap,
+      {
+        'src/outer.tsx': [
+          tag('Wrap', [forward({ component: 'Outer', prop: 'size' })]),
+          tag('Wrap', [], {
+            spread: 0,
+            spreadForward: { component: 'Spread' },
+          }),
+        ],
+        'src/app.tsx': [
+          tag('Outer', [literal('size', 'lg')]),
+          tag('Spread', [literal('size', 'sm')]),
+        ],
+      },
+      declared({
+        'src/outer.tsx': { Wrap: 'src/wrap.tsx::Wrap' },
+        'src/app.tsx': {
+          Outer: 'src/outer.tsx::Outer',
+          Spread: 'src/outer.tsx::Spread',
+        },
+      })
+    );
+    expect(chained.reachedByCallers).toEqual([
+      { axis: 'size', options: ['sm', 'lg'] },
+    ]);
+    expect(chained.text).toContain(
+      '(with the callers of Outer, Spread, which pass it on)'
+    );
+    // A component that renders the forward twice is read once per render.
+    const twice = await forwardAudit(
+      root,
+      wrap,
+      {
+        'src/outer.tsx': [
+          tag('Wrap', [forward({ component: 'Outer', prop: 'size' })]),
+          tag('Wrap', [forward({ component: 'Outer', prop: 'size' })]),
+        ],
+        'src/app.tsx': [tag('Outer', [literal('size', 'lg')])],
+      },
+      declared({
+        'src/outer.tsx': { Wrap: 'src/wrap.tsx::Wrap' },
+        'src/app.tsx': { Outer: 'src/outer.tsx::Outer' },
+      })
+    );
+    expect(twice.notPassedByMatchedCallers).toEqual(['size: sm']);
+
+    // A member of an object prop, and a `?? 'sm'` forward left out or null.
+    const member = await forwardAudit(
+      root,
+      forward({ component: 'Wrap', prop: 'buttonProps', path: ['size'] }),
+      {
+        'src/app.tsx': [tag('Wrap', [literal('buttonProps', { size: 'lg' })])],
+      },
+      declared({ 'src/app.tsx': { Wrap: 'src/wrap.tsx::Wrap' } })
+    );
+    expect(member.reachedByCallers).toEqual([
+      { axis: 'size', options: ['lg'] },
+    ]);
+    for (const caller of [
+      tag('Wrap', []),
+      tag('Wrap', [literal('size', null)]),
+    ]) {
+      const nullish = await forwardAudit(
+        root,
+        forward({ component: 'Wrap', prop: 'size', nullish: 'sm' }),
+        { 'src/app.tsx': [caller] },
+        declared({ 'src/app.tsx': { Wrap: 'src/wrap.tsx::Wrap' } })
+      );
+      expect(nullish.reachedByCallers).toEqual([
+        { axis: 'size', options: ['sm'] },
+      ]);
+    }
+
+    // An `.asComponent()` component's sites pass what it does not keep back.
+    const asComponent = (id: string, variants: string) => ({
+      ...component(id),
+      terminal: 'asComponent',
+      replacement: `createComponent(Wrap, 'animus-${id}', {${variants}})`,
+    });
+    const through = await forwardAudit(
+      root,
+      wrap,
+      {
+        'src/app.tsx': [
+          tag('Card', [literal('size', 'lg')]),
+          tag('Select', [literal('size', 'sm')]),
+        ],
+      },
+      {
+        components: {
+          'src/ui.tsx::Card': asComponent('Card', ''),
+          'src/ui.tsx::Select': asComponent(
+            'Select',
+            '"variants":{"size":{"options":["sm","lg"],"default":"lg"}}'
+          ),
+        },
+        tag_components: {
+          'src/app.tsx': {
+            Card: 'src/ui.tsx::Card',
+            Select: 'src/ui.tsx::Select',
+          },
+        },
+        as_component_targets: {
+          'src/ui.tsx::Card': 'src/wrap.tsx::Wrap',
+          'src/ui.tsx::Select': 'src/wrap.tsx::Wrap',
+        },
+      }
+    );
+    // Card passes size on; Select keeps its own size variant back.
+    expect(through.reachedByCallers).toEqual([
+      { axis: 'size', options: ['lg'] },
+    ]);
+    // One that forwards every variant (`forward: true`) passes it on.
+    const forwardAll = await forwardAudit(
+      root,
+      wrap,
+      { 'src/app.tsx': [tag('Pass', [literal('size', 'sm')])] },
+      {
+        components: {
+          'src/ui.tsx::Pass': asComponent(
+            'Pass',
+            '"variants":{"size":{"options":["sm"]}},"forward":true,"states":["open"]'
+          ),
+        },
+        tag_components: { 'src/app.tsx': { Pass: 'src/ui.tsx::Pass' } },
+        as_component_targets: { 'src/ui.tsx::Pass': 'src/wrap.tsx::Wrap' },
+      }
+    );
+    expect(forwardAll.reachedByCallers).toEqual([
+      { axis: 'size', options: ['sm'] },
+    ]);
+
+    // A caller that passes a React state hook's state slot.
+    const stateful = await forwardAudit(
+      root,
+      wrap,
+      {
+        'src/app.tsx': [
+          tag('Wrap', [
+            {
+              name: 'size',
+              values: [],
+              proven: false,
+              runtimeState: { hook: 'useState', at: 0 },
+            },
+          ]),
+        ],
+      },
+      declared({ 'src/app.tsx': { Wrap: 'src/wrap.tsx::Wrap' } }),
+      { 'src/app.tsx': "const [size] = useState('sm');\n" }
+    );
+    expect(stateful.text).toContain(
+      'a matched caller passes runtime state (useState at src/app.tsx:1)'
+    );
+
+    // Callers in Wrap's own module, and a route the matching misses.
+    const local = await forwardAudit(
+      root,
+      wrap,
+      { 'src/wrap.tsx': [tag('Wrap', [literal('size', 'sm')])] },
+      {
+        ...declared({ 'src/wrap.tsx': { Wrap: 'src/wrap.tsx::Wrap' } }),
+        unmatched_routes: ['src/wrap.tsx::Wrap'],
+      }
+    );
+    expect(local.notPassedByMatchedCallers).toBeNull();
+    expect(local.text).toContain(
+      'callers matched in this module pass size: sm'
+    );
+    expect(local.text).toContain(
+      'also reached where the audit cannot match its callers'
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** Contract: a derived or runtime-state site gets no site remedy, and the
+ *  hold blocks every remedy. A value computed from its component's props
+ *  names those props and points at its callers, never a literal at the
+ *  site, which would drop them; a React state hook's state slot is kept as
+ *  runtime state, with no remedy; no remedy promises that options prune;
+ *  and where code may patch a built-in every render reads through, the
+ *  report says once that pruning is off and blocks each remedy. */
+test('a derived or runtime-state site gets no site remedy, and the hold blocks every remedy', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
+  try {
+    const site = (more: { [key: string]: JsonValue }) => ({
+      name: 'size',
+      values: [],
+      proven: false,
+      dynamicSpan: { start: 0, end: 4 },
+      ...more,
+    });
+    const derived = await forwardAudit(
+      root,
+      site({
+        derived: {
+          component: 'Wrap',
+          props: ['color'],
+          through: 'parseThemeColor',
+        },
+      }),
+      {}
+    );
+    expect(derived.suggestion).toContain(
+      "derived from Wrap's color through parseThemeColor"
+    );
+    expect(derived.suggestion).not.toContain('At the site');
+    expect(derived.reachedByCallers).toBeNull();
+
+    const sources = {
+      'src/wrap.tsx': "const x = 1;\nconst [mode] = useState('a');\n",
+    };
+    const state = await forwardAudit(
+      root,
+      site({ runtimeState: { hook: 'useState', at: 13 } }),
+      {},
+      {},
+      sources
+    );
+    expect(state.text).toContain(
+      'kept: runtime state (useState at src/wrap.tsx:2)'
+    );
+    expect(state.suggestion).toBe('');
+
+    const computed = await forwardAudit(root, site({}), {});
+    expect(computed.suggestion).toContain(
+      'would let it see which options that site reaches'
+    );
+    expect(computed.suggestion).not.toMatch(/prune/);
+
+    const held = await forwardAudit(
+      root,
+      site({}),
+      {},
+      {
+        slot_provenance: {
+          usage: [
+            { rule: 'patches-intrinsics', file: 'src/patch.ts', line: 3 },
+          ],
+          owners: {},
+          props: {},
+          components: {},
+        },
+      }
+    );
+    expect(held.hold).toEqual({
+      patchSites: 1,
+      firstSites: ['src/patch.ts:3'],
+    });
+    expect(held.text).toContain(
+      'Variant and state pruning is off for this build: 1 site'
+    );
+    expect(held.suggestion).toMatch(/^Blocked:/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

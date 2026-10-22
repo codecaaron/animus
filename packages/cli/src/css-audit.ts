@@ -154,6 +154,18 @@ export interface Unproven {
   /** The sites among them that pass on their component's own prop, which
    *  the component's callers write. */
   forwards: Array<{ site: string; component: string; prop: string }>;
+  /** The sites among them whose value is computed from their component's
+   *  own props: its callers decide them, but not which option the site
+   *  takes, so no literal at the site keeps the component's API. */
+  derived: Array<{
+    site: string;
+    component: string;
+    props: string[];
+    through: string | null;
+  }>;
+  /** The sites among them that pass a React state hook's state slot, which
+   *  changes at run time: \`at\` is the hook's call, \`file:line\`. */
+  runtimeState: Array<{ site: string; hook: string; at: string }>;
   /** Evidence, where every dynamic site forwards: the listed options, by
    *  axis, that the callers the engine matches to the forwarding component
    *  through the module graph pass, as values the analysis proves. A caller
@@ -164,6 +176,27 @@ export interface Unproven {
    *  passes, as `axis: option`. `null` with `reachedByCallers`, or where a
    *  matched caller passes a value the audit cannot read. */
   notPassedByMatchedCallers: string[] | null;
+  /** Where `reachedByCallers` is: whether the matched callers are in the
+   *  forwarding component's own module, through imports, or both, and the
+   *  components whose callers were read too because a caller passes the
+   *  prop on from one of their own (`Button`, whose `<ButtonBehavior
+   *  {...props} />` passes on what its callers write). */
+  matchedCallers: {
+    inModule: boolean;
+    throughImports: boolean;
+    chain: string[];
+    /** A forwarding component is also reached by a route the matching does
+     *  not follow (a dynamic import, an escape, a namespace member), so no
+     *  not-passed list is given. */
+    unmatchedRoute: boolean;
+    /** The matched callers that pass a React state hook's state slot,
+     *  which changes at run time: the hook and its call, `file:line`. */
+    runtimeState: Array<{ hook: string; at: string }>;
+  } | null;
+  /** The build-wide hold (`CssAuditReport.restructures.pruningHold`) keeps
+   *  every option of this component, so no change at a site can remove one
+   *  until it closes. */
+  blocked: boolean;
   /** What the finding's `saving` measures: the CSS pruning would remove if
    *  no dynamic site reached these options, which the audit cannot prove. */
   savingMeans: 'removed-if-proven-unreached';
@@ -200,6 +233,12 @@ export interface CssAuditReport {
     /** How sites were matched to components: by the engine's tag table,
      *  or by binding name where the manifest carries none. */
     siteEvidence: 'component-id' | 'binding-name';
+    /** Where code may patch a built-in every render reads through (the
+     *  manifest's `patches-intrinsics` usage gaps), the engine keeps every
+     *  variant and state option of every component: how many such sites,
+     *  and the first few, `file:line`. `null` where there is none, or
+     *  the manifest carries no slot provenance. */
+    pruningHold: { patchSites: number; firstSites: string[] } | null;
   };
 }
 
@@ -243,7 +282,22 @@ interface UsageAttr {
   dynamicSpan?: { start: number; end: number };
   /** The enclosing component's own prop a runtime value passes on
    *  unchanged. */
-  forwarded?: { component: string; prop: string; default?: Literal };
+  forwarded?: ForwardedFact;
+  /** The enclosing component's props a runtime value is computed from. */
+  derived?: { component: string; props: string[]; through?: string };
+  /** The state slot of a React state hook, its call at byte `at`. */
+  runtimeState?: { hook: string; at: number };
+}
+
+/** A prop of the enclosing component a value passes on: the prop as a
+ *  caller writes it, or a member of the object it holds (`path`); left
+ *  out, `default`, or `nullish`, which also replaces `null`. */
+interface ForwardedFact {
+  component: string;
+  prop: string;
+  path?: string[];
+  default?: Literal;
+  nullish?: Literal;
 }
 
 interface UsageFact {
@@ -253,6 +307,9 @@ interface UsageFact {
     /** A spread that can deliver any prop follows the first `spread`
      *  attrs, so it can replace them. */
     spread?: number;
+    /** That spread passes on the enclosing component's own props: its
+     *  props object, or a rest of them that never carries `omits`. */
+    spreadForward?: { component: string; omits?: string[] };
   };
   createElement?: { ident: string | null; member: string | null };
 }
@@ -463,6 +520,18 @@ function manifestProblem(raw: JsonRecord): string | null {
     )
   ) {
     return 'its dynamic_props are no record of prop records';
+  }
+  if (
+    raw.as_component_targets !== undefined &&
+    !(recordValues(raw.as_component_targets)?.every(isText) ?? false)
+  ) {
+    return 'its as_component_targets are no record of declarations';
+  }
+  if (
+    raw.unmatched_routes !== undefined &&
+    !(isList(raw.unmatched_routes) && raw.unmatched_routes.every(isText))
+  ) {
+    return 'its unmatched_routes are no list of declarations';
   }
   if (raw.css !== undefined && !isText(raw.css)) return 'its css is no text';
   if (
@@ -719,13 +788,30 @@ interface Site {
   attrs: UsageAttr[] | null;
   /** As `UsageFact.element.spread`. */
   spread?: number;
+  /** As `UsageFact.element.spreadForward`. */
+  spreadForward?: { component: string; omits?: string[] };
   /** Matched by binding name, not by the engine's tag table. */
   byName: boolean;
+  /** Where the site renders an `.asComponent()` component, which passes
+   *  its props on to the declaration it renders: what it keeps back. */
+  through?: AsComponentPass;
 }
+
+/** What an `.asComponent()` component passes on to the declaration it
+ *  renders (the runtime's `createComponent`), for one prop: `'kept'` for
+ *  its own variants and states it does not forward, which the target
+ *  never sees, and its system props; `'unread'` where its config names the
+ *  prop otherwise (a custom prop), which the audit does not read; the
+ *  value a forwarded variant (its default) or state (`false`) takes where
+ *  a caller leaves it out; `undefined` for a prop it passes unchanged. */
+type AsComponentPass = (
+  prop: string
+) => 'kept' | 'unread' | { omitted: Literal | undefined } | undefined;
 
 /** Each component's JSX sites: by the engine's tag table where the manifest
  *  carries it, else by binding name. A `createElement` site has no attrs
- *  the audit can read. */
+ *  the audit can read. An `.asComponent()` component's sites are callers
+ *  of the declaration it renders too (`as_component_targets`). */
 interface ComponentSites {
   sites: Map<string, Site[]>;
   evidence: 'component-id' | 'binding-name';
@@ -764,11 +850,13 @@ function componentSites(audited: AuditedManifest): ComponentSites {
       const declaration = fact.element
         ? ownEntry(ownEntry(manifest.tag_declarations, file), tag)
         : undefined;
+      const spreadForward = fact.element?.spreadForward;
       const site: Site = {
         file,
         attrs,
         byName: true,
         ...(spread !== undefined && { spread }),
+        ...(spreadForward !== undefined && { spreadForward }),
       };
       if (declaration !== undefined) push(byDeclaration, declaration, site);
       const resolved =
@@ -776,12 +864,50 @@ function componentSites(audited: AuditedManifest): ComponentSites {
         ownEntry(ownEntry(manifest.crossFile?.memberBindings, file), tag);
       if (resolved !== undefined) {
         push(sites, resolved, { ...site, byName: false });
+        const target = ownEntry(manifest.as_component_targets, resolved);
+        const component = ownEntry(manifest.components, resolved);
+        if (target !== undefined && component !== undefined) {
+          push(byDeclaration, target, {
+            ...site,
+            byName: false,
+            through: asComponentPass(manifest, component),
+          });
+        }
         continue;
       }
       for (const id of byBinding.get(tag) ?? []) push(sites, id, site);
     }
   }
   return { sites, evidence, byDeclaration };
+}
+
+/** What `component`, an `.asComponent()` one, passes on (`AsComponentPass`),
+ *  read from its config. */
+function asComponentPass(
+  manifest: FullProjectManifest,
+  component: ManifestComponentDescriptor
+): AsComponentPass {
+  const variants = new Map(
+    [...variantsOf(manifest, component)].map(([axis, config]) => [
+      axis,
+      config.default,
+    ])
+  );
+  const states = recordEntry(component.replacement, 'states');
+  const forward = recordEntry(component.replacement, 'forward');
+  const system = new Set(component.system_prop_names);
+  return (prop) => {
+    const variant = variants.has(prop);
+    if (variant || (isList(states) && states.includes(prop))) {
+      if (forward !== true && !(isList(forward) && forward.includes(prop))) {
+        return 'kept';
+      }
+      return { omitted: variant ? (variants.get(prop) ?? undefined) : false };
+    }
+    if (system.has(prop)) return 'kept';
+    if (component.replacement.includes(`"${prop}":`)) return 'unread';
+    return undefined;
+  };
 }
 
 const coApplies = (site: Site): boolean =>
@@ -1253,6 +1379,28 @@ function jsonValueAt(text: string, at: number): string | null {
   return null;
 }
 
+/** The JSON value a component's runtime record gives `key`, where it
+ *  gives one: an object, an array, or a scalar (`"forward":true`). */
+function recordEntry(replacement: string, key: string): JsonValue | undefined {
+  const name = `"${key}":`;
+  const at = replacement.indexOf(name);
+  if (at < 0) return undefined;
+  const rest = replacement.slice(at + name.length).trimStart();
+  const text =
+    rest[0] === '{' || rest[0] === '['
+      ? jsonValueAt(rest, 0)
+      : (/^(?:true|false|null|-?\d[\d.eE+-]*|"(?:[^"\\]|\\.)*")/.exec(
+          rest
+        )?.[0] ?? null);
+  if (text === null) return undefined;
+  try {
+    // SAFETY: JSON.parse returns a JSON value, which `JsonValue` spells.
+    return JSON.parse(text) as JsonValue;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The variant axes of a component's runtime record, each with its
  *  options (from the record, or the cross-file facts where the record
  *  does not list them) and its default. */
@@ -1261,24 +1409,18 @@ function variantsOf(
   component: ManifestComponentDescriptor
 ): Map<string, { options: string[]; default: string | null }> {
   const axes = new Map<string, { options: string[]; default: string | null }>();
-  const key = '"variants":';
-  const at = component.replacement.indexOf(key);
-  const text =
-    at < 0 ? null : jsonValueAt(component.replacement, at + key.length);
-  if (text === null) return axes;
-  let variants: Record<string, { options?: string[]; default?: string }>;
-  try {
-    // SAFETY: the record's variants object is JSON of this shape.
-    variants = JSON.parse(text) as typeof variants;
-  } catch {
-    return axes;
-  }
+  const variants = recordEntry(component.replacement, 'variants');
+  if (!isRecord(variants)) return axes;
   const listed =
     ownEntry(manifest.crossFile?.variantOptions, component.binding) ?? {};
   for (const [axis, config] of Object.entries(variants)) {
+    const options = isRecord(config) ? ownEntry(config, 'options') : undefined;
+    const fallback = isRecord(config) ? ownEntry(config, 'default') : undefined;
     axes.set(axis, {
-      options: config.options ?? ownEntry(listed, axis) ?? [],
-      default: config.default ?? null,
+      options: isList(options)
+        ? options.filter(isText)
+        : (ownEntry(listed, axis) ?? []),
+      default: isText(fallback) ? fallback : null,
     });
   }
   return axes;
@@ -1301,7 +1443,11 @@ interface DynamicSite {
   site: Site;
   start: number | null;
   /** The component's own prop the site passes on, where it does. */
-  forwarded?: { component: string; prop: string; default?: Literal };
+  forwarded?: ForwardedFact;
+  /** The component's own props the site computes its value from. */
+  derived?: NonNullable<UsageAttr['derived']>;
+  /** The React state slot the site passes. */
+  runtimeState?: NonNullable<UsageAttr['runtimeState']>;
 }
 
 function literalsOf(
@@ -1327,6 +1473,8 @@ function literalsOf(
           site,
           start: attr.dynamicSpan?.start ?? null,
           ...(attr.forwarded && { forwarded: attr.forwarded }),
+          ...(attr.derived && { derived: attr.derived }),
+          ...(attr.runtimeState && { runtimeState: attr.runtimeState }),
         });
       }
     }
@@ -1339,8 +1487,10 @@ function keptOptions(
   classes: ReadonlySet<string>,
   { sites, byDeclaration }: ComponentSites,
   locate: (dynamic: DynamicSite) => string,
-  refused: Refusal[]
+  refused: Refusal[],
+  blocked: boolean
 ): Candidate[] {
+  const routes = new Set(manifest.unmatched_routes ?? []);
   const candidates: Candidate[] = [];
   const provenance = manifest.slot_provenance;
   const name = componentNames(manifest);
@@ -1372,25 +1522,58 @@ function keptOptions(
       .map(({ axis, options }) => `${axis}: ${options.join(', ')}`)
       .join('; ');
     const count = kept.reduce((n, { options }) => n + options.length, 0);
-    // A site is counted once, however many axes it leaves unproven.
-    const bySite = new Map<Site, DynamicSite>();
+    // A site is counted once, however many axes it leaves unproven, and
+    // names each prop it passes on.
+    const bySite = new Map<Site, DynamicSite[]>();
     for (const dynamic of kept.flatMap((axis) => axis.dynamic)) {
-      if (!bySite.has(dynamic.site)) bySite.set(dynamic.site, dynamic);
+      bySite.set(dynamic.site, [...(bySite.get(dynamic.site) ?? []), dynamic]);
     }
     const where: string[] = [];
     const forwards: Unproven['forwards'] = [];
-    for (const dynamic of bySite.values()) {
-      const site = locate(dynamic);
+    const derived: Unproven['derived'] = [];
+    const runtimeState: Unproven['runtimeState'] = [];
+    for (const list of bySite.values()) {
+      const site = locate(list[0]!);
       where.push(site);
-      if (dynamic.forwarded) {
-        const { component: owner, prop } = dynamic.forwarded;
-        forwards.push({ site, component: owner, prop });
+      for (const dynamic of list) {
+        if (dynamic.forwarded !== undefined) {
+          const { component: owner, prop } = dynamic.forwarded;
+          if (
+            !forwards.some(
+              (f) => f.site === site && f.component === owner && f.prop === prop
+            )
+          ) {
+            forwards.push({ site, component: owner, prop });
+          }
+        } else if (
+          dynamic.derived !== undefined &&
+          !derived.some((d) => d.site === site)
+        ) {
+          derived.push({
+            site,
+            ...dynamic.derived,
+            through: dynamic.derived.through ?? null,
+          });
+        } else if (
+          dynamic.runtimeState !== undefined &&
+          !runtimeState.some((r) => r.site === site)
+        ) {
+          const { hook, at } = dynamic.runtimeState;
+          runtimeState.push({
+            site,
+            hook,
+            at: locate({ site: dynamic.site, start: at }),
+          });
+        }
       }
     }
     const unproven: Unproven = {
       dynamicSites: where,
       forwards,
-      ...reachedByCallers(kept, byDeclaration),
+      derived,
+      runtimeState,
+      ...reachedByCallers(kept, byDeclaration, routes, locate),
+      blocked,
       savingMeans: 'removed-if-proven-unreached',
     };
     const title = `${name(id)}: ${count} ${count === 1 ? 'option' : 'options'} unproven (${listed})`;
@@ -1472,30 +1655,49 @@ function keptOptions(
 /** Where every dynamic site of `kept` passes on its component's own prop:
  *  the listed options its matched callers pass, by axis, and those none of
  *  them passes (`Unproven`). A caller is matched to that component through
- *  the module graph (`tag_declarations`). */
+ *  the module graph (`tag_declarations`, `as_component_targets`); one that
+ *  passes on a prop of its own component in turn, by an attribute or a
+ *  spread, is read through that component's callers. */
 function reachedByCallers(
   kept: ReadonlyArray<{
     axis: string;
     options: string[];
     dynamic: DynamicSite[];
   }>,
-  byDeclaration: ReadonlyMap<string, readonly Site[]>
-): Pick<Unproven, 'reachedByCallers' | 'notPassedByMatchedCallers'> {
-  const none = { reachedByCallers: null, notPassedByMatchedCallers: null };
+  byDeclaration: ReadonlyMap<string, readonly Site[]>,
+  routes: ReadonlySet<string>,
+  locate: (dynamic: DynamicSite) => string
+): Pick<
+  Unproven,
+  'reachedByCallers' | 'notPassedByMatchedCallers' | 'matchedCallers'
+> {
+  const none = {
+    reachedByCallers: null,
+    notPassedByMatchedCallers: null,
+    matchedCallers: null,
+  };
   const reached: Array<{ axis: string; options: string[] }> = [];
-  let matched = false;
-  let unread = false;
+  const reading: CallerReading = {
+    unread: false,
+    unmatchedRoute: false,
+    inModule: false,
+    throughImports: false,
+    chain: [],
+    states: [],
+  };
+  const read = { byDeclaration, routes, reading };
   for (const { axis, options, dynamic } of kept) {
     const passed = new Set<string>();
     for (const { site, forwarded } of dynamic) {
       if (forwarded === undefined) return none;
-      const callers =
-        byDeclaration.get(`${site.file}::${forwarded.component}`) ?? [];
-      matched ||= callers.length > 0;
-      for (const caller of callers) {
-        const values = callerValues(caller, forwarded.prop, forwarded.default);
-        if (values === null) unread = true;
-        for (const value of values ?? []) passed.add(value);
+      for (const value of forwardedValues(
+        site.file,
+        forwarded,
+        read,
+        new Set(),
+        false
+      )) {
+        passed.add(value);
       }
     }
     reached.push({
@@ -1503,60 +1705,260 @@ function reachedByCallers(
       options: options.filter((option) => passed.has(option)),
     });
   }
-  if (!matched) return none;
+  const { unread, states, ...matched } = reading;
+  if (!matched.inModule && !matched.throughImports) return none;
   return {
     reachedByCallers: reached,
-    notPassedByMatchedCallers: unread ? null : unreachedOptions(kept, reached),
+    notPassedByMatchedCallers:
+      unread || matched.unmatchedRoute ? null : unreachedOptions(kept, reached),
+    matchedCallers: {
+      ...matched,
+      runtimeState: states.map(({ site, hook, at }) => ({
+        hook,
+        at: locate({ site, start: at }),
+      })),
+    },
   };
 }
 
-/** Every value `site` passes as `prop`, or `null` where one may be a value
- *  the audit cannot read: no proven literal, or a spread that can replace
- *  the attribute or deliver the prop. Left out, the prop is `omitted`. */
+/** What reading the callers of forwards found, across them all. */
+interface CallerReading {
+  /** Some matched caller passes a value the audit cannot read. */
+  unread: boolean;
+  /** A forwarding component is also reached by a route the matching does
+   *  not follow (`unmatched_routes`). */
+  unmatchedRoute: boolean;
+  inModule: boolean;
+  throughImports: boolean;
+  /** The components whose callers were read because a caller passes the
+   *  prop on from its own, in the order met. */
+  chain: string[];
+  /** The matched callers that pass a React state hook's state slot. */
+  states: Array<{ site: Site; hook: string; at: number }>;
+}
+
+/** Every value the matched callers of `forwarded`, declared in `file`, pass
+ *  for its prop, following a caller that passes on its own component's
+ *  prop to that component's callers. A declaration already on the way in
+ *  is a cycle, and unread. */
+function forwardedValues(
+  file: string,
+  forwarded: ForwardedFact,
+  read: {
+    byDeclaration: ReadonlyMap<string, readonly Site[]>;
+    routes: ReadonlySet<string>;
+    reading: CallerReading;
+  },
+  onPath: Set<string>,
+  /** Reached through a caller that passes its own prop on. */
+  followed: boolean
+): Set<string> {
+  const { reading } = read;
+  const values = new Set<string>();
+  const declaration = `${file}::${forwarded.component}`;
+  if (onPath.has(declaration)) {
+    reading.unread = true;
+    return values;
+  }
+  onPath.add(declaration);
+  if (read.routes.has(declaration) || read.routes.has(`${file}::*`)) {
+    reading.unmatchedRoute = true;
+  }
+  if (followed && !reading.chain.includes(forwarded.component)) {
+    reading.chain.push(forwarded.component);
+  }
+  for (const caller of read.byDeclaration.get(declaration) ?? []) {
+    if (caller.file === file) reading.inModule = true;
+    else reading.throughImports = true;
+    const passed = callerValues(caller, forwarded);
+    if (passed === null) reading.unread = true;
+    else if ('state' in passed) {
+      reading.unread = true;
+      reading.states.push({ site: caller, ...passed.state });
+    } else if ('forwarded' in passed) {
+      const inner = forwardedValues(
+        caller.file,
+        passed.forwarded,
+        read,
+        onPath,
+        true
+      );
+      for (const value of inner) values.add(value);
+    } else for (const value of passed.values) values.add(value);
+  }
+  onPath.delete(declaration);
+  return values;
+}
+
+/** The literal `value` holds at `path`, `undefined` where it holds none
+ *  there, or `null` where what it holds is no literal. */
+function memberAt(
+  value: JsonValue,
+  path: readonly string[]
+): Literal | undefined | null {
+  let current: JsonValue | undefined = value;
+  for (const key of path) {
+    if (!isRecord(current)) return undefined;
+    current = ownEntry(current, key);
+  }
+  if (current === undefined) return undefined;
+  return isLiteral(current) ? current : null;
+}
+
+/** Every value `site` passes as `forwarded`'s prop, or the prop of its own
+ *  component it passes on there, or `null` where one may be a value the
+ *  audit cannot read: no proven literal, a member it cannot read, or a
+ *  spread that can replace the attribute or deliver the prop. A prop left
+ *  out takes its default, else its `nullish` literal; `null` and a missing
+ *  member take the `nullish` literal. */
 function callerValues(
   site: Site,
-  prop: string,
-  omitted: Literal | undefined
-): Set<string> | null {
+  forwarded: ForwardedFact
+):
+  | { values: Set<string> }
+  | { forwarded: ForwardedFact }
+  | { state: NonNullable<UsageAttr['runtimeState']> }
+  | null {
+  const { prop, path = [], nullish } = forwarded;
+  let omitted = forwarded.default ?? nullish;
   if (site.attrs === null) return null;
   const values = new Set<string>();
+  const take = (value: Literal | undefined) => {
+    if (value !== undefined && value !== null) values.add(String(value));
+  };
+  const leftOut = () => ({
+    values: new Set(omitted == null ? [] : [String(omitted)]),
+  });
+  const passing = site.through?.(prop);
+  if (passing === 'kept') return leftOut();
+  if (passing === 'unread') return null;
+  if (passing !== undefined) omitted = passing.omitted;
+  // A spread that may hold the prop: any but a rest that never carries it.
+  const spread =
+    site.spread !== undefined &&
+    !(site.spreadForward?.omits ?? []).includes(prop)
+      ? site.spread
+      : undefined;
+  // A spread of the enclosing component's props passes on what its
+  // callers write, or `fallback` where they leave it out.
+  const throughSpread = (fallback: Literal | undefined) =>
+    site.spreadForward === undefined || path.length > 0 || values.size > 0
+      ? null
+      : {
+          forwarded: {
+            component: site.spreadForward.component,
+            prop,
+            ...(fallback !== undefined && { default: fallback }),
+          },
+        };
   // Walking back, an attribute settles the prop unless a branch of a
   // spread may leave it out, when the one before it may take its place.
   for (let index = site.attrs.length - 1; index >= 0; index--) {
     const attr = site.attrs[index]!;
     if (attr.name !== prop || attr.skip) continue;
-    if (site.spread !== undefined && index < site.spread) return null;
-    if (!attr.proven || !attr.values.every(isLiteral)) return null;
-    for (const value of attr.values) {
-      if (value !== null) values.add(String(value));
+    if (spread !== undefined && index < spread) {
+      const [only] = attr.values;
+      if (!attr.proven || attr.values.length !== 1 || only === undefined) {
+        return null;
+      }
+      return isLiteral(only) ? throughSpread(only) : null;
     }
-    if (!attr.optional) return values;
+    if (
+      attr.runtimeState !== undefined &&
+      !attr.optional &&
+      values.size === 0
+    ) {
+      return { state: attr.runtimeState };
+    }
+    const inner = attr.forwarded;
+    if (
+      inner !== undefined &&
+      !attr.optional &&
+      values.size === 0 &&
+      path.length === 0
+    ) {
+      // What the caller leaves out or makes null falls through to this
+      // forward's own fallbacks, then this prop's.
+      const fallback = inner.default ?? inner.nullish ?? omitted;
+      const nullFallback = inner.nullish ?? nullish;
+      return {
+        forwarded: {
+          ...inner,
+          ...(fallback !== undefined && { default: fallback }),
+          ...(nullFallback !== undefined && { nullish: nullFallback }),
+        },
+      };
+    }
+    if (!attr.proven) return null;
+    for (const value of attr.values) {
+      if (path.length > 0) {
+        const member = memberAt(value, path);
+        if (member === null) return null;
+        take(member ?? nullish);
+      } else if (isLiteral(value)) take(value ?? nullish);
+      else return null;
+    }
+    if (!attr.optional) return { values };
   }
-  if (site.spread !== undefined) return null;
-  if (omitted != null) values.add(String(omitted));
-  return values;
+  if (spread !== undefined) return throughSpread(undefined);
+  take(omitted);
+  return { values };
 }
 
-/** What would let a kept finding's options prune: narrowing a forward at
- *  its component's callers, and a computed value at its site. */
+/** "derived from Wrap's color through parseThemeColor". */
+function derivedPhrase({
+  component,
+  props,
+  through,
+}: Unproven['derived'][number]): string {
+  const named = props.map((prop) => `${component}'s ${prop}`).join(' and ');
+  return `derived from ${named}${through === null ? '' : ` through ${through}`}`;
+}
+/** What a change could let the engine see for a kept finding's options:
+ *  literals at a forward's callers, a literal at a site that computes its
+ *  value. Never a promise that options prune, which also takes holds a site
+ *  cannot see, and never a literal where a site computes its value from its
+ *  component's props, which would drop that prop. Empty where the hold
+ *  blocks every change, or nothing is left to suggest: the matched callers
+ *  already pass every listed option, and the other sites pass runtime
+ *  state. */
 function keptSuggestion(unproven: Unproven): string {
+  if (unproven.blocked) {
+    return 'Blocked: pruning is off for this build (see the hold at the top), so no change here can remove an option until it closes.';
+  }
   const sites = unproven.dynamicSites.length;
-  const components = [
-    ...new Set(unproven.forwards.map(({ component }) => component)),
-  ];
   const parts: string[] = [];
-  if (unproven.forwards.length > 0) {
-    const props = unproven.forwards.map(
-      ({ component, prop }) => `${component}'s ${prop}`
+  const covered =
+    unproven.notPassedByMatchedCallers !== null &&
+    unproven.notPassedByMatchedCallers.length === 0;
+  if (unproven.forwards.length > 0 && !covered) {
+    const components = new Set(
+      unproven.forwards.map(({ component }) => component)
     );
+    const props = [
+      ...new Set(
+        unproven.forwards.map(({ component, prop }) => `${component}'s ${prop}`)
+      ),
+    ];
     parts.push(
-      `${[...new Set(props)].join(' and ')} ${props.length === 1 ? 'passes' : 'pass'} on what ${components.length === 1 ? 'its callers write' : 'their callers write'}: have the callers pass literals, and the options none of them passes prune.`
+      `${props.join(' and ')} ${props.length === 1 ? 'passes' : 'pass'} on what ${components.size === 1 ? 'its callers write' : 'their callers write'}: literals at those callers would let the engine see which options they reach.`
     );
   }
-  const computed = sites - unproven.forwards.length;
-  if (computed > 0) {
+  for (const derived of unproven.derived) {
+    const { component, props } = derived;
     parts.push(
-      `${computed === sites ? 'At the site' : `At the other ${computed === 1 ? 'site' : `${computed} sites`}`}, pass a literal, or a conditional of literals the engine can enumerate, in place of the value it cannot read; the options no site reaches then prune.`
+      `This site's value is ${derivedPhrase(derived)}: what ${component}'s callers pass decides it, so a change belongs at those callers; a literal here would drop ${component}'s ${props.length === 1 ? 'prop' : 'props'}.`
+    );
+  }
+  const explained = new Set([
+    ...unproven.forwards.map(({ site }) => site),
+    ...unproven.derived.map(({ site }) => site),
+    ...unproven.runtimeState.map(({ site }) => site),
+  ]).size;
+  const others = sites - explained;
+  if (others > 0) {
+    parts.push(
+      `${others === sites ? 'At the site' : `At the other ${others === 1 ? 'site' : `${others} sites`}`}, a literal, or a conditional of literals the engine can enumerate, in place of the value it cannot read would let it see which options ${others === 1 ? 'that site reaches' : 'those sites reach'}.`
     );
   }
   return parts.join(' ');
@@ -1566,19 +1968,37 @@ function keptSuggestion(unproven: Unproven): string {
  *  verdict: `null` where it has none. */
 function callerEvidence(unproven: Unproven | undefined): string | null {
   const reached = unproven?.reachedByCallers;
-  if (!reached) return null;
+  const matched = unproven?.matchedCallers;
+  if (!reached || !matched) return null;
   const passed = reached
     .filter(({ options }) => options.length > 0)
     .map(({ axis, options }) => `${axis}: ${options.join(', ')}`);
   const notPassed = unproven.notPassedByMatchedCallers;
-  return [
-    `callers matched through imports pass ${passed.length > 0 ? passed.join('; ') : 'none of the options listed'}`,
-    notPassed === null
-      ? 'a matched caller passes a value the audit cannot read'
-      : notPassed.length > 0 &&
-        `options no matched caller passes: ${notPassed.join(', ')}`,
+  const where = [
+    matched.inModule && 'in this module',
+    matched.throughImports && 'through imports',
   ]
     .filter(Boolean)
+    .join(' and ');
+  // The components whose callers pass the prop on in turn, after the one
+  // whose site this is.
+  const followed = matched.chain;
+  const through =
+    followed.length > 0
+      ? ` (with the callers of ${followed.join(', ')}, which pass it on)`
+      : '';
+  return [
+    `callers matched ${where}${through} pass ${passed.length > 0 ? passed.join('; ') : 'none of the options listed'}`,
+    notPassed === null
+      ? matched.runtimeState.length > 0 && !matched.unmatchedRoute
+        ? `a matched caller passes runtime state (${matched.runtimeState.map(({ hook, at }) => `${hook} at ${at}`).join(', ')})`
+        : matched.unmatchedRoute
+          ? 'a forwarding component is also reached where the audit cannot match its callers (a dynamic import, a use other than as a tag, a namespace member, or an element handed to code the analysis does not read), so no list of options left out is given'
+          : 'a matched caller passes a value the audit cannot read'
+      : notPassed.length > 0
+        ? `options no matched caller passes: ${notPassed.join(', ')}`
+        : 'matched callers already pass every listed option',
+  ]
     .join('; ')
     .concat(
       '. A caller the audit cannot match, or a branch before this render, can differ.'
@@ -2124,13 +2544,15 @@ export async function runCssAudit(
   const located = componentSites(audited);
   const { sites, evidence } = located;
   const refused: Refusal[] = [];
+  const hold = pruningHold(manifest, options.root);
   const candidates = [
     ...keptOptions(
       manifest,
       classes,
       located,
       siteLocator(options.root),
-      refused
+      refused,
+      hold !== null
     ),
     ...defaultsOnlyExtensions(manifest, sites, shipped, refused),
     ...repeatedBaseBlocks(manifest, measured, sites, refused),
@@ -2155,8 +2577,39 @@ export async function runCssAudit(
     components: Object.keys(manifest.components).length,
     delivery,
     slots,
-    restructures: { floor, findings, refused, siteEvidence: evidence },
+    restructures: {
+      floor,
+      findings,
+      refused,
+      siteEvidence: evidence,
+      pruningHold: hold,
+    },
   };
+}
+
+/** The sites that may patch a built-in every render reads through (the
+ *  manifest's `patches-intrinsics` usage gaps): while any is open the
+ *  engine keeps every variant and state option of every component. */
+function pruningHold(
+  manifest: FullProjectManifest,
+  root: string | undefined
+): CssAuditReport['restructures']['pruningHold'] {
+  const patches = (manifest.slot_provenance?.usage ?? []).filter(
+    ({ rule }) => rule === 'patches-intrinsics'
+  );
+  if (patches.length === 0) return null;
+  const firstSites = patches.slice(0, SITES_SHOWN).map(({ file, at, line }) => {
+    if (file === undefined) return '(unnamed file)';
+    if (line !== undefined) return `${file}:${line}`;
+    if (at === undefined || root === undefined) return file;
+    try {
+      const found = lineAtByte(readFileSync(resolve(root, file)), at);
+      return found === null ? `${file}@${at}` : `${file}:${found}`;
+    } catch {
+      return `${file}@${at}`;
+    }
+  });
+  return { patchSites: patches.length, firstSites };
 }
 
 // -------------------------------------------------------------- report
@@ -2185,7 +2638,8 @@ export function formatCssAudit(report: CssAuditReport): string {
           `Other CSS, left out of the totals and the floor: ${css.others.slice(0, 5).join(', ')}${css.others.length > 5 ? `, +${css.others.length - 5} more` : ''}`,
         ]
       : []),
-    `Savings are measured: each edits the shipped CSS and recompresses each file alone (gzip -9, Brotli q11 lgwin 22); Brotli ranks them, measured for at most ${BROTLI_PER_KIND} findings of each kind whose gzip saving reaches the floor; a finding it does not measure stays below the floor, except one a dynamic site holds back, which is listed as kept with no saving. Long paths show their last three segments, and a finding names its first ${SITES_SHOWN} dynamic sites, then how many more.`,
+    ...holdLines(restructures.pruningHold),
+    `Savings are measured: each edits the shipped CSS and recompresses each file alone (gzip -9, Brotli q11 lgwin 22); Brotli ranks them, measured for at most ${BROTLI_PER_KIND} findings of each kind whose gzip saving reaches the floor; a finding it does not measure stays below the floor, except one a dynamic site holds back, which is listed as kept with no saving. A finding names its first ${SITES_SHOWN} dynamic sites, then how many more.`,
     '',
     '1. Delivery',
     ...deliveryLines(delivery, report.components),
@@ -2278,7 +2732,12 @@ export function formatCssAudit(report: CssAuditReport): string {
       );
       const evidence = callerEvidence(finding.unproven);
       if (evidence !== null) lines.push(`      ${evidence}`);
-      lines.push(`      next: ${finding.suggestion}`);
+      for (const { hook, at } of finding.unproven?.runtimeState ?? []) {
+        lines.push(`      kept: runtime state (${hook} at ${at})`);
+      }
+      if (finding.suggestion !== '') {
+        lines.push(`      next: ${finding.suggestion}`);
+      }
     }
   }
   if (removed.length > 0) {
@@ -2301,6 +2760,16 @@ export function formatCssAudit(report: CssAuditReport): string {
   return `${lines.join('\n')}\n`;
 }
 
+/** The build-wide hold, said once at the top of the report. */
+function holdLines(
+  hold: CssAuditReport['restructures']['pruningHold']
+): string[] {
+  if (hold === null) return [];
+  return [
+    `Variant and state pruning is off for this build: ${hold.patchSites} ${hold.patchSites === 1 ? 'site' : 'sites'} that may patch a built-in every render reads through (patches-intrinsics) keep every option of every component, project-wide (first ${hold.firstSites.length === 1 ? 'site' : 'sites'}: ${hold.firstSites.join(', ')}). No site change below can prune an option until these close.`,
+  ];
+}
+
 const keptByCount = (sites: number): string =>
   `kept by ${sites} dynamic ${sites === 1 ? 'site' : 'sites'}`;
 
@@ -2308,25 +2777,34 @@ const findings = (n: number): string =>
   `${n} ${n === 1 ? 'finding' : 'findings'}`;
 
 /** A finding's title, and the dynamic sites that keep its options where
- *  any do, the first few named: a `file:line` in the file before it as its
- *  line alone, a long path by its last segments. */
+ *  any do, the first few named, each by its full path: a `file:line` in the
+ *  file before it as its line alone. */
 function titleText({ title, unproven }: Restructure | Refusal): string {
   if (unproven === undefined) return title;
   const { dynamicSites } = unproven;
-  const forwarded = new Map(
-    unproven.forwards.map(({ site, component, prop }) => [
+  const forwarded = new Map<string, string>();
+  for (const { site, component, prop } of unproven.forwards) {
+    const note = forwarded.get(site);
+    forwarded.set(
       site,
-      `forwarded from ${component}'s ${prop}`,
-    ])
-  );
+      note === undefined
+        ? `forwarded from ${component}'s ${prop}`
+        : `${note} and ${component}'s ${prop}`
+    );
+  }
+  for (const derived of unproven.derived) {
+    forwarded.set(derived.site, derivedPhrase(derived));
+  }
+  for (const { site, hook } of unproven.runtimeState) {
+    forwarded.set(site, `runtime state from ${hook}`);
+  }
   let previous: string | null = null;
   const named = dynamicSites.slice(0, SITES_SHOWN).map((site) => {
     const note = forwarded.has(site) ? ` (${forwarded.get(site)})` : '';
     const line = /^(.+)(:\d+)$/.exec(site);
     if (line !== null && line[1] === previous) return `${line[2]}${note}`;
     previous = line?.[1] ?? null;
-    const segments = site.split('/');
-    return `${site.length > 40 && segments.length > 3 ? `…/${segments.slice(-3).join('/')}` : site}${note}`;
+    return `${site}${note}`;
   });
   const more = dynamicSites.length - named.length;
   return `${title}, ${keptByCount(dynamicSites.length)}: ${named.join(', ')}${more > 0 ? `, +${more} more` : ''}`;
