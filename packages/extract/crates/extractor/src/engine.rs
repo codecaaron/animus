@@ -2464,6 +2464,29 @@ mod tests {
         assert_eq!(attr("proven", "size")["proven"], false);
     }
 
+    /// Contract: a \`const\` bound to a conditional of literals is one of
+    /// those literals wherever it is read, as a literal written at the site
+    /// is: proven, and an option no branch names prunes.
+    #[test]
+    fn a_const_of_literal_branches_is_proven_and_prunes() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let source = "export const Grip = ds.variant({ prop: 'tone', defaultVariant: 'light', variants: { tertiary: { margin: 1 }, extraLight: { margin: 2 }, light: { margin: 3 }, heavy: { margin: 4 } } }).asElement('div');\n\
+                      export const Item = ({ withIcon, disabled }) => {\n\
+                        const tone = withIcon ? 'tertiary' : disabled ? 'extraLight' : 'light';\n\
+                        return <Grip tone={tone} />;\n\
+                      };\n";
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine.analyze_full(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string(), None).unwrap(),
+        )
+        .unwrap();
+        let attr = manifest["fileFacts"]["a.tsx"]["proven"][0]["element"]["attrs"][0].clone();
+        assert_eq!(attr["values"], serde_json::json!(["tertiary", "extraLight", "light"]));
+        assert_eq!(attr["proven"], true);
+        let css = manifest["css"].as_str().unwrap();
+        assert!(css.contains("--tone-tertiary") && css.contains("--tone-extraLight"), "{css}");
+        assert!(!css.contains("--tone-heavy"), "an option no branch names prunes: {css}");
+    }
+
     /// Contract: the manifest names the component's own prop a runtime
     /// value passes on unchanged, destructured or read off its props
     /// object, so a reader can tell a forward, which its callers write,

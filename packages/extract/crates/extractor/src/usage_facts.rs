@@ -1409,6 +1409,7 @@ pub(crate) fn collect_enriched_usage(
         provided: provided_components(program),
         rests: origins.map(|scoping| rest_parameters(program, scoping)).unwrap_or_default(),
         declaring: oxc::ast::ast::VariableDeclarationKind::Var,
+        local_consts: FxHashMap::default(),
     };
     collector.visit_program(program);
     let declared_hints = std::mem::take(&mut collector.declared_hints);
@@ -6607,6 +6608,9 @@ struct FactCollector<'a, 's> {
     provided: FxHashSet<SymbolId>,
     /// The kind of the declaration whose declarators are being visited.
     declaring: oxc::ast::ast::VariableDeclarationKind,
+    /// Enriched collection only: each `const` whose value is proven one of
+    /// a few literals (\`finite_set\`), as the walk reaches its declarator.
+    local_consts: FxHashMap<SymbolId, FiniteSet>,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -7172,10 +7176,12 @@ impl FactCollector<'_, '_> {
                 let kept = FiniteSet { values, absent: false };
                 Some(if reaches_right { kept.union(right) } else { kept })
             }
-            Expression::Identifier(_) => {
-                let value = evaluate_with_statics(expression, self.static_values, self.scoping)?;
-                is_class_value(&value).then(|| FiniteSet { values: vec![value], absent: false })
-            }
+            Expression::Identifier(ident) => match evaluate_with_statics(expression, self.static_values, self.scoping) {
+                Some(value) => is_class_value(&value).then(|| FiniteSet { values: vec![value], absent: false }),
+                // A \`const\` bound to one of a few literals, as its declarator
+                // read it: a \`const\` keeps the value it was declared with.
+                None => self.local_consts.get(&symbol_of(self.origins?, ident)?).cloned(),
+            },
             _ => Some(FiniteSet { values: vec![literal_value(expression)?], absent: false }),
         }
     }
@@ -7627,6 +7633,13 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
     }
 
     fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+        if let (true, oxc::ast::ast::VariableDeclarationKind::Const, oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init)) =
+            (self.enrich, self.declaring, &declarator.id, &declarator.init)
+        {
+            if let (Some(symbol), Some(set)) = (id.symbol_id.get(), self.finite_set(init)) {
+                self.local_consts.insert(symbol, set);
+            }
+        }
         if let Some(clones) = &mut self.clones {
             if let (
                 oxc::ast::ast::VariableDeclarationKind::Const,
@@ -8718,6 +8731,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         provided: FxHashSet::default(),
         rests: FxHashMap::default(),
         declaring: oxc::ast::ast::VariableDeclarationKind::Var,
+        local_consts: FxHashMap::default(),
     };
     collector.visit_program(program);
     collector.finish()
@@ -9444,9 +9458,16 @@ pub fn filter_usage_scan(
                                     written.insert(attr.name.as_str());
                                 }
                                 let passed = passed.and_then(|passed| passed.get(&attr.name));
-                                let values = match passed {
-                                    Some(values) => values.as_slice(),
-                                    None => std::slice::from_ref(&attr.variant_class),
+                                // A runtime value proven one of a few literals
+                                // selects each option a literal of them would.
+                                let proven: Option<Vec<VariantValue>> = match (&attr.variant_class, attr.proven_values()) {
+                                    (VariantValue::Dynamic, Some(values)) => Some(values.map(value_variant).collect()),
+                                    _ => None,
+                                };
+                                let values = match (passed, &proven) {
+                                    (Some(values), _) => values.as_slice(),
+                                    (None, Some(values)) => values.as_slice(),
+                                    (None, None) => std::slice::from_ref(&attr.variant_class),
                                 };
                                 for value in values {
                                     result.variant_usages.push(VariantUsage {

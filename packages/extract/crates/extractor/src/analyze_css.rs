@@ -21029,7 +21029,6 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     fn named_props_a_wrapper_cannot_follow_keep_every_option() {
         for wrapper in [
             "const Button = ({ size, ...rest }) => { size = size ?? 'lg'; return <R size={size} {...rest} />; };",
-            "const Button = ({ size, ...rest }) => <R size={size === 'big' ? 'lg' : 'sm'} {...rest} />;",
             "const Button = ({ size = DEFAULT, ...rest }) => <R size={size} {...rest} />;",
             "const Button = ({ size = 'sm', ...rest }) => <R size={size} {...rest} size={pick()} />;",
         ] {
@@ -21037,6 +21036,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let (sizes, _, _) = wrapper_kept(&app);
             assert_eq!(sizes, vec!["sm", "md", "lg"], "{wrapper}");
         }
+        // A value proven one of a few literals selects only those, however
+        // the wrapper reads its prop; the rest it spreads never carries it.
+        let app = "const Button = ({ size, ...rest }) => <R size={size === 'big' ? 'lg' : 'sm'} {...rest} />;\n\
+                   export const App = () => <Button size=\"sm\" />;";
+        let (sizes, _, _) = wrapper_kept(app);
+        assert_eq!(sizes, vec!["sm", "lg"]);
         for render in [
             "<Button size={pick()} />",
             "<Button {...extra} />",
