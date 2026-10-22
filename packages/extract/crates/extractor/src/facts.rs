@@ -694,6 +694,10 @@ pub struct FileFacts {
     /// How the module uses each module-scope name it declares or imports.
     #[serde(skip)]
     pub(crate) name_uses: BTreeMap<String, crate::usage_facts::NameUses>,
+    /// Each top-level `const` React's `lazy` binds to a literal import:
+    /// the component it renders (`usage_facts::lazy_targets`).
+    #[serde(skip)]
+    pub(crate) lazy_targets: BTreeMap<String, crate::usage_facts::LazyTarget>,
     /// How the module uses each member of a namespace import (`ns.X`).
     #[serde(skip)]
     pub(crate) namespace_member_uses: BTreeMap<String, crate::usage_facts::NameUses>,
@@ -1541,6 +1545,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         prop_tags: Vec::new(),
         name_uses: BTreeMap::new(),
         namespace_member_uses: BTreeMap::new(),
+        lazy_targets: BTreeMap::new(),
         direct_eval: false,
         opaque_calls: Vec::new(),
         element_consts: BTreeMap::new(),
@@ -2241,6 +2246,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         name_uses,
         namespace_member_uses,
         direct_eval,
+        lazy_targets,
         opaque_calls,
         element_consts,
         opaque_tags,
@@ -2319,6 +2325,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         name_uses,
         namespace_member_uses,
         direct_eval,
+        lazy_targets,
         opaque_calls,
         element_consts,
         opaque_tags,

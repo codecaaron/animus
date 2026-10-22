@@ -1025,6 +1025,13 @@ pub struct CssOutput {
     /// provenance is asked for, for `animus css audit` to match a forwarded
     /// prop's callers by identity.
     pub tag_declarations: BTreeMap<String, BTreeMap<String, String>>,
+    /// Each `.asComponent()` component → the declaration it renders,
+    /// `file::binding`; built only where slot provenance is asked for.
+    pub as_component_targets: BTreeMap<String, String>,
+    /// Each declaration, `file::binding`, or whole module, `file::*`, that
+    /// a route `tag_declarations` does not match reaches
+    /// (`unmatched_routes`); built only where slot provenance is asked for.
+    pub unmatched_routes: BTreeSet<String>,
     /// Each `systemPropNames` list runtime configs reference, by key, as its
     /// source in the system-props module (`PropNameLists`).
     pub prop_name_lists: BTreeMap<String, String>,
@@ -4560,6 +4567,7 @@ fn handoffs<'f>(
             span,
             origin,
             written_as_call,
+            ..
         } if tag == local => {
             let how = match spread {
                 Some(_) => Some(Handoff::Spread),
@@ -4723,6 +4731,7 @@ fn as_child_renders<'f>(
             origin: *child_origin,
             written_as_call: false,
             element_child: None,
+            spread_forward: None,
         });
     }
     (renders, passed)
@@ -5718,6 +5727,69 @@ fn routed_values<'u>(
     routed
 }
 
+/// The declarations a route `tag_declarations` does not match reaches:
+/// a module-scope name used other than as a JSX tag or an export (handed to
+/// a call or a prop, aliased, held by an object), a namespace member
+/// (`ns.X`, whose tags are members), and an element handed to code the
+/// analysis does not read; and, as `file::*`, each module a load other
+/// than a `lazy` import, an escaping namespace import or a namespace
+/// export opens, which hands every export on.
+fn unmatched_routes(
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+    delivered_tags: &[OpaqueDelivery],
+) -> BTreeSet<String> {
+    let mut routes = BTreeSet::new();
+    let mut add = |declared: Option<(String, String)>| {
+        if let Some((file, binding)) = declared {
+            routes.insert(format!("{file}::{binding}"));
+        }
+    };
+    for (path, ff) in files {
+        for (name, uses) in &ff.name_uses {
+            if uses.other > 0 || uses.held > 0 {
+                add(callee_declaration(path, name, files, inputs, links));
+            }
+        }
+        for member in ff.namespace_member_uses.keys() {
+            add(namespace_member_declaration(path, ff, member, files, inputs, links).map(|(file, binding, _)| (file, binding)));
+        }
+    }
+    for delivery in delivered_tags {
+        let Some(ff) = files.get(&delivery.file) else { continue };
+        add(callee_declaration(&delivery.file, &delivery.tag, files, inputs, links));
+        add(namespace_member_declaration(&delivery.file, ff, &delivery.tag, files, inputs, links).map(|(file, binding, _)| (file, binding)));
+    }
+    routes.extend(opened_modules(files, inputs, true).into_iter().map(|module| format!("{module}::*")));
+    routes
+}
+
+/// The modules code usage cannot follow may reach whole: each one loaded
+/// at runtime, but with `skip_lazy` a React `lazy()` of a literal import,
+/// whose callers the matching follows (`lazy_targets`); and each namespace
+/// imported and used other than to read a member by name (an alias, a
+/// member path, an export of it: `written_namespaces`), or exported as a
+/// value (`export * as sub`, `export { ns }`), which any importer may use
+/// so.
+fn opened_modules(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs, skip_lazy: bool) -> BTreeSet<String> {
+    let mut opened = BTreeSet::new();
+    for (path, ff) in files {
+        let lazy: FxHashSet<u32> =
+            if skip_lazy { ff.lazy_targets.values().map(|target| target.at).collect() } else { FxHashSet::default() };
+        for load in ff.module_loads.iter().filter(|load| !lazy.contains(&load.start)) {
+            opened.extend(loaded_modules(path, load, files, inputs).into_iter().cloned());
+        }
+        let let_go = ff.namespace_imports.iter().filter(|(namespace, _)| {
+            ff.value_escapes.iter().any(|escaped| escaped == *namespace) || ff.written_namespaces.contains_key(*namespace)
+        });
+        for source in let_go.map(|(_, source)| source).chain(ff.namespace_exports.values()) {
+            opened.extend(resolve_import_source(path, source, files, inputs));
+        }
+    }
+    opened
+}
+
 /// Whether a tag's root, bound at `origin`, is a binding of the module: an
 /// import or a top-level binding, or unknown when the facts were collected
 /// without the file's scopes.
@@ -6319,31 +6391,9 @@ fn bounded_prop_tags(
         }
         declarations
     };
-    // The modules code usage cannot follow may reach whole: each one loaded
-    // at runtime, and each namespace imported and used other than to read a
-    // member by name (an alias, a member path, an export of it:
-    // `written_namespaces`), or exported as a value (`export * as sub`,
-    // `export { ns }`), which any importer may use so. Code given the
-    // namespace may also set a component's `defaultProps`, its `as` among
-    // them.
-    let opened_modules: OnceCell<Vec<String>> = OnceCell::new();
-    let opened_module_list = || {
-        let mut opened = Vec::new();
-        for (path, ff) in files {
-            for load in &ff.module_loads {
-                opened.extend(loaded_modules(path, load, files, inputs).into_iter().cloned());
-            }
-            let let_go = ff.namespace_imports.iter().filter(|(namespace, _)| {
-                ff.value_escapes.iter().any(|escaped| escaped == *namespace) || ff.written_namespaces.contains_key(*namespace)
-            });
-            for source in let_go.map(|(_, source)| source).chain(ff.namespace_exports.values()) {
-                opened.extend(resolve_import_source(path, source, files, inputs));
-            }
-        }
-        opened.sort();
-        opened.dedup();
-        opened
-    };
+    // Code given a namespace `opened_modules` names may also set a
+    // component's `defaultProps`, its `as` among them.
+    let opened: OnceCell<BTreeSet<String>> = OnceCell::new();
     let mut bounded: FxHashMap<(String, String, String), bool> = FxHashMap::default();
     let mut renders_bounded = |module: &String, function: &String, prop: &String| -> bool {
         let target = (module.clone(), function.clone());
@@ -6359,7 +6409,7 @@ fn bounded_prop_tags(
         }
         // An opened module hands its exports, and those of every module it
         // re-exports from, to code usage cannot follow.
-        if opened_modules.get_or_init(opened_module_list).iter().any(|opened| reexports_from(opened, module)) {
+        if opened.get_or_init(|| opened_modules(files, inputs, false)).iter().any(|opened| reexports_from(opened, module)) {
             return false;
         }
         // An element of it handed to code outside the analysis may be cloned
@@ -10867,33 +10917,62 @@ fn run_with_system_floor(
         .iter()
         .filter(|_| inputs.slot_provenance)
         .filter_map(|(path, ff)| {
-            let mut origins: BTreeMap<&str, Option<TagOrigin>> = BTreeMap::new();
+            let mut origins: BTreeMap<(&str, bool), Option<TagOrigin>> = BTreeMap::new();
             for fact in ff.usage_for_analysis() {
-                if let UsageFact::Element { tag: TagFact::Ident(tag), origin, written_as_call: false, .. } = fact {
-                    if !tag.starts_with(|first: char| first.is_ascii_uppercase()) {
-                        continue;
-                    }
-                    let bound = origin.filter(|origin| matches!(origin, TagOrigin::Import | TagOrigin::TopLevel));
-                    let entry = origins.entry(tag.as_str()).or_insert(bound);
-                    if *entry != bound {
-                        *entry = None;
-                    }
+                let UsageFact::Element { tag, origin, written_as_call: false, .. } = fact else { continue };
+                let (tag, member) = match tag {
+                    TagFact::Ident(tag) if tag.starts_with(|first: char| first.is_ascii_uppercase()) => (tag, false),
+                    TagFact::Member(tag) => (tag, true),
+                    TagFact::Ident(_) => continue,
+                };
+                let bound = origin.filter(|origin| matches!(origin, TagOrigin::Import | TagOrigin::TopLevel));
+                let entry = origins.entry((tag.as_str(), member)).or_insert(bound);
+                if *entry != bound {
+                    *entry = None;
                 }
             }
             let tags: BTreeMap<String, String> = origins
                 .into_iter()
-                .filter_map(|(tag, origin)| {
-                    // A namespace import, rendered whole, names no declaration.
-                    if origin? == TagOrigin::Import && !ff.imports.iter().any(|import| import.local == tag) {
-                        return None;
+                .filter_map(|((tag, member), origin)| {
+                    // A member names the ordinary component the object
+                    // holds (`<Segment.Root>`), or a namespace's export.
+                    let origin = origin?;
+                    let declared = if member {
+                        ordinary_members.get(&(path.clone(), tag.to_string())).cloned().or_else(|| {
+                            namespace_member_declaration(path, ff, tag, files, inputs, links).map(|(file, binding, _)| (file, binding))
+                        })
+                    } else {
+                        // A namespace import, rendered whole, names no declaration.
+                        if origin == TagOrigin::Import && !ff.imports.iter().any(|import| import.local == tag) {
+                            return None;
+                        }
+                        callee_declaration(path, tag, files, inputs, links)
+                    };
+                    let (mut file, mut binding) = declared?;
+                    // A component React's `lazy` loads renders what its import names.
+                    for _ in 0..8 {
+                        let Some(target) = files.get(&file).and_then(|ff| ff.lazy_targets.get(&binding)) else { break };
+                        let module = resolve_import_source(&file, &target.specifier, files, inputs)?;
+                        (file, binding) = declared_binding(links, files, &module, &target.export)?;
                     }
-                    let (file, binding) = callee_declaration(path, tag, files, inputs, links)?;
                     Some((tag.to_string(), format!("{file}::{binding}")))
                 })
                 .collect();
             (!tags.is_empty()).then(|| (path.clone(), tags))
         })
         .collect();
+    // The declaration an `.asComponent()` terminal renders, where the
+    // analysis reads it.
+    let as_component_declaration = |id: &str| -> Option<(String, String)> {
+        let (file, index) = chain_lookup.get(id)?;
+        let ff = files.get(*file)?;
+        let descriptor = &ff.chains[*index].descriptor;
+        if descriptor.terminal != TerminalKind::AsComponent || descriptor.tag.is_empty() {
+            return None;
+        }
+        let (declaring, binding, _) = resolve_declaration(file, ff, &descriptor.tag, files, inputs, links)?;
+        Some((declaring, binding))
+    };
     let (delivered_ids, delivered_tags) = opaque_delivery(
         files,
         inputs,
@@ -10914,12 +10993,7 @@ fn run_with_system_floor(
             if changed_ids.contains(id) {
                 return None;
             }
-            let (file, index) = chain_lookup.get(id)?;
-            let (ff, descriptor) = (files.get(*file)?, &files.get(*file)?.chains[*index].descriptor);
-            if descriptor.terminal != TerminalKind::AsComponent || descriptor.tag.is_empty() {
-                return None;
-            }
-            let (declaring, binding, _) = resolve_declaration(file, ff, &descriptor.tag, files, inputs, links)?;
+            let (declaring, binding) = as_component_declaration(id)?;
             ordinary_declaration(&declaring, &binding, files, inputs, links)
         },
         object_members.changes(),
@@ -10927,6 +11001,22 @@ fn run_with_system_floor(
     for (id, at) in delivered_ids {
         escape(&mut escaped_ids, escape_reasons.as_mut(), [id], || delivered_tags[at].opening());
     }
+    // Where slot provenance is asked for: the declaration each
+    // `.asComponent()` terminal renders, `file::binding`, whose callers its
+    // sites are; and each declaration a route `tag_declarations` does not
+    // match reaches (`unmatched_routes`).
+    let as_component_targets: BTreeMap<String, String> = evaluated_ids
+        .iter()
+        .filter(|_| inputs.slot_provenance)
+        .filter_map(|id| {
+            let (declaring, binding) = as_component_declaration(id)?;
+            Some((id.clone(), format!("{declaring}::{binding}")))
+        })
+        .collect();
+    let unmatched_routes = match inputs.slot_provenance {
+        true => unmatched_routes(files, inputs, links, &delivered_tags),
+        false => BTreeSet::new(),
+    };
     // Code from a string (`eval`, `Function`, a timer given a string) can
     // load any module and render what it exports with any props.
     if let Some((file, _)) = files.iter().find(|(_, ff)| ff.direct_eval || ff.dynamic_code.is_some()) {
@@ -12689,6 +12779,8 @@ fn run_with_system_floor(
         runtime_tables,
         tag_components,
         tag_declarations,
+        as_component_targets,
+        unmatched_routes,
         prop_name_lists: prop_name_lists.into_sources(),
         superseded_by,
         slot_provenance,
@@ -21054,6 +21146,68 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let (sizes, _, _) = wrapper_kept(&app);
             assert_eq!(sizes, vec!["sm", "md", "lg"], "{render}");
         }
+    }
+
+    /// Contract: a lazy-wrapped caller is matched. A tag bound to React's
+    /// `lazy` of a literal import, the module's default or a mapped named
+    /// export, names the declaration it renders, as a member tag names the
+    /// ordinary component its object holds, so its callers are matched to
+    /// that component; the `import()` it makes is no route the matching
+    /// misses, while any other load of the module, a namespace member read,
+    /// and a component handed to a call are.
+    #[test]
+    fn a_lazy_wrapped_caller_is_matched() {
+        let inputs = CssInputs { slot_provenance: true, ..Default::default() };
+        let editor = "export function CodeEditor({ offset }) { return <div data-offset={offset} />; }\n\
+                      export default function Plain({ tone }) { return <div data-tone={tone} />; }\n";
+        let lazy = "import { lazy } from 'react';\n\
+                    const Editor = lazy(() => import('./editor').then((module) => ({ default: module.CodeEditor })));\n\
+                    const Whole = lazy(() => import('./editor'));\n\
+                    export function LazyEditor(props) { return <><Editor {...props} /><Whole tone=\"a\" /></>; }\n";
+        let other = "import * as ui from './hold';\n\
+                     import { Held } from './hold';\n\
+                     export const read = () => ui.Member;\n\
+                     export const handed = () => wrap(Held);\n\
+                     export const load = () => import('./opened');\n";
+        let hold = "export function Member() { return null; }\nexport function Held() { return null; }\n";
+        let facade = "function SegmentRoot({ tone }) { return <div data-tone={tone} />; }\n\
+                      export const Segment = { Root: SegmentRoot };\n\
+                      export const Page = () => <Segment.Root tone=\"a\" />;\n";
+        let opened = "export function Opened() { return null; }\n";
+        let out = analyze(
+            &[
+                ("editor.tsx", editor),
+                ("lazy.tsx", lazy),
+                ("other.tsx", other),
+                ("hold.tsx", hold),
+                ("opened.tsx", opened),
+                ("facade.tsx", facade),
+            ],
+            &inputs,
+        );
+        let tags = &out.tag_declarations["lazy.tsx"];
+        assert_eq!(tags.get("Editor").map(String::as_str), Some("editor.tsx::CodeEditor"));
+        assert_eq!(tags.get("Whole").map(String::as_str), Some("editor.tsx::Plain"));
+        // A member tag names the ordinary component its object holds.
+        assert_eq!(
+            out.tag_declarations["facade.tsx"].get("Segment.Root").map(String::as_str),
+            Some("facade.tsx::SegmentRoot")
+        );
+        assert!(!out.unmatched_routes.iter().any(|route| route.starts_with("editor.tsx")), "{:?}", out.unmatched_routes);
+        for route in ["hold.tsx::Member", "hold.tsx::Held", "opened.tsx::*"] {
+            assert!(out.unmatched_routes.contains(route), "{route} in {:?}", out.unmatched_routes);
+        }
+    }
+
+    /// Contract: an `.asComponent()` component names the declaration it
+    /// renders, whose callers its sites are.
+    #[test]
+    fn an_as_component_names_what_it_renders() {
+        let inputs = CssInputs { slot_provenance: true, ..Default::default() };
+        let ui = "function CardComposition({ shadow }) { return <div data-shadow={shadow} />; }\n\
+                  export const Card = ds.styles({ display: 'flex' }).asComponent(CardComposition);\n";
+        let out = analyze(&[("ui.tsx", ui)], &inputs);
+        assert_eq!(out.as_component_targets.get("ui.tsx::Card").map(String::as_str), Some("ui.tsx::CardComposition"));
     }
 
     fn analyze_with_logical_space(entries: &[(&str, &str)]) -> CssOutput {

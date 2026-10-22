@@ -87,7 +87,7 @@
     "row": "analysis:showcase",
     "fixture": "showcase-analysis",
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
-    "candidate": "74463f189d0a32de5c62d385b4254e5dba67d2602f0ae1b8faacbb6b487d0ae8",
-    "reason": "Beside the differences above, only the manifest's fileFacts differ: 68 files gain `proven`, the per-element record of what the pruning analysis proves of each attribute (its known values, proven only where its proof holds, and the last spread that can replace it), with a forward named where an attribute passes on its component's own prop unchanged. With `proven` removed the manifest is identical to the candidate this entry follows (4853ea9c…): CSS (270,340 bytes), the 204 components and the 73 diagnostics are unchanged."
+    "candidate": "6dd08b9134266c8541f2300c10faeb2f355974b07e7d7a1dde86e6cad07dd6e1",
+    "reason": "Beside the differences above, only the manifest's fileFacts differ: 68 files gain `proven`, the per-element record of what the pruning analysis proves of each attribute (its known values, proven only where its proof holds, and the last spread that can replace it), with a forward named where an attribute passes on its component's own prop unchanged. Then 14 of those files' records also say where a value comes from: 29 attributes gain `derived` (computed from the component's props), 19 `runtimeState` (a React state hook's state slot), 6 `forwarded` records appear or gain a member path, a `??` literal or a literal default, and 3 elements gain `spreadForward` (a spread of the props, or of a rest of them); and one attribute bound to a `const` of literal branches is now proven, with its values. With `proven` removed the manifest is identical to the candidate this entry follows (4853ea9c…): CSS (270,340 bytes), the 204 components and the 73 diagnostics are unchanged."
   }
 ]

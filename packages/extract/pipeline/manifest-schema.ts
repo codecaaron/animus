@@ -185,6 +185,16 @@ export interface ProjectManifest {
    *  resolves → that declaration, `file::binding`. Present only where
    *  verbose output asks for slot provenance, and a tag resolves. */
   tag_declarations?: Record<string, Record<string, string>>;
+  /** Each \`.asComponent()\` component → the declaration it renders,
+   *  \`file::binding\`. Present only where verbose output asks for slot
+   *  provenance. */
+  as_component_targets?: Record<string, string>;
+  /** Each declaration, \`file::binding\`, or whole module, \`file::*\`, that a
+   *  route \`tag_declarations\` does not match reaches: a use other than as
+   *  a JSX tag or an export, a namespace member, an element handed to code
+   *  the analysis does not read, or a load other than a \`lazy\` import.
+   *  Present only where verbose output asks for slot provenance. */
+  unmatched_routes?: string[];
   timing: ManifestTiming;
 }
 

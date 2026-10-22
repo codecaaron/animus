@@ -75,24 +75,78 @@ pub struct AttrFact {
     /// Byte offset of the attribute, or of the spread that writes it.
     #[serde(skip)]
     pub at: u32,
-    /// For a runtime value, the prop of the enclosing component it passes
-    /// on unchanged: one of the component's own parameters read as written
-    /// (`size` destructured from its props, or `props.size`), which its
-    /// callers write (`component_parameters`). Enriched collection only.
+    /// For a runtime value, where it comes from, where the walk can tell.
+    /// Enriched collection only.
     #[serde(skip)]
-    pub forwarded: Option<ForwardedProp>,
+    pub value_origin: ValueOrigin,
 }
 
-/// A component's own prop an attribute passes on (`AttrFact::forwarded`).
+/// Where an attribute's runtime value comes from (`AttrFact::value_origin`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ValueOrigin {
+    #[default]
+    Unknown,
+    /// The enclosing component's own prop, passed on unchanged.
+    Forwarded(ForwardedProp),
+    /// Computed from the enclosing component's own props.
+    Derived(DerivedProp),
+    /// The state slot of a React state hook the component calls.
+    RuntimeState(RuntimeState),
+}
+
+/// A component's own prop an attribute passes on: one of the component's
+/// own parameters read as written (`size` destructured from its props,
+/// `props.size`, or a member of an object prop, `buttonProps.size`), which
+/// its callers write (`component_parameters`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ForwardedProp {
     /// The component's binding, as declared.
     pub component: String,
     pub prop: String,
+    /// The members read off the prop's value, outermost first, where the
+    /// value passed on is a member of an object the prop holds.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<String>,
     /// The literal its destructuring defaults the prop to, which a caller
     /// that leaves the prop out passes on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<Value>,
+    /// The literal `prop ?? literal` passes on where a caller leaves the
+    /// prop out or passes `null`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nullish: Option<Value>,
+}
+
+/// The props of the enclosing component an attribute's value is computed
+/// from, not passed on unchanged (`parseThemeColor(color)`, `variant ??
+/// type`): its callers decide them, but not which option the site selects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DerivedProp {
+    pub component: String,
+    pub props: Vec<String>,
+    /// What computes the value, as written: a call's callee, or an operator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub through: Option<String>,
+}
+
+/// The state slot of a React state hook (`const [mode] = useState(…)`),
+/// which the component's own updates change at run time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuntimeState {
+    /// `useState` or `useReducer`.
+    pub hook: String,
+    /// Byte offset of the hook's call.
+    pub at: u32,
+}
+
+/// The last spread of an element, where it passes on the enclosing
+/// component's own props: its props object, or a rest of them, which never
+/// carries the `omits` keys its pattern names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SpreadForward {
+    pub component: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub omits: Vec<String>,
 }
 
 impl AttrFact {
@@ -181,6 +235,10 @@ pub enum UsageFact {
         /// element: a diagnostic names it as written.
         #[serde(skip)]
         written_as_call: bool,
+        /// Where the last spread passes on the enclosing component's own
+        /// props. Enriched collection only.
+        #[serde(skip)]
+        spread_forward: Option<SpreadForward>,
         /// The opening-element span of the one element the children are,
         /// which `asChild` renders in this element's place.
         #[serde(skip)]
@@ -266,6 +324,8 @@ pub(crate) fn serialize_proven<S: serde::Serializer>(
             attrs: Vec<ProvenAttr<'u>>,
             #[serde(skip_serializing_if = "Option::is_none")]
             spread: Option<usize>,
+            #[serde(rename = "spreadForward", skip_serializing_if = "Option::is_none")]
+            spread_forward: Option<&'u SpreadForward>,
         },
         CreateElement { ident: &'u Option<String>, member: &'u Option<String> },
     }
@@ -283,23 +343,38 @@ pub(crate) fn serialize_proven<S: serde::Serializer>(
         dynamic_span: Option<&'u UsageSpan>,
         #[serde(skip_serializing_if = "Option::is_none")]
         forwarded: Option<&'u ForwardedProp>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        derived: Option<&'u DerivedProp>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        runtime_state: Option<&'u RuntimeState>,
     }
     let facts = usage.iter().flatten().filter_map(|fact| match fact {
-        UsageFact::Element { tag, attrs, spread, .. } => Some(ProvenFact::Element {
+        UsageFact::Element { tag, attrs, spread, spread_forward, .. } => Some(ProvenFact::Element {
             tag,
             attrs: attrs
                 .iter()
-                .map(|attr| ProvenAttr {
+                .map(|attr| {
+                    let (forwarded, derived, runtime_state) = match &attr.value_origin {
+                        ValueOrigin::Forwarded(forwarded) => (Some(forwarded), None, None),
+                        ValueOrigin::Derived(derived) => (None, Some(derived), None),
+                        ValueOrigin::RuntimeState(state) => (None, None, Some(state)),
+                        ValueOrigin::Unknown => (None, None, None),
+                    };
+                    ProvenAttr {
                     name: &attr.name,
                     values: attr.class_values().collect(),
                     proven: attr.proven_values().is_some(),
                     skip: attr.skip,
                     optional: attr.optional,
                     dynamic_span: attr.dynamic_span.as_ref(),
-                    forwarded: attr.forwarded.as_ref(),
+                    forwarded,
+                    derived,
+                    runtime_state,
+                    }
                 })
                 .collect(),
             spread: *spread,
+            spread_forward: spread_forward.as_ref(),
         }),
         UsageFact::CreateElement { ident, member, .. } => Some(ProvenFact::CreateElement { ident, member }),
         UsageFact::DefaultProps { .. } | UsageFact::CloneUnknown { .. } => None,
@@ -1036,6 +1111,8 @@ pub(crate) struct EnrichedUsage {
     pub namespace_member_uses: BTreeMap<String, NameUses>,
     /// See `FileFacts::direct_eval`.
     pub direct_eval: bool,
+    /// See `FileFacts::lazy_targets`.
+    pub lazy_targets: BTreeMap<String, LazyTarget>,
     /// See `FileFacts::opaque_calls`.
     pub opaque_calls: Vec<OpaqueCall>,
     /// See `FileFacts::element_consts`.
@@ -1410,6 +1487,7 @@ pub(crate) fn collect_enriched_usage(
         rests: origins.map(|scoping| rest_parameters(program, scoping)).unwrap_or_default(),
         declaring: oxc::ast::ast::VariableDeclarationKind::Var,
         local_consts: FxHashMap::default(),
+        local_origins: FxHashMap::default(),
     };
     collector.visit_program(program);
     let declared_hints = std::mem::take(&mut collector.declared_hints);
@@ -1571,7 +1649,94 @@ pub(crate) fn collect_enriched_usage(
         builder_import_references,
         first_that_works_uses,
         builder_proof,
+        lazy_targets: origins.map(|scoping| lazy_targets(program, scoping)).unwrap_or_default(),
     }
+}
+
+/// A component React's `lazy` loads: the module the specifier names, the
+/// export it renders, and where the `import()` is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LazyTarget {
+    pub specifier: String,
+    pub export: String,
+    pub at: u32,
+}
+
+const LAZY_FUNCTIONS: [&str; 1] = ["lazy"];
+
+/// Each top-level `const` nothing writes bound to React's own `lazy` of a
+/// literal `import()`: `lazy(() => import('./x'))` renders the module's
+/// default export, `lazy(() => import('./x').then((m) => ({ default: m.X })))`
+/// its export `X`. Any other form names none.
+fn lazy_targets(program: &Program<'_>, scoping: &Scoping) -> BTreeMap<String, LazyTarget> {
+    use oxc::ast::ast::{BindingPattern, ObjectPropertyKind};
+    let mut targets = BTreeMap::new();
+    if !program.source_text.contains("lazy") {
+        return targets;
+    }
+    let react = ReactNames::importing(program, scoping, &LAZY_FUNCTIONS, &[], false);
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::ExportDeclaration(export) => Some(&export.declaration),
+            statement => statement.as_declaration(),
+        };
+        let Some(oxc::ast::ast::Declaration::VariableDeclaration(variables)) = declaration else { continue };
+        if variables.kind != oxc::ast::ast::VariableDeclarationKind::Const {
+            continue;
+        }
+        for declarator in &variables.declarations {
+            let (BindingPattern::BindingIdentifier(id), Some(Expression::CallExpression(call))) =
+                (&declarator.id, declarator.init.as_ref().map(|init| init.get_inner_expression()))
+            else {
+                continue;
+            };
+            if react.export(&call.callee).is_none() || call.arguments.len() != 1 {
+                continue;
+            }
+            if unwritten(scoping, id).is_none() {
+                continue;
+            }
+            let Some(Expression::ArrowFunctionExpression(loader)) = call.arguments[0].as_expression().map(Expression::get_inner_expression)
+            else {
+                continue;
+            };
+            if !loader.params.items.is_empty() {
+                continue;
+            }
+            let Some(body) = loader.get_expression().map(Expression::get_inner_expression) else { continue };
+            let (import, export) = match body {
+                Expression::ImportExpression(import) => (import, "default".to_string()),
+                Expression::CallExpression(then) => {
+                    let Expression::StaticMemberExpression(member) = &then.callee else { continue };
+                    let (Expression::ImportExpression(import), "then", [mapping]) =
+                        (member.object.get_inner_expression(), member.property.name.as_str(), then.arguments.as_slice())
+                    else {
+                        continue;
+                    };
+                    let Some(Expression::ArrowFunctionExpression(mapping)) = mapping.as_expression().map(Expression::get_inner_expression)
+                    else {
+                        continue;
+                    };
+                    let [param] = mapping.params.items.as_slice() else { continue };
+                    let BindingPattern::BindingIdentifier(module) = &param.pattern else { continue };
+                    let Some(Expression::ObjectExpression(object)) = mapping.get_expression().map(Expression::get_inner_expression) else {
+                        continue;
+                    };
+                    let [ObjectPropertyKind::ObjectProperty(property)] = object.properties.as_slice() else { continue };
+                    let Expression::StaticMemberExpression(read) = property.value.get_inner_expression() else { continue };
+                    let named_module = matches!(read.object.get_inner_expression(), Expression::Identifier(object) if object.name == module.name);
+                    if property.computed || eval_property_key(&property.key).as_deref() != Some("default") || !named_module {
+                        continue;
+                    }
+                    (import, read.property.name.to_string())
+                }
+                _ => continue,
+            };
+            let Some(specifier) = static_string(&import.source) else { continue };
+            targets.insert(id.name.to_string(), LazyTarget { specifier: specifier.to_string(), export, at: import.span.start });
+        }
+    }
+    targets
 }
 
 /// The span of each use of `@animus-ui/system`'s `firstThatWorks` whose
@@ -6609,8 +6774,12 @@ struct FactCollector<'a, 's> {
     /// The kind of the declaration whose declarators are being visited.
     declaring: oxc::ast::ast::VariableDeclarationKind,
     /// Enriched collection only: each `const` whose value is proven one of
-    /// a few literals (\`finite_set\`), as the walk reaches its declarator.
+    /// a few literals (`finite_set`), as the walk reaches its declarator.
     local_consts: FxHashMap<SymbolId, FiniteSet>,
+    /// Enriched collection only: each `const` that holds a prop of its
+    /// component unchanged, or a value computed from its props, as the walk
+    /// reaches its declarator.
+    local_origins: FxHashMap<SymbolId, ValueOrigin>,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -6651,6 +6820,7 @@ impl<'a> FactCollector<'a, '_> {
         let origin = root.and_then(|root| self.origin_of(root));
         let mut attrs = Vec::new();
         let mut spread = None;
+        let mut spread_forward = None;
         for attr_item in &elem.attributes {
             if let JSXAttributeItem::SpreadAttribute(spread_attribute) = attr_item {
                 // A spread of object literals with listed literal entries
@@ -6669,9 +6839,12 @@ impl<'a> FactCollector<'a, '_> {
                         literal: true,
                         optional: true,
                         at: spread_attribute.span.start,
-                        forwarded: None,
+                        value_origin: ValueOrigin::Unknown,
                     })),
-                    None => spread = Some(attrs.len()),
+                    None => {
+                        spread = Some(attrs.len());
+                        spread_forward = self.enrich.then(|| self.spread_forward_of(&spread_attribute.argument)).flatten();
+                    }
                 }
             }
             if let JSXAttributeItem::Attribute(attr) = attr_item {
@@ -6693,7 +6866,7 @@ impl<'a> FactCollector<'a, '_> {
                     };
                 let mut literal = static_value.is_some();
                 let mut enumerable_values = Vec::new();
-                let mut forwarded = None;
+                let mut value_origin = ValueOrigin::Unknown;
                 if dynamic && self.enrich {
                     if let Some(expression) = attribute_expression(&attr.value) {
                         let expression = crate::chain_walk::unwrap_type_assertions(expression);
@@ -6789,7 +6962,7 @@ impl<'a> FactCollector<'a, '_> {
                             None => {}
                         }
                         if dynamic {
-                            forwarded = self.forwarded_prop(expression);
+                            value_origin = self.value_origin(expression);
                             if let Some(declared) = self.declared_union(expression) {
                                 self.declared_hints.push(DeclaredHint {
                                     at: attr.span.start,
@@ -6827,7 +7000,7 @@ impl<'a> FactCollector<'a, '_> {
                     conditions,
                     optional: false,
                     at: attr.span.start,
-                    forwarded,
+                    value_origin,
                 });
             }
         }
@@ -6843,6 +7016,7 @@ impl<'a> FactCollector<'a, '_> {
             span: (elem.span.start, elem.span.end),
             origin,
             written_as_call: crate::lower_create_element::written_as_call(self.source, elem.span.start),
+            spread_forward,
             element_child: match children.as_slice() {
                 [JSXChild::Element(child)] => Some((child.opening_element.span.start, child.opening_element.span.end)),
                 _ => None,
@@ -6899,7 +7073,7 @@ fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
             conditions: Some(BTreeSet::from([BASE_CONDITION.to_string()])),
             optional: false,
             at,
-            forwarded: None,
+            value_origin: ValueOrigin::Unknown,
         },
         None => AttrFact {
             name: "children".to_string(),
@@ -6914,7 +7088,7 @@ fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
             conditions: None,
             optional: false,
             at,
-            forwarded: None,
+            value_origin: ValueOrigin::Unknown,
         },
     })
 }
@@ -7127,21 +7301,133 @@ impl FactCollector<'_, '_> {
         })
     }
 
-    /// The prop of the enclosing component `expression` reads as written:
-    /// a parameter binding destructured from its props, or a member of its
-    /// props object.
+    /// Where a runtime value `expression` comes from: a prop of the
+    /// enclosing component passed on unchanged, a React state hook's state
+    /// slot, or a value computed from the component's props.
+    fn value_origin(&self, expression: &Expression<'_>) -> ValueOrigin {
+        if let Some(forwarded) = self.forwarded_prop(expression) {
+            return ValueOrigin::Forwarded(forwarded);
+        }
+        if let Some(state) = self.runtime_state(expression) {
+            return ValueOrigin::RuntimeState(state);
+        }
+        self.derived_from(expression).map_or(ValueOrigin::Unknown, ValueOrigin::Derived)
+    }
+
+    /// The prop of the enclosing component `expression` passes on as written:
+    /// a parameter binding destructured from its props, a member of its props
+    /// object or of an object prop, or either `?? undefined`, which the
+    /// runtime reads as it reads the prop (`null` and `undefined` select an
+    /// option alike), or `?? literal`, which replaces both with the literal.
     fn forwarded_prop(&self, expression: &Expression<'_>) -> Option<ForwardedProp> {
         let scoping = self.origins?;
         let symbol = |ident: &IdentifierReference<'_>| scoping.get_reference(ident.reference_id.get()?).symbol_id();
         match crate::chain_walk::unwrap_type_assertions(expression) {
-            Expression::Identifier(ident) => self.params.props.get(&symbol(ident)?).cloned(),
+            Expression::Identifier(ident) => {
+                let symbol = symbol(ident)?;
+                if let Some(ValueOrigin::Forwarded(forwarded)) = self.local_origins.get(&symbol) {
+                    return Some(forwarded.clone());
+                }
+                (!self.params.empty_defaults.contains(&symbol)).then(|| self.params.props.get(&symbol).cloned()).flatten()
+            }
             Expression::StaticMemberExpression(member) => {
                 let Expression::Identifier(object) = &member.object else { return None };
-                let component = self.params.objects.get(&symbol(object)?)?;
-                Some(ForwardedProp { component: component.clone(), prop: member.property.name.to_string(), default: None })
+                let object = symbol(object)?;
+                let key = member.property.name.to_string();
+                if let Some(component) = self.params.objects.get(&object) {
+                    return Some(ForwardedProp { component: component.clone(), prop: key, path: Vec::new(), default: None, nullish: None });
+                }
+                let held = self.params.props.get(&object).filter(|_| self.params.object_props.contains(&object))?;
+                (held.default.is_none() && held.path.is_empty()).then(|| ForwardedProp { path: vec![key], ..held.clone() })
+            }
+            Expression::LogicalExpression(logical) if logical.operator.is_coalesce() => {
+                let left = self.forwarded_prop(&logical.left)?;
+                if is_absent(&logical.right, self.origins) {
+                    return Some(left);
+                }
+                let literal = default_value(&logical.right)?;
+                (left.default.is_none() && left.nullish.is_none()).then(|| ForwardedProp { nullish: Some(literal), ..left })
             }
             _ => None,
         }
+    }
+
+    /// The React state slot `expression` names.
+    fn runtime_state(&self, expression: &Expression<'_>) -> Option<RuntimeState> {
+        let Expression::Identifier(ident) = crate::chain_walk::unwrap_type_assertions(expression) else { return None };
+        self.params.states.get(&symbol_of(self.origins?, ident)?).cloned()
+    }
+
+    /// The enclosing component's props `expression` reads, where it reads
+    /// any: the props it is computed from, and what computes it.
+    fn derived_from(&self, expression: &Expression<'_>) -> Option<DerivedProp> {
+        struct Reads<'p, 's> {
+            scoping: &'s Scoping,
+            params: &'p ComponentParams,
+            locals: &'p FxHashMap<SymbolId, ValueOrigin>,
+            found: Vec<(String, String)>,
+        }
+        impl<'a> Visit<'a> for Reads<'_, '_> {
+            fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+                let Some(symbol) = symbol_of(self.scoping, ident) else { return };
+                if let Some(forwarded) = self.params.props.get(&symbol) {
+                    self.found.push((forwarded.component.clone(), forwarded.prop.clone()));
+                }
+                // A `const` computed from the props reads what it reads.
+                match self.locals.get(&symbol) {
+                    Some(ValueOrigin::Forwarded(forwarded)) => self.found.push((forwarded.component.clone(), forwarded.prop.clone())),
+                    Some(ValueOrigin::Derived(derived)) => {
+                        self.found.extend(derived.props.iter().map(|prop| (derived.component.clone(), prop.clone())));
+                    }
+                    _ => {}
+                }
+            }
+            fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+                if let Expression::Identifier(object) = &member.object {
+                    if let Some(component) = symbol_of(self.scoping, object).and_then(|symbol| self.params.objects.get(&symbol)) {
+                        self.found.push((component.clone(), member.property.name.to_string()));
+                        return;
+                    }
+                }
+                oxc::ast_visit::walk::walk_static_member_expression(self, member);
+            }
+        }
+        let mut reads = Reads { scoping: self.origins?, params: &self.params, locals: &self.local_origins, found: Vec::new() };
+        reads.visit_expression(expression);
+        let (component, _) = reads.found.first()?.clone();
+        let mut props: Vec<String> = Vec::new();
+        for (owner, prop) in reads.found {
+            if owner == component && !props.contains(&prop) {
+                props.push(prop);
+            }
+        }
+        let through = match crate::chain_walk::unwrap_type_assertions(expression) {
+            // A `const` computed from the props, by what computes it.
+            Expression::Identifier(ident) => match symbol_of(self.origins?, ident).and_then(|symbol| self.local_origins.get(&symbol)) {
+                Some(ValueOrigin::Derived(derived)) => derived.through.clone(),
+                _ => None,
+            },
+            Expression::CallExpression(call) => {
+                let callee = call.callee.span().source_text(self.source);
+                (callee.len() <= 40).then(|| callee.to_string())
+            }
+            Expression::LogicalExpression(logical) => Some(logical.operator.as_str().to_string()),
+            Expression::BinaryExpression(binary) => Some(binary.operator.as_str().to_string()),
+            Expression::ConditionalExpression(_) => Some("a conditional".to_string()),
+            _ => None,
+        };
+        Some(DerivedProp { component, props, through })
+    }
+
+    /// Where a spread's argument passes on the enclosing component's own
+    /// props: its props object, or a rest of them.
+    fn spread_forward_of(&self, argument: &Expression<'_>) -> Option<SpreadForward> {
+        let Expression::Identifier(ident) = argument.get_inner_expression() else { return None };
+        let symbol = symbol_of(self.origins?, ident)?;
+        if let Some(component) = self.params.objects.get(&symbol) {
+            return Some(SpreadForward { component: component.clone(), omits: Vec::new() });
+        }
+        self.params.rests.get(&symbol).cloned()
     }
 
     /// The literal union a parameter `expression` names is declared with,
@@ -7178,8 +7464,8 @@ impl FactCollector<'_, '_> {
             }
             Expression::Identifier(ident) => match evaluate_with_statics(expression, self.static_values, self.scoping) {
                 Some(value) => is_class_value(&value).then(|| FiniteSet { values: vec![value], absent: false }),
-                // A \`const\` bound to one of a few literals, as its declarator
-                // read it: a \`const\` keeps the value it was declared with.
+                // A `const` bound to one of a few literals, as its declarator
+                // read it: a `const` keeps the value it was declared with.
                 None => self.local_consts.get(&symbol_of(self.origins?, ident)?).cloned(),
             },
             _ => Some(FiniteSet { values: vec![literal_value(expression)?], absent: false }),
@@ -7221,20 +7507,40 @@ impl FactCollector<'_, '_> {
 }
 
 /// Each component's own parameter bindings that pass a prop on unchanged:
-/// the bindings its props destructure (`({ size })`), and the binding of
-/// its props object (`(props)`). A component is a top-level function named
-/// as one (an uppercase first letter), declared or bound to a variable,
-/// plain or inside React's own `memo` or `forwardRef`, whose binding
-/// nothing writes. A binding something writes is left out, and so is a
-/// props object the body uses other than to read a member or spread it
-/// (`props.size = …`, `Object.assign(props, …)`, `props.f()`, `const p =
-/// props`); a module that names `arguments` or `eval` unbound, which may
-/// change any of them, passes on none.
+/// the bindings its props destructure, in its parameter (`({ size })`) or
+/// from its props object in its body (`const { size } = props`), and the
+/// binding of its props object (`(props)`), with the members of a
+/// destructured prop that holds an object (`buttonProps.size`) and each rest
+/// of the props (`...rest`). A component is a top-level function named as
+/// one (an uppercase first letter), declared or bound to a variable, plain
+/// or inside React's own `memo` or `forwardRef`, whose binding nothing
+/// writes. A binding something writes is left out, and so is an object (the
+/// props, a rest, an object prop) the body uses other than to read a member,
+/// spread it, or destructure it (`props.size = …`, `Object.assign(props, …)`,
+/// `props.f()`, `const p = props`); a module that names `arguments` or
+/// `eval` unbound, which may change any of them, passes on none. Also each
+/// state slot of a React state hook (`const [mode] = useState(…)`).
 #[derive(Default)]
 struct ComponentParams {
     props: FxHashMap<SymbolId, ForwardedProp>,
     objects: FxHashMap<SymbolId, String>,
+    /// The destructured props whose object values pass their members on.
+    object_props: FxHashSet<SymbolId>,
+    /// The destructured props an empty object defaults (`buttonProps = {}`):
+    /// a member passes on, missing where the caller leaves the prop out,
+    /// but the object itself is no prop a caller writes.
+    empty_defaults: FxHashSet<SymbolId>,
+    rests: FxHashMap<SymbolId, SpreadForward>,
+    states: FxHashMap<SymbolId, RuntimeState>,
 }
+
+/// A destructured prop's default the walk reads: a string, number or
+/// boolean literal.
+fn default_value(expression: &Expression<'_>) -> Option<Value> {
+    eval_static_expression(expression).filter(|value| matches!(value, Value::String(_) | Value::Number(_) | Value::Bool(_)))
+}
+
+const HOOK_FUNCTIONS: [&str; 2] = ["useState", "useReducer"];
 
 fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentParams {
     use oxc::ast::ast::{BindingIdentifier, BindingPattern, Declaration, ExportDefaultDeclarationKind};
@@ -7243,47 +7549,61 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
     if unresolved.contains_key("arguments") || unresolved.contains_key("eval") {
         return params;
     }
-    let unwritten =
-        |id: &BindingIdentifier<'_>| id.symbol_id.get().filter(|symbol| !crate::identity::reassigned(scoping, *symbol));
+    params.states = state_slots(program, scoping);
     let mut component = |id: &BindingIdentifier<'_>, function: Option<ComponentFunction<'_, '_>>| {
-        let Some(first) = function.and_then(|function| function.props.map(|first| (first, function.body))) else {
+        let Some((first, body)) = function.and_then(|function| function.props.map(|first| (first, function.body))) else {
             return;
         };
-        let (first, body) = first;
-        if unwritten(id).is_none() {
+        if unwritten(scoping, id).is_none() {
             return;
         }
         let name = id.name.to_string();
+        let mut uses = PropsUses { scoping, props: None, tracked: FxHashMap::default(), destructured: Vec::new() };
+        let mut named = Vec::new();
         match &first.pattern {
             BindingPattern::BindingIdentifier(object) => {
-                let Some(symbol) = unwritten(object) else { return };
-                let mut uses = PropsUses { scoping, object: symbol, read: FxHashSet::default(), opaque: false };
-                body.visit(&mut uses);
-                let all_read = scoping.get_resolved_reference_ids(symbol).iter().all(|reference| {
-                    uses.read.contains(reference) || !scoping.get_reference(*reference).is_value()
-                });
-                if !uses.opaque && all_read {
-                    params.objects.insert(symbol, name);
-                }
+                let Some(symbol) = unwritten(scoping, object) else { return };
+                uses.props = Some(symbol);
+                uses.track(symbol, None);
             }
             BindingPattern::ObjectPattern(object) => {
-                for property in object.properties.iter().filter(|property| !property.computed) {
-                    let Some(key) = eval_property_key(&property.key) else { continue };
-                    // A default the walk cannot read may pass any value.
-                    let (id, default) = match &property.value {
-                        BindingPattern::BindingIdentifier(id) => (id, None),
-                        BindingPattern::AssignmentPattern(assignment) => match (&assignment.left, literal_value(&assignment.right)) {
-                            (BindingPattern::BindingIdentifier(id), Some(value)) => (id, Some(value)),
-                            _ => continue,
-                        },
-                        _ => continue,
-                    };
-                    if let Some(symbol) = unwritten(id) {
-                        params.props.insert(symbol, ForwardedProp { component: name.clone(), prop: key, default });
-                    }
+                let (props, keys, empty) = pattern_props(scoping, object);
+                params.empty_defaults.extend(empty);
+                for (symbol, _, _) in &props {
+                    uses.track(*symbol, None);
+                }
+                if let Some(rest) = object.rest.as_ref().and_then(|rest| match &rest.argument {
+                    BindingPattern::BindingIdentifier(id) => unwritten(scoping, id),
+                    _ => None,
+                }) {
+                    uses.track(rest, Some((keys, false)));
+                }
+                named = props;
+            }
+            _ => return,
+        }
+        body.visit(&mut uses);
+        // The props object's own destructurings, where the object passes on.
+        let props_object = uses.props.filter(|symbol| uses.passes_on(*symbol));
+        if let Some(symbol) = props_object {
+            params.objects.insert(symbol, name.clone());
+            named.extend(std::mem::take(&mut uses.destructured).into_iter().filter(|(object, ..)| *object == symbol).map(
+                |(_, bound, key, default)| (bound, key, default),
+            ));
+        }
+        for (symbol, key, default) in named {
+            if uses.tracked.contains_key(&symbol) && uses.passes_on(symbol) {
+                params.object_props.insert(symbol);
+            }
+            params.props.insert(symbol, ForwardedProp { component: name.clone(), prop: key, path: Vec::new(), default, nullish: None });
+        }
+        for (symbol, tracked) in &uses.tracked {
+            // A rest the body takes copies the props object as it then is.
+            if let Some((omits, in_body)) = &tracked.rest {
+                if uses.passes_on(*symbol) && (!in_body || props_object.is_some()) {
+                    params.rests.insert(*symbol, SpreadForward { component: name.clone(), omits: omits.clone() });
                 }
             }
-            _ => {}
         }
     };
     let named = |id: &BindingIdentifier<'_>| id.name.starts_with(|c: char| c.is_ascii_uppercase());
@@ -7321,14 +7641,25 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
             _ => {}
         }
     }
-    /// How a component body uses its props object `object`: the references
-    /// that read one of its members or spread it, and whether the body may
-    /// change it some other way (`opaque`).
+    /// A tracked object: the props object, a destructured prop, or a rest
+    /// of the props.
+    struct Use {
+        /// For a rest, the keys it never carries, and whether the body
+        /// took it.
+        rest: Option<(Vec<String>, bool)>,
+        /// The references that read a member, spread it or destructure it.
+        read: FxHashSet<oxc::semantic::ReferenceId>,
+        /// The body may change it some other way.
+        opaque: bool,
+    }
+    /// How a component body uses the objects its props give it.
     struct PropsUses<'s> {
         scoping: &'s Scoping,
-        object: SymbolId,
-        read: FxHashSet<oxc::semantic::ReferenceId>,
-        opaque: bool,
+        props: Option<SymbolId>,
+        tracked: FxHashMap<SymbolId, Use>,
+        /// Each binding a `const { … } = object` of a tracked object names:
+        /// the object, the binding, its key and its literal default.
+        destructured: Vec<(SymbolId, SymbolId, String, Option<Value>)>,
     }
     /// The object a member chain starts from (`props` of `props.style.color`).
     fn root<'e, 'a>(mut expression: &'e Expression<'a>) -> &'e Expression<'a> {
@@ -7338,29 +7669,55 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
         expression.get_inner_expression()
     }
     impl PropsUses<'_> {
-        fn names_object(&self, expression: &Expression<'_>) -> Option<oxc::semantic::ReferenceId> {
+        fn track(&mut self, symbol: SymbolId, rest: Option<(Vec<String>, bool)>) {
+            self.tracked.insert(symbol, Use { rest, read: FxHashSet::default(), opaque: false });
+        }
+
+        /// The tracked object `expression` names, with the reference.
+        fn names(&self, expression: &Expression<'_>) -> Option<(SymbolId, oxc::semantic::ReferenceId)> {
             match expression.get_inner_expression() {
-                Expression::Identifier(id) if symbol_of(self.scoping, id) == Some(self.object) => id.reference_id.get(),
+                Expression::Identifier(id) => {
+                    let symbol = symbol_of(self.scoping, id).filter(|symbol| self.tracked.contains_key(symbol))?;
+                    Some((symbol, id.reference_id.get()?))
+                }
                 _ => None,
             }
         }
 
-        /// Whether `expression` is a member of the props object, however
-        /// deep (`props.size`, `props.style.color`, `props?.size`).
-        fn member_of_object(&self, expression: &Expression<'_>) -> bool {
+        /// The tracked object whose member `expression` is, however deep
+        /// (`props.size`, `props.style.color`, `props?.size`).
+        fn member_of(&self, expression: &Expression<'_>) -> Option<SymbolId> {
             let member = match expression.get_inner_expression() {
                 Expression::ChainExpression(chain) => chain.expression.as_member_expression(),
                 expression => expression.as_member_expression(),
-            };
-            member.is_some_and(|member| self.names_object(root(member.object())).is_some())
+            }?;
+            self.names(root(member.object())).map(|(symbol, _)| symbol)
         }
 
-        /// Records `expression` as a read of the props object, where it
-        /// names it: a member's object, or a spread's argument.
+        /// Records `expression` as a read of a tracked object, where it
+        /// names one: a member's object, or a spread's argument.
         fn read(&mut self, expression: &Expression<'_>) -> bool {
-            let reference = self.names_object(expression);
-            self.read.extend(reference);
-            reference.is_some()
+            let Some((symbol, reference)) = self.names(expression) else { return false };
+            if let Some(tracked) = self.tracked.get_mut(&symbol) {
+                tracked.read.insert(reference);
+            }
+            true
+        }
+
+        fn opaque(&mut self, symbol: Option<SymbolId>) {
+            if let Some(tracked) = symbol.and_then(|symbol| self.tracked.get_mut(&symbol)) {
+                tracked.opaque = true;
+            }
+        }
+
+        /// Whether the tracked object passes its props on unchanged: every
+        /// value reference reads it, and nothing changes it.
+        fn passes_on(&self, symbol: SymbolId) -> bool {
+            let Some(tracked) = self.tracked.get(&symbol) else { return false };
+            !tracked.opaque
+                && self.scoping.get_resolved_reference_ids(symbol).iter().all(|reference| {
+                    tracked.read.contains(reference) || !self.scoping.get_reference(*reference).is_value()
+                })
         }
     }
     impl<'a> Visit<'a> for PropsUses<'_> {
@@ -7379,34 +7736,143 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
                 oxc::ast_visit::walk::walk_jsx_spread_attribute(self, spread);
             }
         }
+        // `const { a, b = 'x', ...rest } = props` reads it: the bindings
+        // pass its props on, and a rest is tracked as one.
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            use oxc::ast::ast::BindingPattern;
+            if let (BindingPattern::ObjectPattern(object), Some(init)) = (&declarator.id, &declarator.init) {
+                if let Some((symbol, _)) = self.names(init) {
+                    self.read(init);
+                    // A binding an empty object defaults may hold `{}`
+                    // where the object leaves it out.
+                    let (named, keys, empty) = pattern_props(self.scoping, object);
+                    for (bound, key, default) in named {
+                        if !empty.contains(&bound) {
+                            self.destructured.push((symbol, bound, key, default));
+                        }
+                    }
+                    if self.props == Some(symbol) {
+                        if let Some(BindingPattern::BindingIdentifier(rest)) = object.rest.as_ref().map(|rest| &rest.argument) {
+                            if let Some(rest) = unwritten(self.scoping, rest) {
+                                self.track(rest, Some((keys, true)));
+                            }
+                        }
+                    }
+                    for property in &object.properties {
+                        if let BindingPattern::AssignmentPattern(assignment) = &property.value {
+                            self.visit_expression(&assignment.right);
+                        }
+                    }
+                    return;
+                }
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
         // A write to a member, a member called with the object as `this`,
         // and a deleted member may change it.
         fn visit_simple_assignment_target(&mut self, target: &oxc::ast::ast::SimpleAssignmentTarget<'a>) {
-            if target.as_member_expression().is_some_and(|member| self.names_object(root(member.object())).is_some()) {
-                self.opaque = true;
+            if let Some(member) = target.as_member_expression() {
+                let symbol = self.names(root(member.object())).map(|(symbol, _)| symbol);
+                self.opaque(symbol);
             }
             oxc::ast_visit::walk::walk_simple_assignment_target(self, target);
         }
         fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-            if self.member_of_object(&call.callee) {
-                self.opaque = true;
-            }
+            let symbol = self.member_of(&call.callee);
+            self.opaque(symbol);
             oxc::ast_visit::walk::walk_call_expression(self, call);
         }
         fn visit_tagged_template_expression(&mut self, tagged: &oxc::ast::ast::TaggedTemplateExpression<'a>) {
-            if self.member_of_object(&tagged.tag) {
-                self.opaque = true;
-            }
+            let symbol = self.member_of(&tagged.tag);
+            self.opaque(symbol);
             oxc::ast_visit::walk::walk_tagged_template_expression(self, tagged);
         }
         fn visit_unary_expression(&mut self, unary: &oxc::ast::ast::UnaryExpression<'a>) {
-            if unary.operator == oxc::syntax::operator::UnaryOperator::Delete && self.member_of_object(&unary.argument) {
-                self.opaque = true;
+            if unary.operator == oxc::syntax::operator::UnaryOperator::Delete {
+                let symbol = self.member_of(&unary.argument);
+                self.opaque(symbol);
             }
             oxc::ast_visit::walk::walk_unary_expression(self, unary);
         }
     }
     params
+}
+
+/// Each state slot of a React state hook nothing writes: the first binding
+/// of `const [state, set] = useState(…)` (or `useReducer`), where the hook is
+/// React's own import.
+fn state_slots(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<SymbolId, RuntimeState> {
+    use oxc::ast::ast::BindingPattern;
+    if !HOOK_FUNCTIONS.iter().any(|hook| program.source_text.contains(hook)) {
+        return FxHashMap::default();
+    }
+    let hooks = ReactNames::hooks(program, scoping);
+    if hooks.is_empty() {
+        return FxHashMap::default();
+    }
+    struct Scan<'s> {
+        scoping: &'s Scoping,
+        hooks: ReactNames,
+        states: FxHashMap<SymbolId, RuntimeState>,
+    }
+    impl<'a> Visit<'a> for Scan<'_> {
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            if let (BindingPattern::ArrayPattern(array), Some(Expression::CallExpression(call))) =
+                (&declarator.id, declarator.init.as_ref().map(|init| init.get_inner_expression()))
+            {
+                if let (Some(hook), Some(Some(BindingPattern::BindingIdentifier(id)))) = (self.hooks.export(&call.callee), array.elements.first()) {
+                    if let Some(symbol) = unwritten(self.scoping, id) {
+                        self.states.insert(symbol, RuntimeState { hook: hook.to_string(), at: call.span.start });
+                    }
+                }
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+    }
+    let mut scan = Scan { scoping, hooks, states: FxHashMap::default() };
+    scan.visit_program(program);
+    scan.states
+}
+
+/// The symbol `id` binds, where nothing writes it after.
+fn unwritten(scoping: &Scoping, id: &oxc::ast::ast::BindingIdentifier<'_>) -> Option<SymbolId> {
+    id.symbol_id.get().filter(|symbol| !crate::identity::reassigned(scoping, *symbol))
+}
+
+/// A binding a props pattern names, its key and its literal default.
+type PropBinding = (SymbolId, String, Option<Value>);
+
+/// The bindings an object pattern names, with their keys and literal
+/// defaults; the keys it names (what a rest of it never carries); and the
+/// bindings an empty object defaults. A property with a default the walk
+/// cannot read, or one that destructures further, may pass any value and
+/// is left out of the bindings.
+fn pattern_props(scoping: &Scoping, object: &oxc::ast::ast::ObjectPattern<'_>) -> (Vec<PropBinding>, Vec<String>, Vec<SymbolId>) {
+    use oxc::ast::ast::BindingPattern;
+    let mut named = Vec::new();
+    let mut keys = Vec::new();
+    let mut empty = Vec::new();
+    for property in &object.properties {
+        let key = (!property.computed).then(|| eval_property_key(&property.key)).flatten();
+        let Some(key) = key else { continue };
+        keys.push(key.clone());
+        let (id, default) = match &property.value {
+            BindingPattern::BindingIdentifier(id) => (id, None),
+            BindingPattern::AssignmentPattern(assignment) => match (&assignment.left, default_value(&assignment.right)) {
+                (BindingPattern::BindingIdentifier(id), Some(value)) => (id, Some(value)),
+                (BindingPattern::BindingIdentifier(id), None)
+                    if matches!(assignment.right.get_inner_expression(), Expression::ObjectExpression(object) if object.properties.is_empty()) =>
+                {
+                    empty.extend(unwritten(scoping, id));
+                    (id, None)
+                }
+                _ => continue,
+            },
+            _ => continue,
+        };
+        named.extend(unwritten(scoping, id).map(|symbol| (symbol, key, default)));
+    }
+    (named, keys, empty)
 }
 
 /// Each parameter binding whose type annotation reads, without a type
@@ -7636,8 +8102,16 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
         if let (true, oxc::ast::ast::VariableDeclarationKind::Const, oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init)) =
             (self.enrich, self.declaring, &declarator.id, &declarator.init)
         {
-            if let (Some(symbol), Some(set)) = (id.symbol_id.get(), self.finite_set(init)) {
-                self.local_consts.insert(symbol, set);
+            if let Some(symbol) = id.symbol_id.get() {
+                if let Some(set) = self.finite_set(init) {
+                    self.local_consts.insert(symbol, set);
+                }
+                match self.value_origin(init) {
+                    ValueOrigin::Unknown | ValueOrigin::RuntimeState(_) => {}
+                    origin => {
+                        self.local_origins.insert(symbol, origin);
+                    }
+                }
             }
         }
         if let Some(clones) = &mut self.clones {
@@ -8594,8 +9068,18 @@ impl ReactNames {
         }
     }
 
+    /// Whether no import names a function this reads.
+    fn is_empty(&self) -> bool {
+        self.functions.is_empty() && self.namespaces.is_empty()
+    }
+
     pub(crate) fn from_imports(program: &Program<'_>, scoping: &Scoping) -> Self {
         Self::importing(program, scoping, &ELEMENT_FUNCTIONS, &AUTOMATIC_RUNTIMES, true)
+    }
+
+    /// React's state hooks, read as `wrappers` reads its wrappers.
+    fn hooks(program: &Program<'_>, scoping: &Scoping) -> Self {
+        Self::importing(program, scoping, &HOOK_FUNCTIONS, &[], false)
     }
 
     /// React's `memo` and `forwardRef`, read as `from_imports` reads the
@@ -8732,6 +9216,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         rests: FxHashMap::default(),
         declaring: oxc::ast::ast::VariableDeclarationKind::Var,
         local_consts: FxHashMap::default(),
+        local_origins: FxHashMap::default(),
     };
     collector.visit_program(program);
     collector.finish()

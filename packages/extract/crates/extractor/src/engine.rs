@@ -78,6 +78,12 @@ struct AnalyzeResult<'a> {
     /// Present only where slot provenance is asked for.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     tag_declarations: &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    /// Present only where slot provenance is asked for.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    as_component_targets: &'a std::collections::BTreeMap<String, String>,
+    /// Present only where slot provenance is asked for.
+    #[serde(skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    unmatched_routes: &'a std::collections::BTreeSet<String>,
     /// Present only where a runtime config references a shared list.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     prop_name_lists: &'a std::collections::BTreeMap<String, String>,
@@ -1750,6 +1756,8 @@ impl ExtractEngine {
             runtime_tables: &css.runtime_tables,
             tag_components: &css.tag_components,
             tag_declarations: &css.tag_declarations,
+            as_component_targets: &css.as_component_targets,
+            unmatched_routes: &css.unmatched_routes,
             prop_name_lists: &css.prop_name_lists,
             superseded_by: &css.superseded_by,
             slot_provenance: css.slot_provenance.as_ref(),
@@ -2464,7 +2472,7 @@ mod tests {
         assert_eq!(attr("proven", "size")["proven"], false);
     }
 
-    /// Contract: a \`const\` bound to a conditional of literals is one of
+    /// Contract: a `const` bound to a conditional of literals is one of
     /// those literals wherever it is read, as a literal written at the site
     /// is: proven, and an option no branch names prunes.
     #[test]
@@ -2503,7 +2511,6 @@ mod tests {
                       export const plain = ({ n }) => <Box p={n} />;\n\
                       export const Pill = memo(({ size = 'md' }) => <Box p={size} />);\n\
                       export const Or = ({ size }) => <Box p={size || undefined} />;\n\
-                      export const Coalesce = ({ size }) => <Box p={size ?? undefined} />;\n\
                       export function Written(props) { props.size = 'lg'; return <Box p={props.size} />; }\n\
                       export function Assigned(props) { Object.assign(props, { size: 'lg' }); return <Box p={props.size} />; }\n";
         let local = "function memo(fn) { return () => fn({ size: 'lg' }); }\n\
@@ -2532,15 +2539,85 @@ mod tests {
         assert_eq!(attr("a.tsx", 3)["forwarded"], serde_json::json!({ "component": "Pill", "prop": "size", "default": "md" }));
         for (element, why) in [
             (4, "`|| undefined` replaces a falsy option"),
-            (5, "`?? undefined` replaces null"),
-            (6, "a write to the props object"),
-            (7, "the props object handed to a call"),
+            (5, "a write to the props object"),
+            (6, "the props object handed to a call"),
         ] {
             assert!(attr("a.tsx", element).get("forwarded").is_none(), "{why} forwards nothing");
         }
         assert!(attr("b.tsx", 0).get("forwarded").is_none(), "a module's own `memo` forwards nothing");
         assert!(attr("c.tsx", 0).get("forwarded").is_none(), "an unbound `React`'s `memo` forwards nothing");
         assert!(manifest["fileFacts"]["a.tsx"]["usage"][0]["element"]["attrs"][0].get("forwarded").is_none(), "raw usage names no forward");
+    }
+
+    /// Contract: `?? undefined` forwards when null and undefined select
+    /// alike. The runtime reads a variant as `props[prop] ?? default`
+    /// (packages/system/src/runtime/resolveClasses.ts `applyVariantClasses`
+    /// and `applyCompoundClasses`), a state by truthiness
+    /// (`applyStateClasses`), a system or custom prop only where it is
+    /// `!= null` (`resolveClasses`' slot loop), and fills a forwarded
+    /// variant's default with `??=` (runtime/index.ts), so `null` selects
+    /// what `undefined` does for every kind of prop: `size ?? undefined`
+    /// passes the caller's option on.
+    #[test]
+    fn coalescing_to_undefined_forwards_when_null_and_undefined_select_alike() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let source = "export const Coalesce = ({ size }) => <Box p={size ?? undefined} />;\n";
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine.analyze_full(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string(), None).unwrap(),
+        )
+        .unwrap();
+        let attr = &manifest["fileFacts"]["a.tsx"]["proven"][0]["element"]["attrs"][0];
+        assert_eq!(attr["forwarded"], serde_json::json!({ "component": "Coalesce", "prop": "size" }));
+    }
+
+    /// Contract: the manifest says where a runtime value comes from: a prop
+    /// passed on unchanged (through body destructuring, as a member of an
+    /// object prop, with a boolean default, or `?? literal`, which replaces
+    /// a missing or `null` prop), a prop a site computes from, a React
+    /// state hook's state slot, and a spread that passes on the props object
+    /// or a rest of it.
+    #[test]
+    fn manifest_proven_says_where_a_value_comes_from() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let source = "import { useState } from 'react';\n\
+                      export function Item(props) { const { type, disabled } = props; return <Box tone={type} />; }\n\
+                      export function Split({ buttonProps = {} }) { return <Box size={buttonProps.size} />; }\n\
+                      export function Card({ interactive = false }) { return <Box interactive={interactive} />; }\n\
+                      export function Tree({ variant }) { return <Box tone={variant ?? 'default'} />; }\n\
+                      export function Pill({ color }) { return <Box bg={parseThemeColor(color)} />; }\n\
+                      export function Rail() { const [mode, setMode] = useState('hover'); return <Box mode={mode} />; }\n\
+                      export function Button(props) { return <Box {...props} />; }\n\
+                      export function Custom({ normal, ...props }) { return <Box {...props} tone={normal} />; }\n\
+                      export function Frame({ borderRadius, interactive = false }) { const radius = borderRadius ?? (interactive ? 'md' : 'none'); return <Box radius={radius} />; }\n\
+                      export function Alias({ size }) { const kept = size; return <Box size={kept} />; }\n\
+                      export function Opts({ options = {} }) { return <Box value={options} />; }\n";
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine.analyze_full(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string(), None).unwrap(),
+        )
+        .unwrap();
+        let element = |index: usize| manifest["fileFacts"]["a.tsx"]["proven"][index]["element"].clone();
+        let attr = |index: usize| element(index)["attrs"][0].clone();
+        assert_eq!(attr(0)["forwarded"], serde_json::json!({ "component": "Item", "prop": "type" }));
+        assert_eq!(attr(1)["forwarded"], serde_json::json!({ "component": "Split", "prop": "buttonProps", "path": ["size"] }));
+        assert_eq!(attr(2)["forwarded"], serde_json::json!({ "component": "Card", "prop": "interactive", "default": false }));
+        assert_eq!(attr(3)["forwarded"], serde_json::json!({ "component": "Tree", "prop": "variant", "nullish": "default" }));
+        assert_eq!(
+            attr(4)["derived"],
+            serde_json::json!({ "component": "Pill", "props": ["color"], "through": "parseThemeColor" })
+        );
+        assert_eq!(attr(5)["runtimeState"]["hook"], "useState");
+        assert_eq!(element(6)["spreadForward"], serde_json::json!({ "component": "Button" }));
+        assert_eq!(element(7)["spreadForward"], serde_json::json!({ "component": "Custom", "omits": ["normal"] }));
+        // A `const` computed from the props, or holding one unchanged.
+        assert_eq!(
+            attr(8)["derived"],
+            serde_json::json!({ "component": "Frame", "props": ["borderRadius", "interactive"], "through": "??" })
+        );
+        assert_eq!(attr(9)["forwarded"], serde_json::json!({ "component": "Alias", "prop": "size" }));
+        // A prop an empty object defaults holds `{}` where a caller leaves
+        // it out, so it is computed from the prop, not the prop unchanged.
+        assert_eq!(attr(10)["forwarded"], serde_json::Value::Null);
+        assert_eq!(attr(10)["derived"]["props"], serde_json::json!(["options"]));
     }
 
     #[test]
