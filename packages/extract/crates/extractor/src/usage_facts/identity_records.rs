@@ -94,6 +94,9 @@ pub(super) fn identity_records(program: &Program<'_>, scoping: &Scoping, module:
         return FxHashSet::default();
     }
     let module = ModuleFacts::of(program, scoping, exported);
+    if module.with {
+        return FxHashSet::default();
+    }
     let mut skipped = FxHashSet::default();
     for record in candidates {
         let mut proof = Proof::new(&module, record);
@@ -301,6 +304,8 @@ struct ModuleFacts<'a, 's> {
     /// The module bindings other modules may read.
     exported: FxHashSet<SymbolId>,
     arguments: Vec<Span>,
+    /// Whether a `with` statement may supply any name the passes resolve.
+    with: bool,
     ancestors: Vec<AstKind<'a>>,
 }
 
@@ -314,6 +319,7 @@ impl<'a, 's> ModuleFacts<'a, 's> {
             exposed: FxHashSet::default(),
             exported,
             arguments: Vec::new(),
+            with: false,
             ancestors: Vec::new(),
         };
         let mut writes: FxHashMap<SymbolId, usize> = FxHashMap::default();
@@ -396,6 +402,7 @@ impl<'a> Visit<'a> for Collector<'_, 'a, '_> {
     fn enter_node(&mut self, kind: AstKind<'a>) {
         let scoping = self.facts.scoping;
         match kind {
+            AstKind::WithStatement(_) => self.facts.with = true,
             // An ambient declaration or overload signature runs nothing: the
             // name holds whatever a runtime declaration, or the global, holds.
             AstKind::Function(function) if function.body.is_some() && !function.declare => {

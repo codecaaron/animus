@@ -20868,6 +20868,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let app = format!("import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n");
             assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app.as_str())]), kept, "{setup}");
         }
+        // A `with` object may supply any name the record's uses resolve.
+        let with = "import { R } from './r';\nimport { register } from 'lib';\nconst table = { R };\n\
+                    function run() { const check = (c) => c === null; with ({ check: register }) { for (const c of Object.values(table)) check(c); } }\n\
+                    run();\nexport const App = () => <R size=\"sm\" active />;\n";
+        assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.js", with)]), every, "{with}");
     }
 
     /// An escape opens the component the escaping file names through its own
