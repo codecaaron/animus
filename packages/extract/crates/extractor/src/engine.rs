@@ -2496,8 +2496,8 @@ mod tests {
     }
 
     /// Contract: a proven value that may be `undefined` or `null` also
-    /// selects what leaving the prop out does, inline or through `const`s:
-    /// the variant's default keeps its CSS, and so does a compound keyed on
+    /// selects what leaving the prop out does, inline, through `const`s or
+    /// at a breakpoint: the variant's default keeps its CSS, and so does a compound keyed on
     /// the default option; an option no branch names still prunes.
     #[test]
     fn a_proven_value_that_may_be_absent_keeps_the_default() {
@@ -2505,6 +2505,7 @@ mod tests {
             "const size = on ? 'sm' : undefined; return <Chip size={size} />;",
             "return <Chip size={on ? 'sm' : null} />;",
             "const picked = on ? 'sm' : undefined; const size = picked; return <Chip size={size} />;",
+            "return <Chip size={{ _: on ? 'sm' : undefined }} />;",
         ] {
             let mut engine = ExtractEngine::new(None).unwrap();
             let source = format!(
@@ -2603,13 +2604,15 @@ mod tests {
     /// it is `!= null` (`resolveClasses`' slot loop), a forwarded variant's
     /// default filled with `??=` (runtime/index.ts). An ordinary component's
     /// parameter default takes `undefined` and not `null`, so the forward
-    /// says the `null` is changed (`nullToUndefined`), and a prop a
-    /// left side never makes nullish passes on unchanged.
+    /// says the `null` is changed (`nullToUndefined`), a prop a left side
+    /// never makes nullish passes on unchanged, and a `??` literal after
+    /// the change names no forward.
     #[test]
     fn coalescing_to_undefined_passes_null_on_as_undefined() {
         let mut engine = ExtractEngine::new(None).unwrap();
         let source = "export const Coalesce = ({ size }) => <Box p={size ?? undefined} />;\n\
-                      export const Kept = ({ size }) => <Box p={(size ?? 'md') ?? undefined} />;\n";
+                      export const Kept = ({ size }) => <Box p={(size ?? 'md') ?? undefined} />;\n\
+                      export const Late = ({ size }) => <Box p={(size ?? undefined) ?? 'md'} />;\n";
         let manifest: serde_json::Value = serde_json::from_str(
             &engine.analyze_full(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string(), None).unwrap(),
         )
@@ -2617,6 +2620,7 @@ mod tests {
         let attr = |index: usize| manifest["fileFacts"]["a.tsx"]["proven"][index]["element"]["attrs"][0].clone();
         assert_eq!(attr(0)["forwarded"], serde_json::json!({ "component": "Coalesce", "prop": "size", "nullToUndefined": true }));
         assert_eq!(attr(1)["forwarded"], serde_json::json!({ "component": "Kept", "prop": "size", "nullish": "md" }));
+        assert!(attr(2).get("forwarded").is_none(), "{:#}", attr(2));
     }
 
     /// Contract: the manifest says where a runtime value comes from: a prop

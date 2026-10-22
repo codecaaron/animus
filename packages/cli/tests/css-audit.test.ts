@@ -741,7 +741,9 @@ async function forwardAudit(
  *  forward takes the literal where a caller leaves the prop out or passes
  *  null, and a `prop ?? undefined` one passes a null on as left out, which
  *  takes the next component's default; a caller's value that may be
- *  `undefined` also passes what leaving it out does; an `.asComponent()`
+ *  `undefined` or `null` also passes what leaving it out does and what a
+ *  null does, and is not read before a spread that may replace it; a
+ *  spread of the props passes a null on; an `.asComponent()`
  *  component's sites are its target's callers, without what it keeps back
  *  (`forward: true` keeps nothing back), and with its forwarded default
  *  for a null as for a prop left out; a
@@ -846,6 +848,72 @@ test("a forward's callers are read through what passes their values on", async (
     expect(nullToDefault.reachedByCallers).toEqual([
       { axis: 'size', options: ['lg'] },
     ]);
+    // Through Outer's `size = 'md'`, a value that may be `undefined` or
+    // `null` passes 'md' left out and Wrap's `?? 'sm'` for a null.
+    const absentOrNull = await forwardAudit(
+      root,
+      forward({ component: 'Wrap', prop: 'size', nullish: 'sm' }),
+      {
+        'src/outer.tsx': [
+          tag('Wrap', [
+            forward({ component: 'Outer', prop: 'size', default: 'md' }),
+          ]),
+        ],
+        'src/app.tsx': [
+          tag('Outer', [
+            { name: 'size', values: ['lg'], proven: true, absent: true },
+          ]),
+        ],
+      },
+      declared({
+        'src/outer.tsx': { Wrap: 'src/wrap.tsx::Wrap' },
+        'src/app.tsx': { Outer: 'src/outer.tsx::Outer' },
+      })
+    );
+    expect(absentOrNull.reachedByCallers).toEqual([
+      { axis: 'size', options: ['sm', 'lg'] },
+    ]);
+    // A spread of the props passes a `null` on to Wrap's `?? 'sm'`.
+    const spreadNull = await forwardAudit(
+      root,
+      forward({ component: 'Wrap', prop: 'size', nullish: 'sm' }),
+      {
+        'src/outer.tsx': [
+          tag('Wrap', [], { spread: 0, spreadForward: { component: 'Outer' } }),
+        ],
+        'src/app.tsx': [tag('Outer', [literal('size', null)])],
+      },
+      declared({
+        'src/outer.tsx': { Wrap: 'src/wrap.tsx::Wrap' },
+        'src/app.tsx': { Outer: 'src/outer.tsx::Outer' },
+      })
+    );
+    expect(spreadNull.reachedByCallers).toEqual([
+      { axis: 'size', options: ['sm'] },
+    ]);
+    // A value that may be `undefined`, before a spread that may replace
+    // it, is not read as the one value the spread falls back to.
+    const absentBeforeSpread = await forwardAudit(
+      root,
+      wrap,
+      {
+        'src/outer.tsx': [
+          tag(
+            'Wrap',
+            [{ name: 'size', values: ['sm'], proven: true, absent: true }],
+            { spread: 1, spreadForward: { component: 'Outer' } }
+          ),
+        ],
+        'src/app.tsx': [tag('Outer', [])],
+      },
+      declared({
+        'src/outer.tsx': { Wrap: 'src/wrap.tsx::Wrap' },
+        'src/app.tsx': { Outer: 'src/outer.tsx::Outer' },
+      })
+    );
+    expect(absentBeforeSpread.text).toContain(
+      'a matched caller passes a value the audit cannot read'
+    );
     // A component that renders the forward twice is read once per render.
     const twice = await forwardAudit(
       root,
