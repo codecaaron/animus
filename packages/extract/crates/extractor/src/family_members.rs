@@ -392,7 +392,7 @@ impl<'f> ObjectMembers<'f> {
     /// imports.
     fn facades_on(&self, module: &str, ff: &FileFacts, name: &str) -> Vec<Object> {
         let (root, rest) = name.split_once('.').map_or((name, None), |(root, rest)| (root, Some(rest)));
-        let declared = match ff.imports.iter().find(|import| import.local == root) {
+        let declared = match ff.import_of(root) {
             Some(import) => resolve_import_source(module, &import.source, self.files, self.inputs)
                 .and_then(|source| declared_export(&source, import.imported.clone(), self.files, self.links))
                 .map(|(declaring, _, binding)| (declaring, binding)),
@@ -705,7 +705,7 @@ impl<'f> ObjectMembers<'f> {
         if let Some(target) = ff.aliases.get(name) {
             return self.local_object(module, target);
         }
-        let import = ff.imports.iter().find(|import| import.local == name)?;
+        let import = ff.import_of(name)?;
         let source = resolve_import_source(module, &import.source, files, self.inputs)?;
         self.exported_object(&source, &import.imported)
     }
@@ -992,7 +992,7 @@ impl<'f> ObjectMembers<'f> {
     /// What an import binding of `module` may hold when an open route
     /// leaves the export it imports incomplete.
     fn opened_import(&mut self, module: &str, ff: &FileFacts, local: &str) -> Reach {
-        let Some(import) = ff.imports.iter().find(|import| import.local == local) else { return Reach::default() };
+        let Some(import) = ff.import_of(local) else { return Reach::default() };
         let Some(source) = resolve_import_source(module, &import.source, self.files, self.inputs) else {
             return Reach::default();
         };
@@ -1046,7 +1046,7 @@ impl<'f> ObjectMembers<'f> {
     /// The name an import binding of `module` imports, when its source is
     /// no analysed module; a default import is named by its local binding.
     fn unresolved_import<'n>(&self, module: &str, ff: &'n FileFacts, local: &str) -> Option<&'n str> {
-        let import = ff.imports.iter().find(|import| import.local == local)?;
+        let import = ff.import_of(local)?;
         if resolve_import_source(module, &import.source, self.files, self.inputs).is_some() {
             return None;
         }
@@ -1133,7 +1133,7 @@ pub(crate) fn local_namespace(
     if ff.namespace_imports.contains_key(local) {
         return held_namespace(file, ff, local, files, inputs);
     }
-    let import = ff.imports.iter().find(|import| import.local == local)?;
+    let import = ff.import_of(local)?;
     imported_namespace(file, import, files, inputs, links)
 }
 

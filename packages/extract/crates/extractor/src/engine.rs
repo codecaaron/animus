@@ -285,7 +285,7 @@ fn replacement_import_needs(
 
         // A chain-stage reference or extended parent resolves at module
         // scope, where an import and a local cannot share a name.
-        let import_of = |local: &str| file_facts.imports.iter().find(|import| import.local == local);
+        let import_of = |local: &str| file_facts.import_of(local);
         let namespace_of = |local: &str| file_facts.namespace_import_facts.iter().find(|import| import.local == local);
         if payload.drops_parent_reference {
             let parent = chain.descriptor.extends_from.as_deref().and_then(|parent| match parent.split_once('.') {

@@ -4260,7 +4260,7 @@ fn resolve_identity_uncached(
     }
     if let Some(imp) = files
         .get(file)
-        .and_then(|ff| ff.imports.iter().find(|i| i.local == local))
+        .and_then(|ff| ff.import_of(local))
     {
         if let Some(source_file) = resolve_import_source(file, &imp.source, files, inputs) {
             return import_identity(&source_file, &imp.imported, files, inputs, links, evaluated_ids, &in_graph);
@@ -4379,7 +4379,7 @@ impl WrittenOrigins<'_> {
         if !self.seen.insert((path.to_string(), held.to_string())) {
             return;
         }
-        if let Some(import) = files.get(path).and_then(|ff| ff.imports.iter().find(|import| import.local == held)) {
+        if let Some(import) = files.get(path).and_then(|ff| ff.import_of(held)) {
             self.import(path, &import.source, Some(&import.imported));
         }
     }
@@ -4391,7 +4391,7 @@ impl WrittenOrigins<'_> {
         use animus_system_loader::module_table::{ExportLookup, Terminal};
         let files = self.files;
         let held = resolve_alias_terminal(path, binding, files);
-        let import = files.get(path).and_then(|ff| ff.imports.iter().find(|import| import.local == held));
+        let import = files.get(path).and_then(|ff| ff.import_of(held));
         let namespace = import.and_then(|import| {
             let crate::link::Named::Module(target) = crate::link::named(path, &import.source, files, self.inputs) else {
                 return None;
@@ -4747,7 +4747,7 @@ fn namespace_root_rejected(
     if let Some(source) = ff.namespace_imports.get(root) {
         return analysed(source).is_some();
     }
-    let Some(import) = ff.imports.iter().find(|import| import.local == root) else { return false };
+    let Some(import) = ff.import_of(root) else { return false };
     let Some(module) = analysed(&import.source) else { return false };
     match links.resolve_export(&module, &import.imported) {
         Some(ExportLookup::Resolved(Terminal::Namespace(_))) => true,
@@ -5784,7 +5784,7 @@ fn lost_through_binding<'f>(
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, LostThrough<'f>)> {
     let ff = files.get(file)?;
-    match ff.imports.iter().find(|import| import.local == binding) {
+    match ff.import_of(binding) {
         Some(import) => {
             let module = resolve_import_source(file, &import.source, files, inputs)?;
             lost_through_export(&module, &import.imported, files, links)
@@ -6691,7 +6691,7 @@ fn callee_declaration(
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String)> {
     let ff = files.get(file)?;
-    match ff.imports.iter().find(|import| import.local == name) {
+    match ff.import_of(name) {
         Some(import) => {
             let target = resolve_import_source(file, &import.source, files, inputs)?;
             let (module, binding) = links.declared(&target, &import.imported)?;

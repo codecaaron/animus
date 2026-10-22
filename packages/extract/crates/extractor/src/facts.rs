@@ -617,6 +617,10 @@ pub struct FileFacts {
     pub(crate) staged_builders: Vec<chain_walk::StagedBuilder>,
     /// Named-import specifiers (alias augmentation inputs).
     pub imports: Vec<ImportFact>,
+    /// Each local's first import in `imports`, indexed on the first lookup
+    /// (`import_of`).
+    #[serde(skip)]
+    import_index: std::cell::OnceCell<rustc_hash::FxHashMap<String, usize>>,
     /// Named-export facts (re-export following for provenance/statics).
     pub exports: Vec<crate::usage_facts::ExportFact>,
     /// Bindings of extracted components whose every use is a JSX element of
@@ -1002,7 +1006,33 @@ pub(crate) fn line_column(source: &str, offset: u32) -> (usize, usize) {
     (line, column)
 }
 
+/// The most imports `FileFacts::import_of` scans rather than indexes.
+const SCANNED_IMPORTS: usize = 32;
+
 impl FileFacts {
+    /// The import that binds `local`: the first in `imports`, as a scan
+    /// finds it. A module may import thousands of names, and the analysis
+    /// asks after them by name; the imports never change once collected.
+    pub(crate) fn import_of(&self, local: &str) -> Option<&ImportFact> {
+        // A short list costs less to scan than to index.
+        if self.imports.len() <= SCANNED_IMPORTS {
+            return self.imports.iter().find(|import| import.local == local);
+        }
+        let index = self.import_index.get_or_init(|| {
+            let mut first = rustc_hash::FxHashMap::default();
+            for (at, import) in self.imports.iter().enumerate() {
+                first.entry(import.local.clone()).or_insert(at);
+            }
+            first
+        });
+        let import = index.get(local).map(|&at| &self.imports[at]);
+        debug_assert!(
+            import.map(std::ptr::from_ref) == self.imports.iter().find(|import| import.local == local).map(std::ptr::from_ref),
+            "the indexed import of {local:?} is the scan's"
+        );
+        import
+    }
+
     pub(crate) fn usage_for_analysis(&self) -> &[UsageFact] {
         self.usage_enriched.as_deref().unwrap_or(&self.usage)
     }
@@ -1489,6 +1519,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         unwalked_chains: Vec::new(),
         staged_builders: Vec::new(),
         imports: collect_import_facts(ast.module_record()),
+        import_index: Default::default(),
         exports: crate::usage_facts::collect_export_facts(ast.program()),
         confined_components: BTreeSet::new(),
         value_escapes: BTreeSet::new(),
