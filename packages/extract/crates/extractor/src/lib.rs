@@ -583,10 +583,14 @@ struct ModuleFactsResult {
 pub fn extract_module_facts(file_entries_json: String) -> napi::Result<String> {
     let entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
         .map_err(|e| napi::Error::from_reason(format!("invalid file entries JSON: {e}")))?;
-    let store = ast_store::AstStore::build(
+    // Each module's facts read its own parse alone: the evaluation state they
+    // share is drained per chain on its thread or cached by its inputs, so
+    // the parse workers build them.
+    let (store, facts) = ast_store::AstStore::build_with(
         entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
+        facts::extract_module_facts,
     );
-    let files = store.iter().map(|ast| (ast.path.clone(), facts::extract_module_facts(ast))).collect();
+    let files = store.iter().map(|ast| ast.path.clone()).zip(facts).collect();
     serde_json::to_string(&ModuleFactsResult { files, parse_count: store.parse_count() })
         .map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
 }
