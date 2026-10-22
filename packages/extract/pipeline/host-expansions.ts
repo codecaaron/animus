@@ -133,7 +133,8 @@ export interface HostLoadExpander {
    *  doubt, no expansion. */
   expand(
     load: ListedLoad,
-    rootDir: string
+    rootDir: string,
+    realpaths?: Map<string, string>
   ): readonly ExpandedPath[] | undefined;
 }
 
@@ -165,8 +166,11 @@ export function hostExpansions(
   isAsset: ((file: string, query: string) => boolean) | undefined
 ): HostExpansion[] {
   const expansions: HostExpansion[] = [];
+  // One gather's real paths: its loads glob the same directories, and
+  // nothing a gather reads changes while it runs.
+  const realpaths = new Map<string, string>();
   for (const load of loads) {
-    const expanded = expander.expand(load, rootDir);
+    const expanded = expander.expand(load, rootDir, realpaths);
     if (expanded === undefined) continue;
     const files = new Map<string, HostExpansion['files'][number]>();
     for (const { path, query } of expanded) {

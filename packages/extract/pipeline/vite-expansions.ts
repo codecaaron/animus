@@ -155,7 +155,8 @@ function expandGlobs(
   globs: readonly ResolvedGlob[],
   importer: string,
   exhaustive: boolean,
-  preserveSymlinks: boolean
+  preserveSymlinks: boolean,
+  real: (path: string) => string
 ): string[] | undefined {
   const affirmed = globs.filter((glob) => !glob.negated);
   const negated = globs.filter((glob) => glob.negated);
@@ -173,7 +174,7 @@ function expandGlobs(
     if (path === importer || !affirmed.some((glob) => inside(glob, path)))
       continue;
     if (negated.some((glob) => inside(glob, path))) continue;
-    selected.add(preserveSymlinks ? path : realpathSync(path));
+    selected.add(preserveSymlinks ? path : real(path));
   }
   return [...selected].sort();
 }
@@ -264,7 +265,21 @@ export function viteLoadExpander(
   preserveSymlinks = false
 ): HostLoadExpander {
   return {
-    expand(load: ListedLoad, rootDir: string): ExpandedPath[] | undefined {
+    expand(
+      load: ListedLoad,
+      rootDir: string,
+      realpaths = new Map<string, string>()
+    ): ExpandedPath[] | undefined {
+      // A path that cannot be followed throws, as `realpathSync` does, and
+      // is asked again.
+      const real = (path: string): string => {
+        let found = realpaths.get(path);
+        if (found === undefined) {
+          found = realpathSync(path);
+          realpaths.set(path, found);
+        }
+        return found;
+      };
       const importer = resolve(rootDir, load.importer);
       const importerDir = dirname(importer);
       let patterns: string[];
@@ -301,9 +316,15 @@ export function viteLoadExpander(
       let files: string[] | undefined;
       let base: string;
       try {
-        files = expandGlobs(globs, importer, exhaustive, preserveSymlinks);
+        files = expandGlobs(
+          globs,
+          importer,
+          exhaustive,
+          preserveSymlinks,
+          real
+        );
         // A walked path runs through the root as the importer is named.
-        base = preserveSymlinks ? rootDir : realpathSync(rootDir);
+        base = preserveSymlinks ? rootDir : real(rootDir);
       } catch {
         // An unreadable directory, or a link that cannot be followed.
         return undefined;
