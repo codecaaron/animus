@@ -938,7 +938,9 @@ impl<'p, 'a, 's> Proof<'p, 'a, 's> {
                 let stored = match (member.property.name.as_str(), position) {
                     ("get" | "has" | "delete" | "includes" | "indexOf" | "lastIndexOf", 0) => return,
                     ("set", 1) => Kind::map(Kind::Plain, kind),
-                    ("set" | "add", 0) => Kind::map(kind, Kind::Plain),
+                    ("set", 0) => Kind::map(kind, Kind::Plain),
+                    // A Set's item is its value as well as its key.
+                    ("add", 0) => Kind::map(kind.clone(), kind),
                     ("push" | "unshift", _) => Kind::list(kind),
                     _ => return self.open = true,
                 };
