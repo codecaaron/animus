@@ -63,7 +63,9 @@ describe('hostExpansions', () => {
 describe('viteLoadExpander', () => {
   // Contract: a Vite record lists exactly the modules a Vite 8 build bundles
   // for that load, and a load it cannot reproduce exactly lists none. Each
-  // expected set is what a real \`vite build\` (8.2.2) bundled.
+  // expected set is what a real \`vite build\` (8.2.2; 8.3.4 with rolldown
+  // 1.2.14 for the dot-led and \`node_modules\` names below a common walk
+  // base, and an object query) bundled.
   test('lists what a Vite build bundles, or nothing', () => {
     const root = mkdtempSync(join(tmpdir(), 'animus-vite-expansions-'));
     for (const file of [
@@ -71,12 +73,14 @@ describe('viteLoadExpander', () => {
       'src/pages/b.ts',
       'src/pages/.hidden.js',
       'src/pages/sub/d.js',
+      'src/pages/sub/.cfg.js',
+      'src/pages/.config/c.js',
       'src/pages/node_modules/pkg/index.js',
       'src/pages/x.test.js',
       'src/other/o.js',
       'src/external/mutate.js',
       'src/dots/..foo.js',
-      'src/locked/l.js',
+      'locked/l.js',
     ]) {
       mkdirSync(dirname(join(root, file)), { recursive: true });
       writeFileSync(join(root, file), 'export default 1;\n');
@@ -85,7 +89,7 @@ describe('viteLoadExpander', () => {
     // cannot read.
     mkdirSync(join(root, 'src/linked'));
     symlinkSync('../external/mutate.js', join(root, 'src/linked/linked.js'));
-    chmodSync(join(root, 'src/locked'), 0o000);
+    chmodSync(join(root, 'locked'), 0o000);
     const expander = viteLoadExpander(root, true);
     const expand = (kind: ListedLoad['kind'], args: ListedArgs) =>
       expander
@@ -123,7 +127,17 @@ describe('viteLoadExpander', () => {
           comments: ['/* @vite-ignore */'],
         }),
         linked: glob(['../linked/*.js']),
-        unreadable: glob(['../locked/*.js']),
+        unreadable: glob(['../../locked/*.js']),
+        // The walk starts where every affirmed glob's base is, and leaves
+        // out every dot-led and node_modules name below it.
+        dottedBelow: glob(['./*/.cfg.js']),
+        dottedTwo: glob(['./.config/*.js', '../other/*.js']),
+        nodeModulesTwo: glob(['./node_modules/pkg/*.js', '../other/*.js']),
+        dottedBase: glob(['./.config/*.js']),
+        objectQuery: expand('glob', {
+          patterns: ['./*.js'],
+          options: { query: { foo: 'bar', baz: true } },
+        }),
         unreadSyntax: [glob(['../d?ta/*.js']), glob(['../d[ab]ta/*.js'])],
         dotDot: expand('glob', {
           patterns: ['../dots/*.js'],
@@ -133,9 +147,11 @@ describe('viteLoadExpander', () => {
         negated: ['src/pages/x.test.js'],
         deep: ['src/pages/a.js', 'src/pages/sub/d.js', 'src/pages/x.test.js'],
         exhaustive: [
+          'src/pages/.config/c.js',
           'src/pages/.hidden.js',
           'src/pages/a.js',
           'src/pages/node_modules/pkg/index.js',
+          'src/pages/sub/.cfg.js',
           'src/pages/sub/d.js',
           'src/pages/x.test.js',
         ],
@@ -150,6 +166,14 @@ describe('viteLoadExpander', () => {
         linked: ['src/external/mutate.js'],
         unreadable: undefined,
         unreadSyntax: [undefined, undefined],
+        dottedBelow: [],
+        dottedTwo: ['src/other/o.js'],
+        nodeModulesTwo: ['src/other/o.js'],
+        dottedBase: ['src/pages/.config/c.js'],
+        objectQuery: [
+          'src/pages/a.js?foo=bar&baz=true',
+          'src/pages/x.test.js?foo=bar&baz=true',
+        ],
         dotDot: ['src/dots/..foo.js'],
       });
       // An environment that leaves a variable import at runtime, or an
@@ -202,7 +226,7 @@ describe('viteLoadExpander', () => {
         regExpAlias: undefined,
       });
     } finally {
-      chmodSync(join(root, 'src/locked'), 0o755);
+      chmodSync(join(root, 'locked'), 0o755);
       rmSync(root, { recursive: true, force: true });
     }
   });

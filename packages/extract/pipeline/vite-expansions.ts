@@ -9,10 +9,9 @@ import type {
 } from './host-expansions';
 
 /** One glob segment: literal text, a `*` within it, or `**` across
- *  directories. `dotted` where the segment spells a leading dot itself. */
-type Segment =
-  | { kind: 'globstar' }
-  | { kind: 'match'; test: RegExp; dotted: boolean };
+ *  directories. As rolldown's `fast-glob` matches them, a wildcard matches a
+ *  dot-led name too; the walk leaves those out instead (`expandGlobs`). */
+type Segment = { kind: 'globstar' } | { kind: 'match'; test: RegExp };
 
 /** A glob Vite expands, resolved against the directory it starts in. */
 interface ResolvedGlob {
@@ -39,11 +38,7 @@ function segmentOf(text: string): Segment | undefined {
     } else if (/[{}]/.test(part)) return undefined;
     else source += escape(part);
   }
-  return {
-    kind: 'match',
-    test: new RegExp(`^${source}$`),
-    dotted: text.startsWith('.'),
-  };
+  return { kind: 'match', test: new RegExp(`^${source}$`) };
 }
 
 function escape(text: string): string {
@@ -52,13 +47,14 @@ function escape(text: string): string {
 
 /**
  * A pattern as Vite resolves it (`toAbsoluteGlob`): relative to the
- * importer's directory, or with `/` to the Vite root. A pattern in another
- * form (an alias, a bare name) or with syntax not read here is undefined.
+ * importer's directory, or with `/` to the Vite root, where it is known. A
+ * pattern in another form (an alias, a bare name, `**` from the root) or
+ * with syntax not read here is undefined.
  */
 function resolveGlob(
   pattern: string,
   importerDir: string,
-  viteRoot: string
+  viteRoot: string | undefined
 ): ResolvedGlob | undefined {
   const negated = pattern.startsWith('!');
   const body = negated ? pattern.slice(1) : pattern;
@@ -90,94 +86,118 @@ function resolveGlob(
   return { negated, base, segments };
 }
 
-/** Whether `names`, a path below a glob's base, matches its segments. A
- *  wildcard never matches a dot-led name unless `dot`. */
+/** Whether `names`, a path below a glob's base, matches its segments. */
 function matches(
   segments: readonly Segment[],
-  names: readonly string[],
-  dot: boolean
+  names: readonly string[]
 ): boolean {
   const [segment, ...rest] = segments;
   if (segment === undefined) return names.length === 0;
   if (segment.kind === 'globstar') {
-    if (matches(rest, names, dot)) return true;
-    const [name, ...more] = names;
-    if (name === undefined || (!dot && name.startsWith('.'))) return false;
-    return matches(segments, more, dot);
+    if (matches(rest, names)) return true;
+    const [, ...more] = names;
+    return names.length > 0 && matches(segments, more);
   }
   const [name, ...more] = names;
   if (name === undefined) return false;
-  if (!dot && name.startsWith('.') && !segment.dotted) return false;
-  return segment.test.test(name) && matches(rest, more, dot);
+  return segment.test.test(name) && matches(rest, more);
 }
 
-/** A file below a glob's base: the names from the base down, its path
- *  through them, and the real path the bundler loads it by. */
-interface WalkedFile {
-  names: string[];
-  path: string;
-  real: string;
-}
-
-/** Every file below `dir`, following symbolic links as Vite does, each
- *  directory once by its real path. A read the walk cannot finish throws:
- *  the expansion would not be every file. */
+/** Every file below `dir`, by its path through the walk, following
+ *  symbolic links as Vite does, each directory once by its real path, and
+ *  no name `pruned` holds. A read the
+ *  walk cannot finish throws: the expansion would not be every file. */
 function walk(
   dir: string,
-  prefix: readonly string[] = [],
+  pruned: (name: string) => boolean,
   visited: ReadonlySet<string> = new Set()
-): WalkedFile[] {
+): string[] {
   const real = realpathSync(dir);
   if (visited.has(real)) return [];
   const inside = new Set(visited).add(real);
-  const files: WalkedFile[] = [];
+  const files: string[] = [];
   for (const name of readdirSync(dir)) {
+    if (pruned(name)) continue;
     const path = `${dir}${sep}${name}`;
-    const names = [...prefix, name];
     const stat = statSync(path);
-    if (stat.isDirectory()) files.push(...walk(path, names, inside));
-    else if (stat.isFile())
-      files.push({ names, path, real: realpathSync(path) });
+    if (stat.isDirectory()) files.push(...walk(path, pruned, inside));
+    else if (stat.isFile()) files.push(path);
   }
   return files;
 }
 
-/** The files a set of Vite globs selects: in any affirmed glob and no
- *  negated one, `node_modules` and dot-led names left out unless
- *  `exhaustive`, the importer itself never. */
+/** The deepest directory every one of `dirs` is in. */
+function commonDirectory(dirs: readonly string[]): string {
+  const [first, ...rest] = dirs.map((dir) => dir.split(sep));
+  let length = first!.length;
+  for (const parts of rest) {
+    let shared = 0;
+    while (
+      shared < Math.min(length, parts.length) &&
+      parts[shared] === first![shared]
+    ) {
+      shared += 1;
+    }
+    length = shared;
+  }
+  return first!.slice(0, length).join(sep) || sep;
+}
+
+/** The files a set of Vite globs selects, as rolldown's import-glob plugin
+ *  walks them: from the deepest directory every affirmed glob's base is
+ *  in, leaving out every dot-led and `node_modules` name below it unless
+ *  `exhaustive`; in any affirmed glob and no negated one; the importer
+ *  itself never. Undefined where that directory is the filesystem root,
+ *  which Vite walks from its own root instead. */
 function expandGlobs(
   globs: readonly ResolvedGlob[],
   importer: string,
   exhaustive: boolean
-): string[] {
+): string[] | undefined {
   const affirmed = globs.filter((glob) => !glob.negated);
   const negated = globs.filter((glob) => glob.negated);
+  const start = commonDirectory(affirmed.map((glob) => glob.base));
+  if (dirname(start) === start) return undefined;
   const inside = (glob: ResolvedGlob, file: string) => {
     const rel = relative(glob.base, file);
     if (isAbsolute(rel) || rel.split(sep)[0] === '..') return false;
-    return matches(glob.segments, rel.split(sep), exhaustive);
+    return matches(glob.segments, rel.split(sep));
   };
+  const pruned = (name: string) =>
+    !exhaustive && (name.startsWith('.') || name === 'node_modules');
   const selected = new Set<string>();
-  for (const glob of affirmed) {
-    for (const { names, path, real } of walk(glob.base)) {
-      if (!exhaustive && names.includes('node_modules')) continue;
-      if (path === importer || !inside(glob, path)) continue;
-      if (negated.some((other) => inside(other, path))) continue;
-      selected.add(real);
-    }
+  for (const path of walk(start, pruned)) {
+    if (path === importer || !affirmed.some((glob) => inside(glob, path)))
+      continue;
+    if (negated.some((glob) => inside(glob, path))) continue;
+    // By the real path the bundler loads it by.
+    selected.add(realpathSync(path));
   }
   return [...selected].sort();
 }
 
-/** The queries a glob's `query` option is read as: Vite's opaque ones,
- *  with or without the `?` it adds. */
-const GLOB_QUERIES = new Map<StaticValue | undefined, string>([
-  [undefined, ''],
-  ['raw', '?raw'],
-  ['?raw', '?raw'],
-  ['url', '?url'],
-  ['?url', '?url'],
-]);
+/** The query a glob's `query` option imports each file with, as rolldown
+ *  writes it: a string, with the `?` it adds; an object of string, boolean
+ *  and null values as `?key=value&…`. Undefined for any other value. */
+function globQuery(query: StaticValue | undefined): string | undefined {
+  if (query === undefined) return '';
+  // A string is the one value its own text spells.
+  if (String(query) === query) {
+    return query.startsWith('?') ? query : `?${query}`;
+  }
+  if (!(query instanceof Object) || Array.isArray(query)) return undefined;
+  const pairs: string[] = [];
+  for (const [key, value] of Object.entries(query)) {
+    const written =
+      value === null ||
+      value === true ||
+      value === false ||
+      String(value) === value;
+    if (!written) return undefined;
+    pairs.push(`${key}=${String(value)}`);
+  }
+  return pairs.length === 0 ? '' : `?${pairs.join('&')}`;
+}
 
 /** The boolean an option is written as; absent, `false`. */
 const GLOB_FLAGS = new Map<StaticValue | undefined, boolean>([
@@ -187,10 +207,11 @@ const GLOB_FLAGS = new Map<StaticValue | undefined, boolean>([
 ]);
 
 /** A glob's options as Vite reads them (`parseGlobOptions`): the query each
- *  file is imported with and whether the glob is exhaustive. `import`
- *  selects an export, not files. Undefined for an option set not
- *  reproduced here: another query, `base`, `caseSensitive`, or the
- *  deprecated `as`, which a Vite 8 build does not apply as a query. */
+ *  file is imported with and whether the glob is exhaustive. `eager` and
+ *  `import` choose how, not which files. Undefined for an option set not
+ *  reproduced here: a query of another form, `base`, `caseSensitive`, the
+ *  deprecated `as`, which a Vite 8 build does not apply as a query, or any
+ *  other key. */
 function globOptions(
   options: { [key: string]: StaticValue } | null
 ): { query: string; exhaustive: boolean } | undefined {
@@ -200,10 +221,9 @@ function globOptions(
       return undefined;
     }
   }
-  const query = GLOB_QUERIES.get(options.query);
+  const query = globQuery(options.query);
   const exhaustive = GLOB_FLAGS.get(options.exhaustive);
   if (query === undefined || exhaustive === undefined) return undefined;
-  if (!GLOB_FLAGS.has(options.eager)) return undefined;
   return { query, exhaustive };
 }
 
@@ -228,13 +248,15 @@ function importVarsGlob(quasis: readonly string[]): string | undefined {
 /**
  * How a bundled Vite environment (Vite 8, rolldown's native glob and
  * dynamic-import-vars plugins) expands computed loads (spec §6.3):
- * `import.meta.glob` and a variable `import()`. `importVars` is false where
- * the project's `build.dynamicImportVarsOptions` differ from Vite's
- * default, which transforms every importer outside `node_modules`.
- * Anything this does not reproduce exactly lists no expansion.
+ * `import.meta.glob` and a variable `import()`. `viteRoot` is undefined
+ * where the root is not known, which leaves a glob from it unexpanded.
+ * `importVars` is false where the project's `build.dynamicImportVarsOptions`
+ * differ from Vite's default, which transforms every importer outside
+ * `node_modules`. Anything this does not reproduce exactly lists no
+ * expansion.
  */
 export function viteLoadExpander(
-  viteRoot: string,
+  viteRoot: string | undefined,
   importVars: boolean
 ): HostLoadExpander {
   return {
@@ -272,7 +294,7 @@ export function viteLoadExpander(
         globs.push(glob);
       }
       if (!globs.some((glob) => !glob.negated)) return undefined;
-      let files: string[];
+      let files: string[] | undefined;
       let realRoot: string;
       try {
         files = expandGlobs(globs, importer, exhaustive);
@@ -281,6 +303,7 @@ export function viteLoadExpander(
         // An unreadable directory, or a link that cannot be followed.
         return undefined;
       }
+      if (files === undefined) return undefined;
       // Each file by the real path the bundler loads it by.
       return files.map((file) => ({
         path: relative(realRoot, file).split(sep).join(posix.sep),
