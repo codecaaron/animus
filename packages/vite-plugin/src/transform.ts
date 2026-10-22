@@ -70,11 +70,7 @@ export async function transformSource(
 
   // External DS packages bypass the extension and node_modules filters:
   // published dists ship .mjs files with builder chains intact.
-  const isExternalPkg = ctx.externalPackageDirs.some((dir) =>
-    isPathWithinRoot(dir, id)
-  );
-
-  const relativePath = relative(ctx.rootDir, id);
+  const isExternalPkg = ctx.inKitSource(id);
 
   if (!isExternalPkg) {
     // The shared extension predicate is the one owner: a driver-private
@@ -85,6 +81,9 @@ export async function transformSource(
     // `node_modules` segment for the filter above to catch.
     if (!isPathWithinRoot(ctx.rootDir, id)) return null;
   }
+
+  // Past the rejections: most modules a build hands over are none of ours.
+  const relativePath = relative(ctx.rootDir, id);
 
   // Aborted bytes go to the host's own parser: the retained engine would
   // serve the previous module and hide the syntax error.
