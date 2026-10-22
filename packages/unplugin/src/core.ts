@@ -478,6 +478,7 @@ interface WebpackLikeCompiler {
         modules: ReadonlyArray<string | readonly string[]>;
         fullySpecified?: boolean;
         enforceExtension?: boolean;
+        symlinks?: boolean;
         alias?: ReadonlyArray<{ name: string }>;
         fallback?: ReadonlyArray<{ name: string }>;
       };
@@ -1379,6 +1380,11 @@ export const unpluginFactory: UnpluginFactory<
                     (entry) => entry.name
                   )
                 ),
+                // enhanced-resolve follows links unless told not to.
+                symlinks:
+                  (read.symlinks !== false) === (context.symlinks !== false)
+                    ? read.symlinks !== false
+                    : undefined,
               };
             },
             // Read for every expansion: a plugin can add a rule later.

@@ -147,12 +147,15 @@ function commonDirectory(dirs: readonly string[]): string {
  *  walks them: from the deepest directory every affirmed glob's base is
  *  in, leaving out every dot-led and `node_modules` name below it unless
  *  `exhaustive`; in any affirmed glob and no negated one; the importer
- *  itself never. Undefined where that directory is the filesystem root,
- *  which Vite walks from its own root instead. */
+ *  itself never. Each is named by the real path the resolver loads it by,
+ *  or with `preserveSymlinks` by its path through the walk, links kept, as
+ *  Vite then loads it. Undefined where that directory is the filesystem
+ *  root, which Vite walks from its own root instead. */
 function expandGlobs(
   globs: readonly ResolvedGlob[],
   importer: string,
-  exhaustive: boolean
+  exhaustive: boolean,
+  preserveSymlinks: boolean
 ): string[] | undefined {
   const affirmed = globs.filter((glob) => !glob.negated);
   const negated = globs.filter((glob) => glob.negated);
@@ -170,8 +173,7 @@ function expandGlobs(
     if (path === importer || !affirmed.some((glob) => inside(glob, path)))
       continue;
     if (negated.some((glob) => inside(glob, path))) continue;
-    // By the real path the bundler loads it by.
-    selected.add(realpathSync(path));
+    selected.add(preserveSymlinks ? path : realpathSync(path));
   }
   return [...selected].sort();
 }
@@ -252,12 +254,14 @@ function importVarsGlob(quasis: readonly string[]): string | undefined {
  * where the root is not known, which leaves a glob from it unexpanded.
  * `importVars` is false where the project's `build.dynamicImportVarsOptions`
  * differ from Vite's default, which transforms every importer outside
- * `node_modules`. Anything this does not reproduce exactly lists no
- * expansion.
+ * `node_modules`. `preserveSymlinks` is the resolver's own: a linked file
+ * is then loaded by its link path, and resolves its imports beside the
+ * link. Anything this does not reproduce exactly lists no expansion.
  */
 export function viteLoadExpander(
   viteRoot: string | undefined,
-  importVars: boolean
+  importVars: boolean,
+  preserveSymlinks = false
 ): HostLoadExpander {
   return {
     expand(load: ListedLoad, rootDir: string): ExpandedPath[] | undefined {
@@ -295,18 +299,18 @@ export function viteLoadExpander(
       }
       if (!globs.some((glob) => !glob.negated)) return undefined;
       let files: string[] | undefined;
-      let realRoot: string;
+      let base: string;
       try {
-        files = expandGlobs(globs, importer, exhaustive);
-        realRoot = realpathSync(rootDir);
+        files = expandGlobs(globs, importer, exhaustive, preserveSymlinks);
+        // A walked path runs through the root as the importer is named.
+        base = preserveSymlinks ? rootDir : realpathSync(rootDir);
       } catch {
         // An unreadable directory, or a link that cannot be followed.
         return undefined;
       }
       if (files === undefined) return undefined;
-      // Each file by the real path the bundler loads it by.
       return files.map((file) => ({
-        path: relative(realRoot, file).split(sep).join(posix.sep),
+        path: relative(base, file).split(sep).join(posix.sep),
         query,
       }));
     },
@@ -321,6 +325,7 @@ interface ViteAlias {
 /** One resolved Vite environment, as the expander reads it. */
 interface ViteEnvironmentReading {
   isBundled?: boolean;
+  resolve?: { preserveSymlinks?: boolean };
   build?: {
     dynamicImportVarsOptions?: { include?: unknown; exclude?: unknown };
   };
@@ -363,20 +368,30 @@ function aliasesRelative(aliases: readonly ViteAlias[] | undefined): boolean {
 /**
  * The expander for a resolved Vite configuration: only where every
  * environment is bundled (Vite 8, rolldown's native plugins; an earlier
- * Vite marks none), and no alias could rewrite a relative or root
- * specifier. A variable `import()` is expanded only where every environment
- * keeps Vite's default dynamic-import-vars options.
+ * Vite marks none), no alias could rewrite a relative or root specifier,
+ * and every environment resolves links alike (`resolve.preserveSymlinks`).
+ * A variable `import()` is expanded only where every environment keeps
+ * Vite's default dynamic-import-vars options.
  */
 export function viteHostExpander(config: {
   root: string;
-  resolve?: { alias?: readonly ViteAlias[] };
+  resolve?: { alias?: readonly ViteAlias[]; preserveSymlinks?: boolean };
   environments?: Record<string, ViteEnvironmentReading>;
 }): HostLoadExpander | undefined {
   const environments = Object.values(config.environments ?? {});
+  const preserved = new Set(
+    environments.map(
+      (environment) =>
+        environment.resolve?.preserveSymlinks ??
+        config.resolve?.preserveSymlinks ??
+        false
+    )
+  );
   if (
     environments.length === 0 ||
     !environments.every((environment) => environment.isBundled === true) ||
-    aliasesRelative(config.resolve?.alias)
+    aliasesRelative(config.resolve?.alias) ||
+    preserved.size !== 1
   ) {
     return undefined;
   }
@@ -384,6 +399,7 @@ export function viteHostExpander(config: {
     config.root,
     environments.every((environment) =>
       defaultImportVars(environment.build?.dynamicImportVarsOptions)
-    )
+    ),
+    preserved.has(true)
   );
 }

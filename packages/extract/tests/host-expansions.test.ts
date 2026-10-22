@@ -225,6 +225,18 @@ describe('viteLoadExpander', () => {
         relativeAlias: undefined,
         regExpAlias: undefined,
       });
+      // Environments that resolve links differently load a globbed link by
+      // different paths: no one expansion is exact.
+      expect(
+        viteHostExpander({
+          root,
+          resolve: { alias: [] },
+          environments: {
+            client: bundled,
+            ssr: { ...bundled, resolve: { preserveSymlinks: true } },
+          },
+        })
+      ).toBeUndefined();
     } finally {
       chmodSync(join(root, 'locked'), 0o755);
       rmSync(root, { recursive: true, force: true });
@@ -260,6 +272,7 @@ describe('webpackLoadExpander', () => {
       fullySpecified: false,
       enforceExtension: false,
       aliasNames,
+      symlinks: true,
     });
     const expandWith = (
       expander: ReturnType<typeof webpackLoadExpander> | undefined,
@@ -344,6 +357,35 @@ describe('webpackLoadExpander', () => {
         selected: undefined,
         twoHoles: undefined,
         sticky: undefined,
+      });
+      // \`resolve.symlinks\` decides which path a linked file loads by, and
+      // so where its own imports resolve: the real file, or the link (what
+      // webpack 5.105.4 loaded, \`symlinks\` on and off).
+      mkdirSync(join(root, 'src/real'), { recursive: true });
+      writeFileSync(join(root, 'src/real/r.js'), 'export default 1;\n');
+      mkdirSync(join(root, 'src/linked'));
+      symlinkSync('../real/r.js', join(root, 'src/linked/r.js'));
+      const linked = (symlinks: boolean | undefined) =>
+        expandWith(
+          webpackLoadExpander(() => ({ ...reading(), symlinks }), true),
+          'context',
+          {
+            dir: './linked',
+            recursive: null,
+            regExp: null,
+            include: null,
+            exclude: null,
+            mode: null,
+          }
+        );
+      expect({
+        followed: linked(true),
+        kept: linked(false),
+        resolversDiffer: linked(undefined),
+      }).toEqual({
+        followed: ['src/real/r.js'],
+        kept: ['src/linked/r.js'],
+        resolversDiffer: undefined,
       });
       // What the expander does not read gives no record: a resolver alias
       // that could redirect a relative or absolute request, a rule with its

@@ -21,6 +21,11 @@ export interface WebpackResolveReading {
    *  normal and the context resolver: any one could redirect a context or
    *  one of its requests, so any one leaves the load unexpanded. */
   aliasNames: readonly string[];
+  /** `resolve.symlinks`, where the normal and the context resolver agree:
+   *  true resolves a linked file to its real path, false keeps the link
+   *  path, from which its own imports then resolve. Undefined where they
+   *  differ, which leaves the load unexpanded. */
+  symlinks: boolean | undefined;
 }
 
 /** One context webpack builds for a load (`ContextModuleFactory`). */
@@ -232,9 +237,10 @@ function contextFiles(
       ) {
         const request = `.${path.slice(context.dir.length).replace(/\\/g, '/')}`;
         const requests = alternatives(context.dir, request, reading);
-        // The resolver follows the link: the module is the real file.
+        // With \`symlinks\`, the resolver follows the link: the module is the
+        // real file; without, the link path.
         if (requests.some((alternative) => context.regExp.test(alternative))) {
-          files.push(realpathSync(path));
+          files.push(reading.symlinks ? realpathSync(path) : path);
         }
       }
     }
@@ -271,20 +277,25 @@ export function webpackLoadExpander(
       }
       if (context === undefined) return undefined;
       const reading = resolveReading(context.category);
-      if (reading === undefined || reading.aliasNames.length > 0) {
+      if (
+        reading === undefined ||
+        reading.aliasNames.length > 0 ||
+        reading.symlinks === undefined
+      ) {
         return undefined;
       }
       let files: string[];
-      let realRoot: string;
+      let base: string;
       try {
         files = contextFiles(context, reading);
-        realRoot = realpathSync(rootDir);
+        // A link path runs through the root as the importer is named.
+        base = reading.symlinks ? realpathSync(rootDir) : rootDir;
       } catch {
         // An unreadable directory, or a link that cannot be followed.
         return undefined;
       }
       return files.map((file) => ({
-        path: relative(realRoot, file).split(sep).join(posix.sep),
+        path: relative(base, file).split(sep).join(posix.sep),
         query: context.query,
       }));
     },

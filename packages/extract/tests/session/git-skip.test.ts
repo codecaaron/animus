@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { mkdirSync, realpathSync, writeFileSync } from 'fs';
+import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'fs';
 import { dirname, join, posix } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -23,6 +23,7 @@ setEngineApiOverride(() => ({
   moduleSpecifiers: mocks.moduleSpecifiers,
 }));
 
+import { viteHostExpander } from '../../pipeline/vite-expansions';
 import {
   buildManifest,
   createProject,
@@ -54,14 +55,20 @@ beforeEach(() => {
         posix.join(posix.dirname(path), match[1])
       )
     );
-    // Each `import.meta.glob` call, listed as the computed load it is.
+    // Each `import.meta.glob` call, listed as the computed load it is,
+    // with its pattern where it is one string alone.
     const loads = files.flatMap(({ path, source }) =>
-      [...source.matchAll(/import\.meta\.glob\(/g)].map((match) => ({
-        importer: path,
-        start: match.index ?? 0,
-        kind: 'glob' as const,
-        args: null,
-      }))
+      [...source.matchAll(/import\.meta\.glob\((?:'([^']*)'\))?/g)].map(
+        (match) => ({
+          importer: path,
+          start: match.index ?? 0,
+          kind: 'glob' as const,
+          args:
+            match[1] === undefined
+              ? null
+              : { patterns: [match[1]], options: null },
+        })
+      )
     );
     // `probeEvidence`, the last of `AnalyzeProjectArgs`.
     args[25]?.(bases, 'identity', loads);
@@ -258,6 +265,31 @@ describe('an ignored, never-imported file is not analysed; an ignored, imported 
     const session = makeSession(root);
     await session.runFullPipeline();
     expect(analysed()).toContain('gen/Widget.tsx');
+    session.close();
+  });
+
+  // Contract: under \`resolve.preserveSymlinks\`, Vite loads a globbed link
+  // by its link path and resolves the link's imports beside it, so a file
+  // git ignores there is analysed when the link imports it.
+  test('a globbed link under preserveSymlinks keeps its link-side imports analysed', async () => {
+    const root = gitProject({
+      '.gitignore': 'src/links/\n',
+      'src/main.ts': "export const all = import.meta.glob('./links/a.ts');\n",
+      'src/ignored/a.ts': "export { tag } from './child';\n",
+      'src/ignored/child.ts': "export const tag = 'real-directory';\n",
+      'src/links/child.ts': "export const tag = 'link-directory';\n",
+    });
+    symlinkSync('../ignored/a.ts', join(root, 'src/links/a.ts'));
+    const session = makeSession(root);
+    session.loadExpander = viteHostExpander({
+      root,
+      resolve: { alias: [], preserveSymlinks: true },
+      environments: { client: { isBundled: true } },
+    });
+    await session.runFullPipeline();
+    expect(analysed()).toEqual(
+      expect.arrayContaining(['src/links/a.ts', 'src/links/child.ts'])
+    );
     session.close();
   });
 
