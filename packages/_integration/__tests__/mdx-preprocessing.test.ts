@@ -139,6 +139,16 @@ describe('mdxUsageSource', () => {
       "> text\n>\nimport R from './r';\n\n<R />\n",
       [3],
     ],
+    [
+      'a tab-indented closer ends a list item fence before a column-1 import',
+      "- ```js\n\t```\nimport R from './r';\n\n<R />\n",
+      [3],
+    ],
+    [
+      'a closer under the list ends a list-and-quote fence before a column-1 import',
+      "- > ```js\n  ```\nimport R from './r';\n\n<R />\n",
+      [3],
+    ],
   ])('%s', (_rule, source, rows) => {
     expect(esmRows(source).rows).toEqual(rows);
   });

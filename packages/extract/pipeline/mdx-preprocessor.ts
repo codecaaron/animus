@@ -88,159 +88,63 @@ const MARKDOWN_ELEMENTS: ReadonlyArray<[string, RegExp]> = [
   ['del', /~~/],
 ];
 
-const FENCE = block('(`{3,}|~{3,})', '');
-/** A line that opens an ESM block: `import` or `export` and a space at its
- *  first column. */
-const ESM = /^(?:import|export) /;
-/** The lines after which a paragraph is closed: blank, blank but for its
- *  quote markers, an ATX heading, a thematic break. */
-const CLOSES_PARAGRAPH = new RegExp(
-  `^\\s*$|^[ \\t]*(?:(?:[-*+]|\\d{1,9}[.)])[ \\t]+|>[ \\t]*)*>\\s*$|^${CONTAINER}#{1,6}(?:\\s|$)|^${CONTAINER}([-*_])(?: *\\1){2,}\\s*$`
-);
-const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)\s*$/;
-const CONTAINER_PREFIX = new RegExp(`^${CONTAINER}`);
-/** The statements an ESM block may hold. */
-const ESM_STATEMENTS = new Set([
-  'ExportAllDeclaration',
-  'ExportDefaultDeclaration',
-  'ExportNamedDeclaration',
-  'ImportDeclaration',
-]);
+type MdxTokenizer = (
+  source: string
+) => ReturnType<typeof import('micromark').postprocess>;
+let mdxTokenizer: MdxTokenizer | undefined;
 
-type EsmParser = typeof import('acorn').Parser;
-let esmParser: EsmParser | undefined;
-
-/** acorn with JSX, the parser @mdx-js reads ESM with, loaded at the first
- *  ESM block: a project without one loads neither package. */
-function parserForEsm(): EsmParser {
-  if (esmParser === undefined) {
-    // SAFETY: acorn's own CommonJS entry, which its bundled declarations
+/** micromark with @mdx-js's syntax extensions, the tokenizer @mdx-js parses
+ *  MDX with, loaded at the first MDX file: a project without one loads
+ *  none of it. */
+function tokenizerForMdx(): MdxTokenizer {
+  if (mdxTokenizer === undefined) {
+    // SAFETY: micromark's own entry, which its bundled declarations
     // describe.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { Parser } = require('acorn') as typeof import('acorn');
-    // SAFETY: acorn-jsx's own CommonJS entry, which its bundled
+    const micromark = require('micromark') as typeof import('micromark');
+    // SAFETY: micromark-extension-mdxjs's own entry, which its bundled
     // declarations describe.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const jsx = require('acorn-jsx') as typeof import('acorn-jsx');
-    esmParser = Parser.extend(jsx());
-  }
-  return esmParser;
-}
-
-/**
- * The last row of the ESM block opening at row `start`, as
- * micromark-extension-mdxjs-esm ends it: at the first blank line, or the
- * end, where the code so far parses. Code acorn stops at its very end (an
- * open bracket, template literal or comment, a statement left unfinished)
- * continues across the blank line; code that fails anywhere else, or
- * holds a statement other than an import or export, is MDX's error.
- * `imported` holds the names earlier blocks import, which MDX declares
- * before each block, and takes this block's.
- */
-function esmBlockEnd(
-  lines: readonly string[],
-  start: number,
-  imported: string[],
-  filename: string
-): number {
-  const prefix = imported.length > 0 ? `var ${imported.join(',')}\n` : '';
-  let end = start;
-  for (;;) {
-    while (end + 1 < lines.length && lines[end + 1]!.trim() !== '') end++;
-    const code = lines.slice(start, end + 1).join('\n');
-    let program: import('acorn').Program;
-    try {
-      program = parserForEsm().parse(prefix + code, {
-        ecmaVersion: 2024,
-        sourceType: 'module',
-        preserveParens: true,
-      });
-    } catch (error) {
-      // SAFETY: acorn raises a SyntaxError carrying where it stopped.
-      const { message, raisedAt } = error as SyntaxError & { raisedAt: number };
-      const reason = message.replace(/ \(\d+:\d+\)$/, '');
-      const incomplete =
-        raisedAt >= prefix.length + code.length ||
-        reason === 'Unterminated comment';
-      if (incomplete && end + 1 < lines.length) {
-        end += 1;
-        continue;
-      }
-      throw new MdxSyntaxError(
-        `could not parse the import/export block at line ${start + 1} of ${filename}: ${reason}`
+    const { mdxjs } =
+      require('micromark-extension-mdxjs') as typeof import('micromark-extension-mdxjs');
+    const extensions = [mdxjs({ addResult: false })];
+    mdxTokenizer = (source) =>
+      micromark.postprocess(
+        micromark
+          .parse({ extensions })
+          .document()
+          .write(micromark.preprocess()(source, undefined, true))
       );
-    }
-    for (const node of program.body.slice(prefix === '' ? 0 : 1)) {
-      if (!ESM_STATEMENTS.has(node.type)) {
-        throw new MdxSyntaxError(
-          `unexpected ${node.type} in the import/export block at line ${start + 1} of ${filename}: only imports and exports are supported`
-        );
-      }
-      if (node.type === 'ImportDeclaration') {
-        imported.push(...node.specifiers.map(({ local }) => local.name));
-      }
-    }
-    return end;
   }
+  return mdxTokenizer;
 }
 
-/**
- * The last row of the JSX flow line at `row`: content of nothing but tags
- * and `{expressions}` after its list and quote markers, possibly spanning
- * lines, which interrupts and closes a paragraph as a block does.
- * Undefined for any other line, and for one whose tag or expression does
- * not close, which the inline scan reports.
- */
-function flowLineEnd(
-  source: string,
-  lines: readonly string[],
-  rowStarts: readonly number[],
-  row: number
-): number | undefined {
-  let at = rowStarts[row]! + CONTAINER_PREFIX.exec(lines[row]!)![0].length;
-  let consumed = false;
+/** The rows of each ESM block and each fenced code block in `source`, as
+ *  @mdx-js reads them. MDX it rejects is an error. */
+function flowBlocks(source: string, filename: string) {
+  let events: ReturnType<MdxTokenizer>;
   try {
-    for (;;) {
-      while (source[at] === ' ' || source[at] === '\t') at += 1;
-      if (at >= source.length || source[at] === '\n' || source[at] === '\r')
-        break;
-      if (source[at] === '{') at = expressionEnd(source, at);
-      else if (source[at] === '<' && TAG_START.test(source[at + 1] ?? '')) {
-        at = tagAt(source, at).end;
-      } else return undefined;
-      consumed = true;
-    }
+    events = tokenizerForMdx()(source);
   } catch (err) {
-    if (err instanceof MdxSyntaxError) return undefined;
-    throw err;
-  }
-  return consumed ? rowAt(rowStarts, at, row) : undefined;
-}
-
-/** Whether a line continues the list items and quotes of `prefix`, the
- *  containers a block opens in: each quote by its marker, each list item by
- *  its content's indent, or blank. */
-function containedBy(prefix: string): (line: string) => boolean {
-  const containers = [
-    ...prefix.matchAll(/[ \t]*(?:(>)|[-*+]|\d{1,9}[.)])[ \t]+/g),
-  ].map(([text, quote]) => (quote ? undefined : text.length));
-  return (line) => {
-    let rest = line;
-    for (const indent of containers) {
-      if (indent === undefined) {
-        const marker = /^[ \t]{0,3}>[ \t]?/.exec(rest);
-        if (marker === null) return false;
-        rest = rest.slice(marker[0].length);
-      } else if (rest.trim() === '') {
-        return true;
-      } else if (rest.startsWith(' '.repeat(indent))) {
-        rest = rest.slice(indent);
-      } else {
-        return false;
-      }
+    // micromark rejects MDX with a `VFileMessage`, which names its rule
+    // and place.
+    if (!(err instanceof Error) || !('ruleId' in err && 'place' in err)) {
+      throw err;
     }
-    return true;
-  };
+    throw new MdxSyntaxError(`could not read ${filename}: ${err.message}`);
+  }
+  const esm: Array<[first: number, last: number]> = [];
+  const code: Array<[first: number, last: number]> = [];
+  for (const [kind, token] of events) {
+    // The MDX extensions' token types are not in micromark's own map.
+    const type: string = token.type;
+    const rows =
+      type === 'mdxjsEsm' ? esm : type === 'codeFenced' ? code : undefined;
+    if (kind === 'enter' && rows !== undefined) {
+      rows.push([token.start.line - 1, token.end.line - 1]);
+    }
+  }
+  return { esm, code };
 }
 
 /** The row holding offset `at`, from row `from` on. */
@@ -512,50 +416,26 @@ function mdxToTsx(input: string, filename: string) {
     at += lines[row]!.length + 1;
   }
   // Block pass: fences and ESM stay out of the inline scan; every other
-  // line joins one stream, as JSX can span blocks. An ESM block opens
-  // wherever no paragraph is, which it cannot interrupt.
-  const blocks: Array<[first: number, last: number]> = [];
-  const imported: string[] = [];
-  let paragraph = false;
-  while (line < lines.length) {
-    const current = lines[line]!;
-    const fence = FENCE.exec(current);
-    if (fence) {
-      const marker = fence[1]!;
-      // Closed at any indent, as one inside a list item or a quote is, and
-      // ended with the list item or quote it is in.
-      const close = new RegExp(
-        `^(?:[ \\t]*>)*[ \\t]*${marker[0]}{${marker.length},}\\s*$`
-      );
-      const inside = containedBy(CONTAINER_PREFIX.exec(current)![0]);
-      // A fence renders `pre` and `code`, whichever marker opens it.
-      markdown[line] = '```';
-      line += 1;
-      while (
-        line < lines.length &&
-        inside(lines[line]!) &&
-        !close.test(lines[line]!)
-      ) {
-        line += 1;
-      }
-      if (line < lines.length && inside(lines[line]!)) line += 1;
-      paragraph = false;
-    } else if (!paragraph && ESM.test(current)) {
-      const last = esmBlockEnd(lines, line, imported, filename);
-      blocks.push([line, last]);
-      for (; line <= last; line++) {
-        esm[line] = true;
-        out[line] = lines[line]!;
-      }
-    } else {
-      const flowEnd = flowLineEnd(source, lines, rowStarts, line);
-      const last = flowEnd ?? line;
-      for (; line <= last; line++) inline[line] = true;
-      paragraph =
-        flowEnd === undefined &&
-        !CLOSES_PARAGRAPH.test(current) &&
-        !(paragraph && SETEXT_UNDERLINE.test(current));
+  // line joins one stream, as JSX can span blocks.
+  const body = lines
+    .map((text, row) => (row < line ? blank(text) : text))
+    .join('\n');
+  const flow = flowBlocks(body, filename);
+  const fenced = lines.map(() => false);
+  for (const [first, last] of flow.code) {
+    // A fence renders `pre` and `code`, whichever marker opens it.
+    markdown[first] = '```';
+    for (let row = first; row <= last; row++) fenced[row] = true;
+  }
+  const blocks = flow.esm;
+  for (const [first, last] of blocks) {
+    for (let row = first; row <= last; row++) {
+      esm[row] = true;
+      out[row] = lines[row]!;
     }
+  }
+  for (; line < lines.length; line++) {
+    inline[line] = !esm[line] && !fenced[line];
   }
 
   // One inline scan over the whole file, every other line blanked: an
