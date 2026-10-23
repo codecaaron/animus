@@ -436,6 +436,310 @@ function eachRule(css: string, visit: (rule: Rule) => [] | void): void {
   });
 }
 
+/** A rule of a sheet as `visitedForm` reads it: a statement (`@import …;`),
+ *  a grouping rule whose rules it reads in turn, or any other rule, taken
+ *  whole with what it nests. */
+interface SheetRule {
+  start: number;
+  end: number;
+  kind: 'statement' | 'group' | 'rule';
+  rules: SheetRule[];
+}
+
+/** The at-rules that only group rules, whose rules `visitedForm` reads one
+ *  by one. */
+const GROUPING = new Set(['media', 'supports', 'container', 'layer']);
+
+const CLOSER = { '(': ')', '[': ']', '{': '}' } as const;
+
+const isNewline = (c: string | undefined) =>
+  c === '\n' || c === '\r' || c === '\f';
+
+const isWhitespace = (c: string | undefined) =>
+  c === ' ' || c === '\t' || isNewline(c);
+
+const isHex = (c: string | undefined) =>
+  c !== undefined && /^[0-9a-fA-F]$/.test(c);
+
+/** Whether `code` is a CSS name code point: a letter, digit, `_`, `-` or
+ *  any non-ASCII. */
+function isNameCode(code: number): boolean {
+  return (
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x30 && code <= 0x39) ||
+    code === 0x5f ||
+    code === 0x2d ||
+    code >= 0x80
+  );
+}
+
+/** The index past the escape whose `\` is at `at`, and the code point it
+ *  stands for (CSS Syntax §4.3.7); null where `\` starts no escape. */
+function cssEscape(
+  css: string,
+  at: number
+): { end: number; value: string } | null {
+  const next = css[at + 1];
+  if (next === undefined || isNewline(next)) return null;
+  if (!isHex(next)) {
+    const code = css.codePointAt(at + 1)!;
+    return { end: at + 1 + (code > 0xffff ? 2 : 1), value: next };
+  }
+  let i = at + 1;
+  while (i < at + 7 && isHex(css[i])) i++;
+  const code = parseInt(css.slice(at + 1, i), 16);
+  const value =
+    code === 0 || (code >= 0xd800 && code <= 0xdfff) || code > 0x10ffff
+      ? '�'
+      : String.fromCodePoint(code);
+  if (css[i] === '\r' && css[i + 1] === '\n') return { end: i + 2, value };
+  return { end: isWhitespace(css[i]) ? i + 1 : i, value };
+}
+
+/**
+ * The index past the token at `at` where it is one whose text holds no
+ * rule structure: a comment, a string, a name with its escapes, or an
+ * unquoted `url()` (CSS Syntax §4.3), `at + 1` for any other character,
+ * and -1 where the text is one no exact reading of rule boundaries
+ * survives: an unclosed comment, a bad string or url, a `\` that escapes
+ * nothing. A name `url` before a quoted argument ends before its `(`, which
+ * opens a block as any other `(` does.
+ */
+function tokenEnd(css: string, at: number): number {
+  const c = css[at]!;
+  if (c === '/' && css[at + 1] === '*') {
+    const close = css.indexOf('*/', at + 2);
+    return close < 0 ? -1 : close + 2;
+  }
+  if (c === '"' || c === "'") {
+    for (let i = at + 1; i < css.length;) {
+      const d = css[i];
+      if (d === c) return i + 1;
+      if (isNewline(d)) return -1;
+      if (d !== '\\') i++;
+      else if (css[i + 1] === undefined) return -1;
+      else i += css[i + 1] === '\r' && css[i + 2] === '\n' ? 3 : 2;
+    }
+    return -1;
+  }
+  if (c !== '\\' && !isNameCode(css.charCodeAt(at))) return at + 1;
+  let i = at;
+  let value = '';
+  while (i < css.length) {
+    if (css[i] === '\\') {
+      const escape = cssEscape(css, i);
+      if (escape === null) break;
+      if (value.length <= 3) value += escape.value;
+      i = escape.end;
+    } else if (isNameCode(css.charCodeAt(i))) {
+      if (value.length <= 3) value += css[i];
+      i++;
+    } else break;
+  }
+  if (i === at) return -1;
+  // After `@` or `#` the name is an at-rule's or a hash, never `url`.
+  const ident = css[at - 1] !== '@' && css[at - 1] !== '#';
+  if (!ident || value.toLowerCase() !== 'url' || css[i] !== '(') return i;
+  let j = i + 1;
+  while (isWhitespace(css[j])) j++;
+  if (css[j] === '"' || css[j] === "'") return i;
+  while (j < css.length) {
+    const d = css[j]!;
+    if (d === ')') return j + 1;
+    if (isWhitespace(d)) {
+      while (isWhitespace(css[j])) j++;
+      return css[j] === ')' ? j + 1 : -1;
+    }
+    if (d === '\\') {
+      const escape = cssEscape(css, j);
+      if (escape === null) return -1;
+      j = escape.end;
+      continue;
+    }
+    const code = css.charCodeAt(j);
+    const nonPrintable =
+      code <= 0x08 ||
+      code === 0x0b ||
+      (code >= 0x0e && code <= 0x1f) ||
+      code === 0x7f;
+    if (d === '"' || d === "'" || d === '(' || nonPrintable) return -1;
+    j++;
+  }
+  return -1;
+}
+
+/** The index past the token at `at` inside a rule, `open` holding the
+ *  closers of the blocks it sits in: a bracket opens or closes one, and
+ *  any other token is read whole (`tokenEnd`). -1 where a closer is not
+ *  the one its block asks. */
+function blockStep(css: string, at: number, open: string[]): number {
+  const c = css[at];
+  if (c === '(' || c === '[' || c === '{') {
+    open.push(CLOSER[c]);
+    return at + 1;
+  }
+  if (c === ')' || c === ']' || c === '}') {
+    return open.pop() === c ? at + 1 : -1;
+  }
+  return tokenEnd(css, at);
+}
+
+/**
+ * The rules of `css` from `from`, up to the `}` that closes the grouping
+ * rule they sit in (`nested`) or the end of the sheet, and where they
+ * end; null where a block does not close as its opener asks, a rule ends
+ * without a block, or `tokenEnd` finds no exact reading.
+ */
+function sheetRules(
+  css: string,
+  from: number,
+  nested: boolean
+): { rules: SheetRule[]; end: number } | null {
+  const rules: SheetRule[] = [];
+  let i = from;
+  for (;;) {
+    while (i < css.length) {
+      if (isWhitespace(css[i])) i++;
+      else if (css[i] === '/' && css[i + 1] === '*') {
+        i = tokenEnd(css, i);
+        if (i < 0) return null;
+      } else break;
+    }
+    if (i >= css.length) return nested ? null : { rules, end: i };
+    if (css[i] === '}') return nested ? { rules, end: i } : null;
+    const start = i;
+    const name =
+      css[i] === '@'
+        ? (/@([\w-]+)/y.exec(css.slice(i, i + 64))?.[1] ?? '')
+        : null;
+    const open: string[] = [];
+    let statement = false;
+    for (;;) {
+      const c = css[i];
+      if (c === undefined) return null;
+      if (open.length === 0 && c === '{') break;
+      if (open.length === 0 && c === ';') {
+        if (name === null) return null;
+        statement = true;
+        i++;
+        break;
+      }
+      i = blockStep(css, i, open);
+      if (i < 0) return null;
+    }
+    if (statement) {
+      rules.push({ start, end: i, kind: 'statement', rules: [] });
+      continue;
+    }
+    if (name !== null && GROUPING.has(name.toLowerCase())) {
+      const inner = sheetRules(css, i + 1, true);
+      if (inner === null) return null;
+      i = inner.end + 1;
+      rules.push({ start, end: i, kind: 'group', rules: inner.rules });
+      continue;
+    }
+    open.push('}');
+    i++;
+    while (open.length > 0) {
+      if (i >= css.length) return null;
+      i = blockStep(css, i, open);
+      if (i < 0) return null;
+    }
+    rules.push({ start, end: i, kind: 'rule', rules: [] });
+  }
+}
+
+/** A UTF-16 surrogate without its pair. */
+const LONE_SURROGATE =
+  /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+
+/** A class written as `.name`, or a `\` or a comment's opening, either
+ *  of which may write any class: `.\64 ead` names `dead`, and so does a
+ *  dot, a comment and `dead`. */
+const CLASS_OR_ESCAPE = /\.([\w\u0080-\uffff-]+)|\\|\/\*/g;
+
+/** Where `css` writes a class of `classes` (or one derived from one), or
+ *  an escape or a comment, in order. */
+function removedMarks(css: string, classes: ReadonlySet<string>): number[] {
+  const marks: number[] = [];
+  for (const match of css.matchAll(CLASS_OR_ESCAPE)) {
+    const name = match[1];
+    if (name === undefined || classes.has(name) || classes.has(classStem(name)))
+      marks.push(match.index);
+  }
+  return marks;
+}
+
+/** Whether a mark of `marks` falls in [`start`, `end`). */
+function marked(marks: readonly number[], start: number, end: number): boolean {
+  let low = 0;
+  let high = marks.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (marks[middle]! < start) low = middle + 1;
+    else high = middle;
+  }
+  return low < marks.length && marks[low]! < end;
+}
+
+/** `text` as one rule naming no class, `x{}` and spaces, each line break
+ *  where it was, so every later character keeps its line and column. */
+function placeholder(text: string): string {
+  let filled = 0;
+  return text.replace(/[^\n\r\f]+/g, (run) => {
+    const head = 'x{}'.slice(filled, filled + run.length);
+    filled += head.length;
+    return head + ' '.repeat(run.length - head.length);
+  });
+}
+
+/**
+ * `css` as the removal visitor needs to read it: each run of rules side by
+ * side that write no class of `classes`, nor an escape or comment, as one placeholder
+ * rule of the same length and lines. Such a rule can neither go nor name a
+ * kept class, and nothing removal cuts reaches into it, so the visitor
+ * gives the same answer over fewer rules, at the same locations. A run
+ * keeps its grouping rule non-empty, so a `@media` keeps what removal
+ * leaves of it. `css` itself where its rule boundaries do not read exactly
+ * (`sheetRules`), it holds a NUL or a lone surrogate (which Lightning CSS
+ * reads as U+FFFD, a class name the marks would miss), or most of it
+ * names a removed class.
+ */
+function visitedForm(css: string, classes: ReadonlySet<string>): string {
+  if (css.includes('\0') || LONE_SURROGATE.test(css)) return css;
+  const read = sheetRules(css, 0, false);
+  if (read === null) return css;
+  const marks = removedMarks(css, classes);
+  const runs: Array<[number, number]> = [];
+  const reduce = (rules: readonly SheetRule[]) => {
+    let run: [number, number] | null = null;
+    for (const rule of rules) {
+      const named = marked(marks, rule.start, rule.end);
+      if (!named && rule.kind !== 'statement') {
+        run = run === null ? [rule.start, rule.end] : [run[0], rule.end];
+        continue;
+      }
+      if (run !== null) runs.push(run);
+      run = null;
+      if (named && rule.kind === 'group') reduce(rule.rules);
+    }
+    if (run !== null) runs.push(run);
+  };
+  reduce(read.rules);
+  runs.sort((a, b) => a[0] - b[0]);
+  let blank = 0;
+  for (const [start, end] of runs) blank += end - start;
+  if (blank * 2 < css.length) return css;
+  let sheet = '';
+  let from = 0;
+  for (const [start, end] of runs) {
+    sheet += css.slice(from, start) + placeholder(css.slice(start, end));
+    from = end;
+  }
+  return sheet + css.slice(from);
+}
+
 /** The pseudo-classes and pseudo-elements every browser that reads
  *  `@layer`, and so any Animus sheet, supports unprefixed. */
 const BASELINE_PSEUDO_CLASSES = new Set([
@@ -732,7 +1036,7 @@ export function removeComponentRules(
   // Style rules nested in a style rule, whose lists removal leaves whole.
   const nestedStyles = new Set<number>();
   const keys: string[] = [];
-  eachRule(css, (rule) => {
+  const visit = (rule: Rule): [] | void => {
     const dropped = drops(rule);
     if (dropped !== null) {
       cutStarts.push(offsetOf(dropped.loc));
@@ -783,7 +1087,32 @@ export function removeComponentRules(
         );
       });
     }
-  });
+  };
+  const readRules = (sheet: string) => {
+    went.clear();
+    kept.clear();
+    cutStarts.length = 0;
+    branchCuts.length = 0;
+    nestedStyles.clear();
+    keys.length = 0;
+    eachRule(sheet, visit);
+  };
+  // The visitor reads only the rules that write a removed class, after the
+  // whole sheet parses, so a sheet that does not still throws.
+  let sheet = visitedForm(css, classes);
+  if (sheet === css) readRules(css);
+  else {
+    lcssTransform({
+      filename: 'animus-bundle-removal.css',
+      code: Buffer.from(css),
+    });
+    try {
+      readRules(sheet);
+    } catch {
+      sheet = css;
+      readRules(css);
+    }
+  }
   if (cutStarts.length === 0 && branchCuts.length === 0) {
     return { css: null, went, kept, refused: null };
   }
@@ -806,21 +1135,28 @@ export function removeComponentRules(
     cuts.push([start, end]);
   }
   cuts.sort((a, b) => a[0] - b[0]);
-  let trimmed = '';
   let from = 0;
   for (const [start, end] of cuts) {
     if (start < from) return refuse('two of its cuts overlap');
-    trimmed += css.slice(from, start);
     from = end;
   }
-  trimmed += css.slice(from);
+  const cutFrom = (text: string) => {
+    let left = '';
+    let at = 0;
+    for (const [start, end] of cuts) {
+      left += text.slice(at, start);
+      at = end;
+    }
+    return left + text.slice(at);
+  };
+  const trimmed = cutFrom(css);
   // The trimmed sheet must read as the same rules, each holding the same
   // number, in the same order, less those cut, and each cut list as its
   // live selectors alone: a cut that ended anywhere else changed a rule
   // kept.
   const after: string[] = [];
   try {
-    eachRule(trimmed, (rule) => {
+    eachRule(sheet === css ? trimmed : cutFrom(sheet), (rule) => {
       after.push(ruleKey(rule, childRules(rule).length));
     });
   } catch {

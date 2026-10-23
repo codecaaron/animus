@@ -225,6 +225,41 @@ describe('removeComponentRules over nested rules', () => {
   });
 });
 
+describe('removeComponentRules over a sheet it reads in part', () => {
+  // Contract: where most rules of a sheet write no removed class, the
+  // visitor reads the rest alone, and the answer is the one a reading of
+  // every rule gives. A grouping rule keeps the rules removal leaves in
+  // it, and a cut after non-ASCII text lands where Lightning CSS locates
+  // the rule, in UTF-16 units.
+  const live = Array.from(
+    { length: 40 },
+    (_, index) => `.live${index}{color:red}`
+  ).join('');
+  const dead = new Set(['dead']);
+
+  test('a grouping rule keeps the rules removal leaves in it', () => {
+    const css = `${live}@media (min-width:1px){.live{color:red}.dead{color:red}${live}}@media (min-width:2px){.dead{color:red}}`;
+    expect(removeComponentRules(css, dead).css).toBe(
+      `${live}@media (min-width:1px){.live{color:red}${live}}`
+    );
+  });
+
+  test('a comment between the dot and a removed class hides it from no rule', () => {
+    // Lightning CSS reads `./**/dead` as `.dead`.
+    const css = `${live}./**/dead,.live{color:red}./**/dead{color:red}`;
+    const { css: out, went } = removeComponentRules(css, dead);
+    expect(out).toBe(`${live}.live{color:red}`);
+    expect([...went]).toEqual(['dead']);
+  });
+
+  test('a cut after non-ASCII text lands on its rule', () => {
+    const css = `${live}.live{content:"é😀中"}.dead{color:red}.live{color:#00f}`;
+    expect(removeComponentRules(css, dead).css).toBe(
+      `${live}.live{content:"é😀中"}.live{color:#00f}`
+    );
+  });
+});
+
 describe('unbundledComponents', () => {
   // Contract: a component is removed only when no output file names its
   // class, or a class derived from it; `staticCss` keeps one by binding.
