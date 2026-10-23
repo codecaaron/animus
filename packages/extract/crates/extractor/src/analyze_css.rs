@@ -1743,7 +1743,7 @@ const ASSET_EXTENSIONS: &[&str] = &[
 /// the host reads it.
 fn script_like(base: &str) -> bool {
     let (path, query) = base.split_once('?').unwrap_or((base, ""));
-    if query.split('&').any(|param| matches!(param.split('=').next(), Some("raw" | "url"))) {
+    if crate::loads::text_query(query) {
         return false;
     }
     let name = path.rsplit('/').next().unwrap_or(path);
@@ -22417,7 +22417,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "export const b = (n) => (require)?.('./data/' + n + '.json');\n",
             "export const c = require['context']('./ctx', false, /\\.js$/i);\n",
             "export const d = import.meta.webpackContext('./wc', { regExp: /x/, chunkName: 'c', mode: 'lazy' });\n",
-            "export const e = import.meta.glob(['./g/*.js', '!./g/skip.js'], { query: '?raw', import: 'default' });\n",
+            "export const e = import.meta.glob(['./g/*.js', '!./g/skip.js'], { query: '?v=1', import: 'default' });\n",
             "export const f = (s) => import(s);\n",
             "export const g = (o) => import.meta.glob('./h/*.js', o);\n",
             "export const h = (n) => import(`./raw/${n}.js`, { with: { type: 'raw' } });\n",
@@ -22442,7 +22442,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 { "start": start("(require)"), "kind": "require", "args": { "quasis": ["./data/", ".json"], "template": false, "options": null, "comments": [] } },
                 { "start": start("require['"), "kind": "context", "args": { "dir": "./ctx", "recursive": false, "regExp": { "source": "\\.js$", "flags": "i" }, "include": null, "exclude": null, "mode": null } },
                 { "start": start("import.meta.webpackContext"), "kind": "webpackContext", "args": { "dir": "./wc", "recursive": null, "regExp": { "source": "x", "flags": "" }, "include": null, "exclude": null, "mode": "lazy" } },
-                { "start": start("import.meta.glob(["), "kind": "glob", "args": { "patterns": ["./g/*.js", "!./g/skip.js"], "options": { "query": "?raw", "import": "default" } } },
+                { "start": start("import.meta.glob(["), "kind": "glob", "args": { "patterns": ["./g/*.js", "!./g/skip.js"], "options": { "query": "?v=1", "import": "default" } } },
                 // A bare variable is no template or concatenation, which
                 // hosts read another way, and an argument that is not
                 // written statically, or options that are no object literal,
@@ -24591,6 +24591,18 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         ] {
             assert!(kept(&[("src/app.tsx", &app(load))], None, false), "{load}");
             assert!(kept(&[("src/app.tsx", &app(load))], empty(), false), "{load}");
+        }
+        // Contract: a load whose query yields text or a URL reaches no module
+        // code, so it neither stops pruning nor asks for a remedy, where the
+        // plain glob above over the same unread file does both.
+        for load in [
+            "export const sources = import.meta.glob('./parts/*.tsx', { query: '?raw', import: 'default' });",
+            "export const urls = import.meta.glob('./parts/*.tsx', { query: 'url', eager: true });",
+            "export const source = (name) => import(`./parts/${name}.tsx?raw`);",
+        ] {
+            assert!(!kept(&[("src/app.tsx", &app(load))], None, false), "{load}");
+            let out = analyze(&[q, u, ("src/app.tsx", &app(load))], &test_inputs());
+            assert!(!out.diagnostics.iter().any(|d| d.code.as_deref() == Some(RESOLVE_UNANALYSED_IMPORT)), "{load}");
         }
         // In a module only a config imports, which may be the app's entry.
         let config = ("vite.config.ts", "import './src/app';\nexport default {};\n");

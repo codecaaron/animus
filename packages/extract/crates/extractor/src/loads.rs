@@ -240,21 +240,23 @@ impl<'a> Visit<'a> for Calls<'_, 'a> {
     }
 
     fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
-        let enclosing_function = self.enclosing_function();
-        self.loads.push(Load {
-            kind: LoadKind::DynamicImport,
-            target: load_of(&import.source),
-            spelling: spelling(Some(&import.source)),
-            span: import.span,
-            enclosing_function,
-        });
-        self.list(import.span, HostLoadKind::Import, |calls| {
-            // A phase (`import.source(…)`, `import.defer(…)`) is not read.
-            if import.phase.is_some() {
-                return None;
-            }
-            specifier_args(&import.source, import.options.as_ref().map(Some), calls.comments_in(import.span))
-        });
+        if !template_loads_text(&import.source) {
+            let enclosing_function = self.enclosing_function();
+            self.loads.push(Load {
+                kind: LoadKind::DynamicImport,
+                target: load_of(&import.source),
+                spelling: spelling(Some(&import.source)),
+                span: import.span,
+                enclosing_function,
+            });
+            self.list(import.span, HostLoadKind::Import, |calls| {
+                // A phase (`import.source(…)`, `import.defer(…)`) is not read.
+                if import.phase.is_some() {
+                    return None;
+                }
+                specifier_args(&import.source, import.options.as_ref().map(Some), calls.comments_in(import.span))
+            });
+        }
         oxc::ast_visit::walk::walk_import_expression(self, import);
     }
 
@@ -430,9 +432,42 @@ fn glob_loads(argument: Option<&Argument<'_>>) -> Vec<LoadTarget> {
     }
 }
 
+/// Whether a query loads the file as a string, whatever it holds: a `raw`
+/// or `url` parameter (Vite's `rawRE` and `urlRE`). Such a load reaches no
+/// module code.
+pub(crate) fn text_query(query: &str) -> bool {
+    query.trim_start_matches('?').split('&').any(|param| matches!(param.split('=').next(), Some("raw" | "url")))
+}
+
+/// Whether a glob's options import each file with a text query: a `query`
+/// written as a string, in options written statically.
+fn glob_loads_text(options: Option<&Expression<'_>>) -> bool {
+    options
+        .and_then(object_json)
+        .as_ref()
+        .and_then(|options| options.get("query"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(text_query)
+}
+
+/// Whether a template `import()` with substitutions names a text query in
+/// its last static text, where Vite's dynamic-import-vars splits the query
+/// off (`requestQuerySplitRE`: at a `?` no `/`, `|` or `}` follows). A
+/// literal specifier is probed with its query instead.
+fn template_loads_text(source: &Expression<'_>) -> bool {
+    let Expression::TemplateLiteral(template) = source.get_inner_expression() else {
+        return false;
+    };
+    !template.expressions.is_empty()
+        && template.quasis.last().and_then(crate::eval::cooked_text).is_some_and(|tail| {
+            tail.rsplit_once('?').is_some_and(|(_, query)| !query.contains(['/', '|', '}']) && text_query(query))
+        })
+}
+
 /// What a call loads: `require(…)`, `require.context(…)`,
 /// `import.meta.webpackContext(…)` and `import.meta.glob(…)` (also the
-/// older `globEager`). `require.resolve` loads nothing.
+/// older `globEager`). `require.resolve` loads nothing, nor does a glob
+/// whose query loads text.
 fn call_loads(call: &CallExpression<'_>) -> Vec<LoadTarget> {
     let argument = |index: usize| call.arguments.get(index).and_then(Argument::as_expression);
     match loader(&call.callee) {
@@ -440,7 +475,7 @@ fn call_loads(call: &CallExpression<'_>) -> Vec<LoadTarget> {
         Loader::RequireMember(member) if member == "context" => vec![context_of(argument(0), argument(1), argument(2))],
         Loader::ImportMetaMember(member) => match member.as_str() {
             "webpackContext" => vec![webpack_context_of(call)],
-            "glob" | "globEager" => glob_loads(call.arguments.first()),
+            "glob" | "globEager" if !glob_loads_text(argument(1)) => glob_loads(call.arguments.first()),
             _ => Vec::new(),
         },
         _ => Vec::new(),
