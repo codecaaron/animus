@@ -287,6 +287,40 @@ describe('viteLoadExpander', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // Contract: a dot-led file beside the importer reaches the aliases as
+  // `./.foo.js`, as rolldown 1.2.14's glob plugin imports it, so an alias
+  // of that specifier lists no expansion.
+  test('a dot-led file beside the importer is aliased by its ./ path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'animus-vite-dot-alias-'));
+    mkdirSync(join(root, 'src'));
+    for (const name of ['.foo.js', '..foo.js']) {
+      writeFileSync(join(root, 'src', name), 'export default 1;\n');
+    }
+    const expand = (name: string, find: RegExp) =>
+      viteLoadExpander(root, true, false, [{ find }]).expand(
+        {
+          importer: 'src/load.js',
+          start: 0,
+          kind: 'glob',
+          args: { patterns: [`./${name}`], options: { exhaustive: true } },
+        },
+        root
+      );
+    try {
+      expect({
+        dot: expand('.foo.js', /^\.\/\.foo\.js$/),
+        dotDot: expand('..foo.js', /^\.\/\.\.foo\.js$/),
+        unaliased: expand('..foo.js', /^\.\.foo\.js$/),
+      }).toEqual({
+        dot: undefined,
+        dotDot: undefined,
+        unaliased: [{ path: 'src/..foo.js', query: '' }],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('viteHostExpander', () => {

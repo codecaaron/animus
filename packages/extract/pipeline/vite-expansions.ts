@@ -337,14 +337,15 @@ export function viteLoadExpander(
         globs.push(glob);
       }
       if (!globs.some((glob) => !glob.negated)) return undefined;
-      // Vite imports each file by its path from the importer, `./` added,
-      // with the load's query, through the aliases.
+      // Vite imports each file by its path from the importer, `./` added
+      // unless it leaves the directory (a dot-led name such as `.foo.js`
+      // gets one), with the load's query, through the aliases.
       const aliased = (path: string) => {
         const specifier = relative(importerDir, path)
           .split(sep)
           .join(posix.sep);
         return rewrites(
-          `${specifier.startsWith('.') ? '' : './'}${specifier}${query}`
+          `${specifier.startsWith('../') ? '' : './'}${specifier}${query}`
         );
       };
       let files: string[];
