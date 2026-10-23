@@ -68,6 +68,8 @@
   },
   "dependencies": {
     "@animus-ui/properties": "workspace:*",
+    "acorn": "8.18.0",
+    "acorn-jsx": "5.3.2",
     "browserslist": "^4.28.8",
     "lightningcss": "^1.33.0"
   },

@@ -78,6 +78,72 @@ describe('mdxUsageSource', () => {
     expect(result.source).toBeUndefined();
   });
 
+  // Contract: an MDX ESM block starts and ends where @mdx-js puts it. Each
+  // row is one rule where that differs from a block that ends at a blank
+  // line and starts after one; its rows are those @mdx-js 3.1.1 parses as
+  // ESM. Its kept lines are those outside every content wrapper.
+  const esmRows = (source: string) => {
+    const result = mdxUsageSource(source, 'esm.mdx');
+    if (result.kind !== 'ok') throw new Error(result.error);
+    const out = result.source.split('\n');
+    let inWrapper = false;
+    const rows: number[] = [];
+    source.split('\n').forEach((line, row) => {
+      if (out[row]!.includes('function _MDXContent')) inWrapper = true;
+      if (!inWrapper && line.trim() !== '' && out[row] === line) {
+        rows.push(row + 1);
+      }
+      if (out[row]!.endsWith('</>; }')) inWrapper = false;
+    });
+    return { rows, source: result.source };
+  };
+
+  test.each([
+    [
+      'an open bracket continues across a blank line',
+      'export const C = () => {\n  const a = 1;\n\n  return a;\n};\n\nText\n',
+      [1, 2, 4, 5],
+    ],
+    [
+      'an open template literal continues across a blank line',
+      'export const t = `\nline\n\n# not a heading\n`;\n\nText\n',
+      [1, 2, 4, 5],
+    ],
+    [
+      'an open block comment continues across a blank line',
+      'export const a = 1;\n/* note\n\nmore\n*/\n\nText\n',
+      [1, 2, 4, 5],
+    ],
+    [
+      'an unfinished statement continues across a blank line',
+      "import { a }\n\nfrom 'x';\n\nText\n",
+      [1, 3],
+    ],
+    [
+      'a keyword opens a block only with a space after it',
+      'export{}\n\nexport\tconst a = 1\n\nText\n',
+      [],
+    ],
+    [
+      'a block opens right after a line that closes a paragraph',
+      '<StoryEmbed id="x" />\nimport A from \'./a.mdx\';\n\n# Title\nexport const b = 1;\n\nText\n',
+      [2, 5],
+    ],
+  ])('%s', (_rule, source, rows) => {
+    expect(esmRows(source).rows).toEqual(rows);
+  });
+
+  test('a block inside an element is the module’s, below the content', () => {
+    const element = "<Box>\nimport A from './a';\n\n<A />\n</Box>\n";
+    const { rows, source } = esmRows(element);
+    expect(rows).toEqual([]);
+    const lines = source.split('\n');
+    expect(lines[1]!.trim()).toBe('');
+    expect(lines).toContain("import A from './a';");
+    expect(source).toContain('{ Box } = _components');
+    expect(source).not.toMatch(/\{[^}]*\bA\b[^}]*\} = _components/);
+  });
+
   test('the default extensions include .mdx', () => {
     expect(DEFAULT_EXTENSIONS).toEqual(['.ts', '.tsx', '.js', '.jsx', '.mdx']);
   });
