@@ -171,6 +171,26 @@ describe('mdxUsageSource', () => {
     expect(out[2]).toMatch(/^<X \/>/);
   });
 
+  // Contract: frontmatter delimiters are recognised and blanked alike for
+  // LF, CRLF and CR, keeping every character position.
+  test.each([
+    ['LF', '\n'],
+    ['CRLF', '\r\n'],
+    ['CR', '\r'],
+  ])('frontmatter is blanked at %s', (_name, eol) => {
+    const input = ['---', 'title: "<Wrong /> {"', '---', '', '<Badge />'].join(
+      eol
+    );
+    const result = mdxUsageSource(input, 'fm.mdx');
+    if (result.kind !== 'ok') throw new Error(result.error);
+    expect(result.source).not.toContain('Wrong');
+    const out = result.source.split('\n');
+    expect(out.slice(1, 3)).toEqual(
+      Array(2).fill(expect.stringMatching(/^ +$/))
+    );
+    expect(out[4]!.indexOf('<Badge />')).toBe(0);
+  });
+
   test('a block inside an element is the module’s, below the content', () => {
     const element = "<Box>\nimport A from './a';\n\n<A />\n</Box>\n";
     const { rows, source } = esmRows(element);

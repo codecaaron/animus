@@ -405,9 +405,11 @@ function mdxToTsx(input: string, filename: string) {
   const tags: string[][] = lines.map(() => []);
 
   let line = 0;
-  // Frontmatter, which MDX hosts commonly read with a remark plugin.
-  if (lines[0] === '---') {
-    const close = lines.indexOf('---', 1);
+  // Frontmatter, which MDX hosts commonly read with a remark plugin. A
+  // CRLF line keeps its carriage return.
+  const delimiter = (text: string) => text.replace(/\r$/, '') === '---';
+  if (delimiter(lines[0]!)) {
+    const close = lines.findIndex((text, row) => row > 0 && delimiter(text));
     if (close !== -1) line = close + 1;
   }
   const rowStarts: number[] = [];
