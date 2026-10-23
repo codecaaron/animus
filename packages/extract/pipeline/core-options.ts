@@ -493,16 +493,48 @@ export interface ExcludeMatcher {
 
 const GLOB_META = /[*?]/;
 
+/** A letter or digit: what a plain pattern's word may not run into. */
+const WORD = /[A-Za-z0-9]/;
+
 /**
  * Globs compile to a RegExp over the root-relative path, matching the path or
- * any ancestor directory; plain patterns are substrings. `./` is stripped.
+ * any ancestor directory. A plain pattern matches the root-relative path
+ * where it is a whole word: the character before and after it is no letter
+ * or digit (or the path's start or end), so `dist` matches `dist/`,
+ * `dist-families` and `dist-x.js` but not `distance.tsx`, and `worker.js`
+ * not `serviceworker.js`. An end of the pattern that is itself no letter or
+ * digit needs no boundary there, so `.test.` matches inside
+ * `button.test.tsx`. Directories above the root never match, except where
+ * the pattern is itself absolute, which matches the full path. `./` is
+ * stripped.
  */
 function compilePattern(raw: string): (full: string, rel: string) => boolean {
   let pattern = raw.split('\\').join('/');
   while (pattern.startsWith('./')) pattern = pattern.slice(2);
   if (pattern === '') return () => false;
   if (!GLOB_META.test(pattern)) {
-    return (full, rel) => full.includes(pattern) || rel.includes(pattern);
+    const open = WORD.test(pattern[0]!);
+    const close = WORD.test(pattern[pattern.length - 1]!);
+    // An absolute pattern names a place on disk: it matches the full path.
+    const absolute = /^(?:[A-Za-z]:)?\//.test(pattern);
+    return (full, rel) => {
+      const path = (absolute ? full : rel).split('\\').join('/');
+      for (
+        let at = path.indexOf(pattern);
+        at !== -1;
+        at = path.indexOf(pattern, at + 1)
+      ) {
+        const before = path[at - 1];
+        const after = path[at + pattern.length];
+        if (
+          (!open || before === undefined || !WORD.test(before)) &&
+          (!close || after === undefined || !WORD.test(after))
+        ) {
+          return true;
+        }
+      }
+      return false;
+    };
   }
   const regex = globToRegExp(pattern);
   return (_full, rel) => {
@@ -517,6 +549,14 @@ function compilePattern(raw: string): (full: string, rel: string) => boolean {
     }
     return false;
   };
+}
+
+/** A structural exclusion: a substring of either path form, as every
+ *  plain pattern once was. */
+function compileStructural(
+  pattern: string
+): (full: string, rel: string) => boolean {
+  return (full, rel) => full.includes(pattern) || rel.includes(pattern);
 }
 
 /** Whether a path matches any of `patterns`, each read as an `exclude`
@@ -585,7 +625,7 @@ export function createExcludeMatcher(
   for (const pattern of STRUCTURAL_EXCLUDE) {
     compiled.push({
       pattern,
-      test: compilePattern(pattern),
+      test: compileStructural(pattern),
       isUser: userList.includes(pattern),
     });
   }

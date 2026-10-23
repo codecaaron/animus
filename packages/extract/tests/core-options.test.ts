@@ -339,12 +339,38 @@ describe('createExcludeMatcher', () => {
     expect(matcher.matches('/app/src/a.ts', 'src/a.ts')).toBe(false);
   });
 
-  test('substring patterns keep matching both path forms', () => {
+  // Contract: a plain pattern matches the root-relative path where it is a
+  // whole word (no letter or digit runs into it), an end of the pattern that
+  // is no letter or digit needing no boundary; directories above the root
+  // never match. The structural set keeps matching either path form.
+  test('a plain pattern matches a whole word of the root-relative path', () => {
     const matcher = createExcludeMatcher();
-    expect(matcher.matches('/app/src/a.test.ts', 'src/a.test.ts')).toBe(true);
-    expect(matcher.matches('/opt/dist-host/app/src/a.ts', 'src/a.ts')).toBe(
+    const at = (rel: string, root = '/app') =>
+      matcher.matches(`${root}/${rel}`, rel);
+    expect(at('src/distance.tsx')).toBe(false);
+    expect(at('src/redistribute.ts')).toBe(false);
+    expect(at('dist/a.ts')).toBe(true);
+    expect(at('consumer/dist-families/assets/index.js')).toBe(true);
+    expect(at('src/dist-x.js')).toBe(true);
+    expect(at('src/button.test.tsx')).toBe(true);
+    expect(at('src/a.ts', '/Users/me/distill/app')).toBe(false);
+    expect(at('src/a.ts', '/opt/dist-host/app')).toBe(false);
+    const worker = createExcludeMatcher(['worker.js']);
+    expect(worker.matches('/app/src/worker.js', 'src/worker.js')).toBe(true);
+    expect(
+      worker.matches('/app/src/serviceworker.js', 'src/serviceworker.js')
+    ).toBe(false);
+    expect(matcher.matches('/opt/node_modules/kit/src/a.ts', 'src/a.ts')).toBe(
       true
     );
+    // An absolute pattern matches the full path, as a whole word too.
+    const absolute = createExcludeMatcher(['/app/src/Excluded.tsx']);
+    expect(absolute.matches('/app/src/Excluded.tsx', 'src/Excluded.tsx')).toBe(
+      true
+    );
+    expect(
+      absolute.matches('/app/src/Excluded.tsxx', 'src/Excluded.tsxx')
+    ).toBe(false);
   });
 
   test('glob patterns match root-relative paths across directories', () => {
