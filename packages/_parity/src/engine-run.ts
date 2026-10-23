@@ -6,10 +6,7 @@ import {
   isJsonString,
   parseJsonObject,
 } from '@animus-ui/assertions';
-import {
-  buildAnalyzeProjectArgs,
-  createEngineApi,
-} from '@animus-ui/extract/pipeline';
+import { createEngineApi } from '@animus-ui/extract/pipeline';
 import { createRequire } from 'module';
 import { join } from 'path';
 
@@ -246,31 +243,29 @@ async function main() {
   for (const unit of units) {
     try {
       api.clearAnalysisCache();
-      const hostManifestJson: string = api.analyzeProject(
-        ...buildAnalyzeProjectArgs({
-          filesJson: JSON.stringify(unit.files),
-          scalesJson: theme.scalesJson,
-          variableMapJson: theme.variableMapJson,
-          contextualVarsJson: theme.contextualVarsJson || null,
-          propConfigJson: config.propConfig,
-          groupRegistryJson: config.groupRegistry,
-          packageResolutionJson: '{}',
-          devMode,
-          // The oracle compares raw engine output, so it declares no bundler
-          // emitter identity; emitter ids stay at the engine defaults.
-          emitterConfigJson: null,
-          selectorAliasesJson: config.selectorAliases ?? null,
-          globalStyleBlocksJson: HARNESS_GLOBAL_BLOCKS,
-          pathAliasesJson: null,
-          keyframesJson: HARNESS_KEYFRAMES,
-          staticCssJson: null,
-          conditionAliasesJson: HARNESS_CONDITION_ALIASES,
-          externalDirsJson: null,
-          // Without transform sources the oracle records package-shipped
-          // transforms as unresolvable, blessing a fallback consumers lack.
-          transformSourcesJson: config.transformSources ?? null,
-        })
-      );
+      const hostManifestJson: string = api.analyzeProject({
+        filesJson: JSON.stringify(unit.files),
+        scalesJson: theme.scalesJson,
+        variableMapJson: theme.variableMapJson,
+        contextualVarsJson: theme.contextualVarsJson || null,
+        propConfigJson: config.propConfig,
+        groupRegistryJson: config.groupRegistry,
+        packageResolutionJson: '{}',
+        devMode,
+        // The oracle compares raw engine output, so it declares no bundler
+        // emitter identity; emitter ids stay at the engine defaults.
+        emitterConfigJson: null,
+        selectorAliasesJson: config.selectorAliases ?? null,
+        globalStyleBlocksJson: HARNESS_GLOBAL_BLOCKS,
+        pathAliasesJson: null,
+        keyframesJson: HARNESS_KEYFRAMES,
+        staticCssJson: null,
+        conditionAliasesJson: HARNESS_CONDITION_ALIASES,
+        externalDirsJson: null,
+        // Without transform sources the oracle records package-shipped
+        // transforms as unresolvable, blessing a fallback consumers lack.
+        transformSourcesJson: config.transformSources ?? null,
+      });
       // Parity reads every section, as the engine kept them.
       const manifestJson: string = api.fullManifestJson?.() ?? hostManifestJson;
       const manifest = parseManifest(manifestJson);

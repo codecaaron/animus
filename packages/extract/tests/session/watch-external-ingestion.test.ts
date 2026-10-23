@@ -404,7 +404,7 @@ describe('dirty-root reconciliation (design D3)', () => {
       mocks.analyzeProject.mock.calls[
         mocks.analyzeProject.mock.calls.length - 1
       ];
-    expect(lastCall[7]).toBe(true);
+    expect(lastCall[0].devMode).toBe(true);
     const paths = lastAnalyzedPaths();
     expect(paths).toContain(kitNewKey);
     expect(paths).toContain(kitButtonKey);
@@ -441,7 +441,7 @@ describe('dirty-root reconciliation (design D3)', () => {
       mocks.analyzeProject.mock.calls[
         mocks.analyzeProject.mock.calls.length - 1
       ];
-    expect(lastCall[7]).toBe(false);
+    expect(lastCall[0].devMode).toBe(false);
   });
 
   test('a removed root directory reconciles as full deletion', async () => {

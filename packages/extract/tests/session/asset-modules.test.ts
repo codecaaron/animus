@@ -12,7 +12,7 @@ import { fakeEngineApi } from '../native-functions';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
+  analyzeProject: vi.fn<EngineApi['analyzeProject']>(),
   clearAnalysisCache: vi.fn(),
 }));
 
@@ -40,7 +40,7 @@ import {
   SYSTEM_CONFIG,
 } from './session-fixtures';
 
-import type { AnalyzeProjectArgs } from '../../pipeline';
+import type { EngineApi } from '../../pipeline';
 
 let restoreGlobals: () => void;
 

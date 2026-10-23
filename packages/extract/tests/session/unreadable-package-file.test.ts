@@ -45,15 +45,12 @@ import {
   SYSTEM_CONFIG,
 } from './session-fixtures';
 
-const DEV_MODE_SLOT = 7;
-const ANALYSIS_CONTEXT_SLOT = 20;
-
 /** The sources an analysis, the first by default, was told it cannot see. */
 function skippedSources(call = 0): string[] {
   const calls = mocks.analyzeProject.mock.calls;
-  // SAFETY: the context slot holds the session's own JSON.stringify output,
+  // SAFETY: the context holds the session's own JSON.stringify output,
   // or nothing when the session knows of no unseen source.
-  const json = calls.at(call)?.[ANALYSIS_CONTEXT_SLOT] as string | undefined;
+  const json = calls.at(call)?.[0].analysisContextJson;
   if (json === undefined) return [];
   // SAFETY: as above, the context's wire shape.
   const context = JSON.parse(json) as { skippedSources?: string[] };
@@ -138,7 +135,7 @@ describe('a configured package file that cannot be read', () => {
 
     const line = warned.find((entry) => entry.includes(UNREADABLE_SOURCE_FILE));
     expect(line).toContain('its renders are not seen, so nothing is pruned');
-    expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
+    expect(mocks.analyzeProject.mock.calls[0][0].devMode).toBe(false);
     expect(skippedSources()).toEqual([expect.stringContaining('Button.tsx')]);
     session.close();
   });
@@ -149,7 +146,7 @@ describe('a configured package file that cannot be read', () => {
 
     await session.runFullPipeline();
 
-    expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
+    expect(mocks.analyzeProject.mock.calls[0][0].devMode).toBe(false);
     expect(skippedSources()).toEqual([]);
     session.close();
   });
@@ -184,7 +181,7 @@ describe('a project file that cannot be read', () => {
     const line = warned.find((entry) => entry.includes(UNREADABLE_SOURCE_FILE));
     expect(line).toContain('src/App.tsx');
     expect(line).toContain('its renders are not seen, so nothing is pruned');
-    expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
+    expect(mocks.analyzeProject.mock.calls[0][0].devMode).toBe(false);
     expect(skippedSources()).toEqual(['src/App.tsx']);
     session.close();
   });
@@ -280,11 +277,12 @@ describe('a watched change that cannot be read', () => {
   // The analysis continues on the last good read: no live CSS is lost.
   test('a definition file keeps its CSS while it cannot be read', async () => {
     const app = createProject('animus-unreadable-definition-');
-    mocks.analyzeProject.mockImplementation((filesJson: string) =>
-      buildManifest(
-        PLAN_A,
-        filesJson.includes('src/Button.tsx') ? '.btn{margin:8px}' : ''
-      )
+    mocks.analyzeProject.mockImplementation(
+      ({ filesJson }: { filesJson: string }) =>
+        buildManifest(
+          PLAN_A,
+          filesJson.includes('src/Button.tsx') ? '.btn{margin:8px}' : ''
+        )
     );
     const session = makeSession(app);
     session.development = true;

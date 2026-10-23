@@ -6,7 +6,7 @@ import { fakeEngineApi } from '../native-functions';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
+  analyzeProject: vi.fn<EngineApi['analyzeProject']>(),
   clearAnalysisCache: vi.fn(),
 }));
 
@@ -39,7 +39,7 @@ import {
   SYSTEM_CONFIG,
 } from './session-fixtures';
 
-import type { AnalyzeProjectArgs } from '../../pipeline';
+import type { EngineApi } from '../../pipeline';
 import type { ExtractionSession } from '../../session/extraction-session';
 import type { AnalysisStatus } from '../../session/session-paths';
 
@@ -172,7 +172,8 @@ const HELD_SYSTEM = {
 };
 
 /** The group registry `analyzeProject` received in its latest call. */
-const analyzedGroupRegistry = () => mocks.analyzeProject.mock.calls.at(-1)?.[5];
+const analyzedGroupRegistry = () =>
+  mocks.analyzeProject.mock.calls.at(-1)?.[0].groupRegistryJson;
 
 describe('a system edit while a parse is aborted', () => {
   test('is held with the component edits and published with the repair', async () => {

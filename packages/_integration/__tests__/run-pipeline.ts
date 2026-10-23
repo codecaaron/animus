@@ -1,6 +1,5 @@
 import {
   applyUnitFallback,
-  buildAnalyzeProjectArgs,
   createEngineApi,
 } from '@animus-ui/extract/pipeline';
 
@@ -80,9 +79,10 @@ export function analyzeProject(
   filesJson: string,
   overrides: Partial<AnalyzeProjectInputs> = {}
 ): string {
-  return engineApi().analyzeProject(
-    ...buildAnalyzeProjectArgs({ ...fixtureInputs(filesJson), ...overrides })
-  );
+  return engineApi().analyzeProject({
+    ...fixtureInputs(filesJson),
+    ...overrides,
+  });
 }
 
 /** Analyzes as `analyzeProject` does; returns the full manifest JSON, every

@@ -18,7 +18,7 @@ import { systemImportFacts } from '../source-ingestion-fixtures';
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   extractFacts: vi.fn<(filesJson: string) => string>(),
-  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
+  analyzeProject: vi.fn<EngineApi['analyzeProject']>(),
   transformFile: vi.fn(),
   clearAnalysisCache: vi.fn(),
 }));
@@ -32,7 +32,7 @@ import {
   SYSTEM_CONFIG,
 } from './session-fixtures';
 
-import type { AnalysisSourceEntry, AnalyzeProjectArgs } from '../../pipeline';
+import type { AnalysisSourceEntry, EngineApi } from '../../pipeline';
 
 setEngineApiOverride(() => {
   const api = {
@@ -183,7 +183,7 @@ function sources(session: ExtractionSession) {
 function analyzedEntries(): EngineFileEntry[] {
   const call = mocks.analyzeProject.mock.calls.at(-1);
   expect(call).toBeDefined();
-  return readFileEntries(call![0]);
+  return readFileEntries(call![0].filesJson);
 }
 
 function analyzedSource(path: string): string | undefined {
@@ -199,7 +199,7 @@ beforeEach(() => {
   activeTransformSources = new Map();
   mocks.loadSystemModule.mockReset().mockReturnValue({ ...SYSTEM_CONFIG });
   mocks.extractFacts.mockReset().mockImplementation(factsFor);
-  mocks.analyzeProject.mockReset().mockImplementation((filesJson: string) => {
+  mocks.analyzeProject.mockReset().mockImplementation(({ filesJson }) => {
     activeTransformSources = new Map(
       readFileEntries(filesJson).map((entry) => [entry.path, entry.source])
     );

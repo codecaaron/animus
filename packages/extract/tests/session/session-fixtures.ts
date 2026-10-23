@@ -388,7 +388,9 @@ export async function startSession(
 }
 
 interface AnalyzeProjectRecorder {
-  mock: { calls: ReadonlyArray<readonly [string, ...unknown[]]> };
+  mock: {
+    calls: ReadonlyArray<readonly [{ filesJson: string }, ...unknown[]]>;
+  };
 }
 
 /** Throws when no call was recorded: an empty answer would compare equal to
@@ -400,7 +402,7 @@ export function lastAnalyzedFiles(
   if (calls.length === 0) {
     throw new Error('no analyzeProject call was recorded');
   }
-  const corpus: unknown = JSON.parse(calls[calls.length - 1][0]);
+  const corpus: unknown = JSON.parse(calls[calls.length - 1][0].filesJson);
   if (!Array.isArray(corpus)) {
     throw new Error('analyzeProject was called with a non-array corpus');
   }

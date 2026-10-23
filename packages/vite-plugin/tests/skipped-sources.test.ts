@@ -14,7 +14,7 @@ import { applyResolvedConfig } from '../src/config';
 import { PluginContext } from '../src/context';
 import { makeManifest } from './manifest-fixture';
 
-const ANALYSIS_CONTEXT_SLOT = 20;
+import type { AnalyzeProjectInputs } from '@animus-ui/extract/pipeline';
 
 interface AnalysisContextWire {
   unbundledComputedImports?: boolean;
@@ -46,10 +46,10 @@ async function productionBuild() {
       dependencies: [],
     }),
     extractModuleFacts: factsExtractor({}),
-    analyzeProject: (...args: unknown[]) => {
-      // SAFETY: the context slot holds the host's own JSON.stringify output,
+    analyzeProject: (inputs: AnalyzeProjectInputs) => {
+      // SAFETY: the context holds the host's own JSON.stringify output,
       // or nothing when the host knows nothing.
-      const json = args[ANALYSIS_CONTEXT_SLOT] as string | undefined;
+      const json = inputs.analysisContextJson;
       // SAFETY: as above, the context's wire shape.
       contexts.push(JSON.parse(json ?? '{}') as AnalysisContextWire);
       return JSON.stringify(makeManifest());

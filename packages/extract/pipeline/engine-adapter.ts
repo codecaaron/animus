@@ -55,39 +55,57 @@ export interface TransformFileResult {
 }
 
 /**
- * `analyzeProject` takes its arguments positionally to mirror the NAPI
- * contract, so argument order is part of the contract.
+ * One analysis request: everything `analyzeProject` reads, and the
+ * persistence shape an isolated process replays an analysis from, so its
+ * fields and their absences are a stored contract.
+ *
+ * @internal
  */
+export interface AnalyzeProjectInputs {
+  filesJson: string;
+  scalesJson: string;
+  variableMapJson: string;
+  contextualVarsJson: string | null;
+  propConfigJson: string;
+  groupRegistryJson: string;
+  packageResolutionJson: string;
+  devMode: boolean;
+  emitterConfigJson: string | null;
+  selectorAliasesJson: string | null;
+  globalStyleBlocksJson: string | null;
+  pathAliasesJson: string | null;
+  keyframesJson: string | null;
+  staticCssJson: string | null;
+  conditionAliasesJson: string | null;
+  externalDirsJson: string | null;
+  transformSourcesJson: string | null;
+  /** Absent in inputs persisted before it existed: no host-binding
+   *  evidence, so configured sources reading `btoa`/`atob` are rejected. */
+  transformProvenanceJson?: string | null;
+  /** Present only for a theme with declaration scales; absence means none. */
+  declarationScalesJson?: string;
+  /** Present only when the host knows about renders the analysis cannot
+   *  see (`AnalysisContext`); absence means it knows nothing. */
+  analysisContextJson?: string;
+  /** Present only under a prefix: each generated name and its final name,
+   *  renamed in authored component styles. */
+  generatedNamesJson?: string;
+  /** Present only for a theme with declared properties: a prop writing only
+   *  ones registered with a numeric syntax takes a number without a unit. */
+  propertyRecordsJson?: string;
+  /** Present only for a system that registers position tries. */
+  positionTryJson?: string;
+  /** Present only for a system that registers view transitions. */
+  viewTransitionsJson?: string;
+}
+
 export interface EngineApi extends NativeFunctions {
   analyzeProject: (
-    filesJson: string,
-    scalesJson: string,
-    variableMapJson: string,
-    contextualVarsJson: string | null,
-    propConfigJson: string,
-    groupRegistryJson: string,
-    packageResolutionJson: string,
-    devMode: boolean,
-    emitterConfigJson: string | null,
-    selectorAliasesJson: string | null,
-    selectorOrderJson: string | null,
-    globalStyleBlocksJson: string | null,
-    pathAliasesJson: string | null,
-    keyframesJson: string | null,
-    staticCssJson: string | null,
-    conditionAliasesJson: string | null,
-    externalDirsJson: string | null,
-    transformSourcesJson: string | null,
-    transformProvenanceJson?: string | null,
-    declarationScalesJson?: string,
-    analysisContextJson?: string,
-    generatedNamesJson?: string,
-    propertyRecordsJson?: string,
-    positionTryJson?: string,
-    viewTransitionsJson?: string,
+    inputs: AnalyzeProjectInputs,
     /** Given, the session's evidence for the bases and computed loads the
      *  engine's `prepare` names, carrying its input identity (spec §2.2
-     *  A2, A8, §6.3), as JSON. */
+     *  A2, A8, §6.3), as JSON. An execution dependency, which no persisted
+     *  input carries. */
     probeEvidence?: ProbeEvidenceGatherer
   ) => string;
   transformFile: (
@@ -161,34 +179,35 @@ export function createEngineApi(deps: EngineAdapterDeps): () => EngineApi {
       declaresKitSource: native.declaresKitSource,
       locatePackage: native.locatePackage,
       resolveKitSourceRoot: native.resolveKitSourceRoot,
-      analyzeProject: (
-        filesJsonRaw,
-        scalesJson,
-        variableMapJson,
-        contextualVarsJson,
-        propConfigJson,
-        groupRegistryJson,
-        packageResolutionJson,
-        devMode,
-        emitterConfigJson,
-        selectorAliasesJson,
-        _selectorOrderJson,
-        globalStyleBlocksJson,
-        pathAliasesJson,
-        keyframesJson,
-        staticCssJson,
-        conditionAliasesJson,
-        externalDirsJson,
-        transformSourcesJson,
-        transformProvenanceJson,
-        declarationScalesJson,
-        analysisContextJson,
-        generatedNamesJson,
-        propertyRecordsJson,
-        positionTryJson,
-        viewTransitionsJson,
-        probeEvidence
-      ) => {
+      analyzeProject: (inputs, probeEvidence) => {
+        // Every field read once, here, before anything runs: a field read
+        // later could see what rehydration or a getter changed since.
+        const {
+          filesJson: filesJsonRaw,
+          scalesJson,
+          variableMapJson,
+          contextualVarsJson,
+          propConfigJson,
+          groupRegistryJson,
+          packageResolutionJson,
+          devMode,
+          emitterConfigJson,
+          selectorAliasesJson,
+          globalStyleBlocksJson,
+          pathAliasesJson,
+          keyframesJson,
+          staticCssJson,
+          conditionAliasesJson,
+          externalDirsJson,
+          transformSourcesJson,
+          transformProvenanceJson,
+          declarationScalesJson,
+          analysisContextJson,
+          generatedNamesJson,
+          propertyRecordsJson,
+          positionTryJson,
+          viewTransitionsJson,
+        } = inputs;
         const filesJson = deps.rehydrateFilesJson
           ? deps.rehydrateFilesJson(filesJsonRaw)
           : filesJsonRaw;
@@ -238,12 +257,14 @@ export function createEngineApi(deps: EngineAdapterDeps): () => EngineApi {
           externalDirsJson: externalDirsJson ?? undefined,
           transformSourcesJson: transformSourcesJson ?? undefined,
           transformProvenanceJson: transformProvenanceJson ?? undefined,
-          declarationScalesJson,
-          analysisContextJson,
-          generatedNamesJson,
-          propertyRecordsJson,
-          positionTryJson,
-          viewTransitionsJson,
+          // An empty optional input is no input, as the engine reads an
+          // absent one.
+          declarationScalesJson: declarationScalesJson || undefined,
+          analysisContextJson: analysisContextJson || undefined,
+          generatedNamesJson: generatedNamesJson || undefined,
+          propertyRecordsJson: propertyRecordsJson || undefined,
+          positionTryJson: positionTryJson || undefined,
+          viewTransitionsJson: viewTransitionsJson || undefined,
           shortClassPrefix: emitterConfig.short_class_prefix,
           slotProvenance: emitterConfig.slot_provenance,
           devMode,

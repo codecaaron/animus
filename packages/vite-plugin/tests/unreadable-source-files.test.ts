@@ -18,9 +18,9 @@ import { runBuildStart } from '../src/build-start';
 import { PluginContext } from '../src/context';
 import { makeManifest } from './manifest-fixture';
 
+import type { AnalyzeProjectInputs } from '@animus-ui/extract/pipeline';
+
 const UNREADABLE = 'animus.ingestion.unreadable-source-file';
-const DEV_MODE_SLOT = 7;
-const ANALYSIS_CONTEXT_SLOT = 20;
 
 const lockedFiles: string[] = [];
 
@@ -64,17 +64,16 @@ async function productionBuild(app: string, strict: boolean) {
         imports: systemImportFacts(KIT_SYSTEM_SOURCE),
       },
     }),
-    analyzeProject: (...args: unknown[]) => {
-      // SAFETY: the context slot holds the host's own JSON.stringify output,
+    analyzeProject: (inputs: AnalyzeProjectInputs) => {
+      // SAFETY: the context holds the host's own JSON.stringify output,
       // or nothing when the host knows of no unseen source.
-      const json = args[ANALYSIS_CONTEXT_SLOT] as string | undefined;
+      const json = inputs.analysisContextJson;
       // SAFETY: as above, the context's wire shape.
       const skipped = JSON.parse(json ?? '{}') as {
         skippedSources?: string[];
       };
       prunes.push(
-        args[DEV_MODE_SLOT] === false &&
-          (skipped.skippedSources ?? []).length === 0
+        inputs.devMode === false && (skipped.skippedSources ?? []).length === 0
       );
       return JSON.stringify(makeManifest());
     },

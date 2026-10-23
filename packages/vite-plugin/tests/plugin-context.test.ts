@@ -28,7 +28,7 @@ import { animusExtract } from '../src/index';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { AnimusExtractOptions } from '../src/index';
-import type { AnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
+import type { AnalyzeProjectInputs } from '@animus-ui/extract/pipeline';
 import type { FullReloadPayload } from 'vite';
 
 type EmitterJsonValue =
@@ -60,7 +60,7 @@ afterEach(() => {
 function kitWorkspaceEngine(
   app: string,
   manifest: ReturnType<typeof makeManifest>,
-  onAnalyze: (received: AnalyzeProjectArgs) => void = () => {}
+  onAnalyze: (received: AnalyzeProjectInputs) => void = () => {}
 ) {
   return () => ({
     ...fakeEngineApi(),
@@ -79,7 +79,7 @@ function kitWorkspaceEngine(
         imports: systemImportFacts(KIT_SYSTEM_SOURCE),
       },
     }),
-    analyzeProject: (...received: AnalyzeProjectArgs) => {
+    analyzeProject: (received: AnalyzeProjectInputs) => {
       onAnalyze(received);
       return JSON.stringify(manifest);
     },
@@ -91,11 +91,11 @@ async function buildWith(
   manifest = makeManifest()
 ): Promise<EmitterJsonObject> {
   const { app } = createKitWorkspace();
-  let emitterConfigJson: AnalyzeProjectArgs[8] | undefined;
+  let emitterConfigJson: AnalyzeProjectInputs['emitterConfigJson'] | undefined;
   const ctx = new PluginContext(
     { system: './src/system.ts', ...options },
     kitWorkspaceEngine(app, manifest, (received) => {
-      emitterConfigJson = received[8];
+      emitterConfigJson = received.emitterConfigJson;
     })
   );
   applyResolvedConfig(

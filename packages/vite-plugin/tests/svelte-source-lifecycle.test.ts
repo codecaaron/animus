@@ -134,7 +134,7 @@ function makeEngineProbe(): EngineProbe {
       factsInputs.push(parseRawSourceEntries(filesJson));
       return factsFor(filesJson);
     },
-    analyzeProject: (filesJson: string) => {
+    analyzeProject: ({ filesJson }) => {
       if (failNext) {
         failNext = false;
         throw new Error('planned analysis failure');

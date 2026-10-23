@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => {
   const none = (): Fingerprints | null => null;
   return {
     loadSystemModule: vi.fn(),
-    analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
+    analyzeProject: vi.fn<EngineApi['analyzeProject']>(),
     clearAnalysisCache: vi.fn(),
     fingerprints: none(),
   };
@@ -59,7 +59,7 @@ import {
   SYSTEM_CONFIG,
 } from './session-fixtures';
 
-import type { AnalyzeProjectArgs } from '../../pipeline';
+import type { EngineApi } from '../../pipeline';
 
 function createProject() {
   const root = makeTempRoot('animus-watch-asset-');
@@ -84,7 +84,7 @@ function buildManifest(assetPath: string): string {
 function lastAnalyzedEntries(): Array<{ path: string; source: string }> {
   const calls = mocks.analyzeProject.mock.calls;
   expect(calls.length).toBeGreaterThan(0);
-  const [filesJson] = calls[calls.length - 1];
+  const [{ filesJson }] = calls[calls.length - 1];
   expect(filesJson.startsWith('[')).toBe(true);
   return JSON.parse(filesJson);
 }

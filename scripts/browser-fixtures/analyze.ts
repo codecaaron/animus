@@ -6,10 +6,7 @@ import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  buildAnalyzeProjectArgs,
-  createEngineApi,
-} from '../../packages/extract/pipeline/index';
+import { createEngineApi } from '../../packages/extract/pipeline/index';
 
 import type { ExtractorEngine } from '../../packages/extract/pipeline/index';
 
@@ -56,26 +53,24 @@ export function analyzeFixture({
       },
     },
   });
-  const manifestJson: string = engineApi().analyzeProject(
-    ...buildAnalyzeProjectArgs({
-      filesJson: JSON.stringify([{ path, source }]),
-      scalesJson: theme.scalesJson,
-      variableMapJson: theme.variableMapJson,
-      contextualVarsJson: theme.contextualVarsJson || null,
-      propConfigJson: config.propConfig,
-      groupRegistryJson: config.groupRegistry,
-      packageResolutionJson: '{}',
-      devMode: false,
-      emitterConfigJson: null,
-      selectorAliasesJson: null,
-      globalStyleBlocksJson: null,
-      pathAliasesJson: null,
-      keyframesJson: null,
-      staticCssJson: null,
-      conditionAliasesJson: null,
-      externalDirsJson: null,
-      transformSourcesJson: null,
-    })
-  );
+  const manifestJson: string = engineApi().analyzeProject({
+    filesJson: JSON.stringify([{ path, source }]),
+    scalesJson: theme.scalesJson,
+    variableMapJson: theme.variableMapJson,
+    contextualVarsJson: theme.contextualVarsJson || null,
+    propConfigJson: config.propConfig,
+    groupRegistryJson: config.groupRegistry,
+    packageResolutionJson: '{}',
+    devMode: false,
+    emitterConfigJson: null,
+    selectorAliasesJson: null,
+    globalStyleBlocksJson: null,
+    pathAliasesJson: null,
+    keyframesJson: null,
+    staticCssJson: null,
+    conditionAliasesJson: null,
+    externalDirsJson: null,
+    transformSourcesJson: null,
+  });
   return JSON.parse(manifestJson);
 }

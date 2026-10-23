@@ -1,7 +1,6 @@
 import {
   AnimusConfigError,
   assertSupportedEngine,
-  buildAnalyzeProjectArgs,
   contentHash,
   parseFilesJson,
 } from '@animus-ui/extract/pipeline';
@@ -212,9 +211,7 @@ function hydrateSession(
     } catch {
       return { kind: 'torn' };
     }
-    const manifestJson = engine.analyzeProject(
-      ...buildAnalyzeProjectArgs(inputs)
-    );
+    const manifestJson = engine.analyzeProject(inputs);
     hydrations.set(buildId, { commitKey, manifestJson, fileHashes });
     return {
       kind: 'ok',

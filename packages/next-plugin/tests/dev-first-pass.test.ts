@@ -6,7 +6,7 @@ import { nativeFunctions } from '../../extract/tests/native-functions';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
+  analyzeProject: vi.fn<EngineApi['analyzeProject']>(),
   clearAnalysisCache: vi.fn(),
 }));
 
@@ -39,7 +39,7 @@ import { AnimusWebpackPlugin } from '../src/plugin';
 import { ANIMUS_TURBOPACK_RULE_GLOB } from '../src/turbopack-config';
 import { withAnimus } from '../src/with-animus';
 
-import type { AnalyzeProjectArgs } from '../../extract/pipeline';
+import type { EngineApi } from '../../extract/pipeline';
 import type { AnimusMode } from '../../extract/pipeline/core-options';
 
 /**
@@ -48,15 +48,13 @@ import type { AnimusMode } from '../../extract/pipeline/core-options';
  * prunes it.
  */
 
-const DEV_MODE_SLOT = 7;
-
 let restoreGlobals: () => void;
 let savedCwd: string;
 
 function firstPassDevMode(): boolean {
   const calls = mocks.analyzeProject.mock.calls;
   expect(calls).toHaveLength(1);
-  return calls[0][DEV_MODE_SLOT];
+  return calls[0][0].devMode;
 }
 
 beforeEach(() => {

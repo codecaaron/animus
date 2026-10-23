@@ -72,17 +72,25 @@ function createRoot(withArtifact: boolean) {
   publishRecord(state, { manifestJson: JSON.stringify({ components: {} }) });
   setEngineFactoryLoaderForTests(() => unreachableNative);
   // An analysis of no files: every path the loader sees is outside it.
-  engineApi(sessionKey(SESSION_ID, root)).analyzeProject(
-    '[]',
-    '{}',
-    '{}',
-    null,
-    '{}',
-    '{}',
-    '{}',
-    false,
-    '{}'
-  );
+  engineApi(sessionKey(SESSION_ID, root)).analyzeProject({
+    filesJson: '[]',
+    scalesJson: '{}',
+    variableMapJson: '{}',
+    contextualVarsJson: null,
+    propConfigJson: '{}',
+    groupRegistryJson: '{}',
+    packageResolutionJson: '{}',
+    devMode: false,
+    emitterConfigJson: '{}',
+    selectorAliasesJson: null,
+    globalStyleBlocksJson: null,
+    pathAliasesJson: null,
+    keyframesJson: null,
+    staticCssJson: null,
+    conditionAliasesJson: null,
+    externalDirsJson: null,
+    transformSourcesJson: null,
+  });
   state.artifactDir = sessionDir;
   const epochPath = replacementEpochPath(sessionDir);
   if (withArtifact) {

@@ -15,11 +15,7 @@ export {
   withVendorLayer,
 } from './quarantine';
 export type {
-  AnalyzeProjectArgs,
   AnalyzeProjectInputs,
-} from './analyze-project-args';
-export { buildAnalyzeProjectArgs } from './analyze-project-args';
-export type {
   EngineApi,
   TransformFileResult,
   EngineAdapterDeps,

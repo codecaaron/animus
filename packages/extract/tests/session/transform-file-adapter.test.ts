@@ -49,26 +49,27 @@ function nativeTransformingWith(
 
 /** The build's engine analyzes `files`, as a pipeline run would. */
 function analyze(files: Array<[string, string]>): void {
-  engineApi(key).analyzeProject(
-    JSON.stringify(files.map(([path, source]) => ({ path, source }))),
-    '{}',
-    '{}',
-    null,
-    '{}',
-    '{}',
-    '{}',
-    false,
-    '{}',
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null
-  );
+  engineApi(key).analyzeProject({
+    filesJson: JSON.stringify(
+      files.map(([path, source]) => ({ path, source }))
+    ),
+    scalesJson: '{}',
+    variableMapJson: '{}',
+    contextualVarsJson: null,
+    propConfigJson: '{}',
+    groupRegistryJson: '{}',
+    packageResolutionJson: '{}',
+    devMode: false,
+    emitterConfigJson: '{}',
+    selectorAliasesJson: null,
+    globalStyleBlocksJson: null,
+    pathAliasesJson: null,
+    keyframesJson: null,
+    staticCssJson: null,
+    conditionAliasesJson: null,
+    externalDirsJson: null,
+    transformSourcesJson: null,
+  });
 }
 
 beforeEach(() => {

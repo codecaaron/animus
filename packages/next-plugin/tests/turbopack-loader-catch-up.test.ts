@@ -226,7 +226,7 @@ beforeEach(() => {
   mocks.loadSystemModule.mockReset();
   mocks.analyzeProject
     .mockReset()
-    .mockImplementation((filesJson: string) => replayedManifest(filesJson));
+    .mockImplementation(({ filesJson }) => replayedManifest(filesJson));
   mocks.clearAnalysisCache.mockReset();
   mocks.transformFile
     .mockReset()
@@ -653,7 +653,9 @@ describe('extensions re-deliver with the generation of the file they extend', ()
     vi.stubEnv('NODE_ENV', 'development');
     // A worker started under it.
     __resetTurbopackLoaderStateForTests?.();
-    mocks.analyzeProject.mockImplementation(lineageManifest);
+    mocks.analyzeProject.mockImplementation(({ filesJson }) =>
+      lineageManifest(filesJson)
+    );
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -756,7 +758,9 @@ describe('extensions re-deliver with the generation of the file they extend', ()
     runLoader({ root, relPath: CHILD, source: CHILD_SOURCE });
 
   test("with a byte-identical manifest, the extension module changes with its parent's analyzed content and not with an unrelated file's", async () => {
-    mocks.analyzeProject.mockImplementation(fixedManifest);
+    mocks.analyzeProject.mockImplementation(({ filesJson }) =>
+      fixedManifest(filesJson)
+    );
     const root = makeTempRoot('animus-turbo-lineage-');
     commit(root, 1, fixedGeneration(parentSource(3), 1));
     const first = await childAt(root);
@@ -774,7 +778,9 @@ describe('extensions re-deliver with the generation of the file they extend', ()
   });
 
   test("an extension that waited emits the adopted generation's lineage, not the one it started from", async () => {
-    mocks.analyzeProject.mockImplementation(fixedManifest);
+    mocks.analyzeProject.mockImplementation(({ filesJson }) =>
+      fixedManifest(filesJson)
+    );
     const fresh = makeTempRoot('animus-turbo-lineage-');
     commit(fresh, 1, fixedGeneration(parentSource(3), 1));
     const before = await childAt(fresh);
@@ -799,7 +805,9 @@ describe('extensions re-deliver with the generation of the file they extend', ()
   });
 
   test('an ancestor first named by the adopted generation becomes a dependency', async () => {
-    mocks.analyzeProject.mockImplementation(fixedManifest);
+    mocks.analyzeProject.mockImplementation(({ filesJson }) =>
+      fixedManifest(filesJson)
+    );
     const root = makeTempRoot('animus-turbo-lineage-');
     const { sessionDir } = commit(root, 1, fixedGeneration(parentSource(3), 1));
     writeFileSync(join(root, PARENT), PARENT_ON_BASE);
@@ -821,7 +829,9 @@ describe('extensions re-deliver with the generation of the file they extend', ()
   test.each(['test', undefined, 'production', 'staging'])(
     'outside development (NODE_ENV=%s) the extension neither waits, depends on its parent nor carries lineage',
     async (value) => {
-      mocks.analyzeProject.mockImplementation(fixedManifest);
+      mocks.analyzeProject.mockImplementation(({ filesJson }) =>
+        fixedManifest(filesJson)
+      );
       const root = makeTempRoot('animus-turbo-lineage-');
       const { sessionDir } = commit(
         root,
@@ -849,7 +859,9 @@ describe('extensions re-deliver with the generation of the file they extend', ()
   /** An edited parent on disk under an idle status: the dev path depends on
    *  the parent and carries lineage, the build path does neither. */
   function editedParentAtRest(development: boolean, nodeEnv: string) {
-    mocks.analyzeProject.mockImplementation(fixedManifest);
+    mocks.analyzeProject.mockImplementation(({ filesJson }) =>
+      fixedManifest(filesJson)
+    );
     const root = makeTempRoot('animus-turbo-lineage-');
     const { sessionDir } = commit(root, 1, fixedGeneration(parentSource(3), 1));
     writeFileSync(join(root, PARENT), parentSource(4));

@@ -315,7 +315,11 @@ export function armCannedEngine(
   extra?.();
 }
 
-export function cannedAnalyzeProject(filesJson: string): string {
+export function cannedAnalyzeProject({
+  filesJson,
+}: {
+  filesJson: string;
+}): string {
   const files = parseCannedAnalysisFiles(filesJson);
   const parent = files.find((f) => f.path === PARENT_REL);
   const generation = parent?.source.match(/shape:(\w+)/)?.[1] ?? 'G?';

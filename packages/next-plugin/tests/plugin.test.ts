@@ -36,13 +36,14 @@ import { withAnimus } from '../src/with-animus';
 import type { AnimusNextOptions } from '../src/types';
 import type { JsonObject, JsonValue } from '@animus-ui/assertions';
 import type {
-  AnalyzeProjectArgs,
+  AnalyzeProjectInputs,
+  EngineApi,
   ManifestDiagnostic,
 } from '@animus-ui/extract/pipeline';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
+  analyzeProject: vi.fn<EngineApi['analyzeProject']>(),
   clearAnalysisCache: vi.fn(),
 }));
 
@@ -271,10 +272,10 @@ function artifactPath(
   return join(sessionArtifactDir(root, plugin.sessionId), name);
 }
 
-function analyzeCall(index: number): AnalyzeProjectArgs {
+function analyzeCall(index: number): AnalyzeProjectInputs {
   const call = mocks.analyzeProject.mock.calls[index];
   if (!call) throw new Error(`Missing analyzeProject call ${index}`);
-  return call;
+  return call[0];
 }
 
 interface AnalyzeFileFixture {
@@ -303,8 +304,8 @@ function readJsonString(
   return String(value);
 }
 
-function parseFiles(args: AnalyzeProjectArgs): AnalyzeFileFixture[] {
-  const parsed: JsonValue = JSON.parse(args[0]);
+function parseFiles(args: AnalyzeProjectInputs): AnalyzeFileFixture[] {
+  const parsed: JsonValue = JSON.parse(args.filesJson);
   if (!Array.isArray(parsed)) {
     throw new Error('analyzeProject files must be a JSON array');
   }
@@ -407,22 +408,25 @@ describe('production run (full pipeline)', () => {
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
 
     const args = analyzeCall(0);
-    expect(args[1]).toBe(SYSTEM_CONFIG.scalesJson);
-    expect(args[2]).toBe(SYSTEM_CONFIG.variableMapJson);
-    expect(args[3]).toBeNull();
-    expect(args[4]).toBe(SYSTEM_CONFIG.propConfig);
-    expect(args[5]).toBe(SYSTEM_CONFIG.groupRegistry);
-    expect(args[6]).toBe('{}');
-    expect(args[7]).toBe(false);
-    expect(parseRequiredJsonObject(args[8], 'emitter config')).toEqual({
+    expect(args.scalesJson).toBe(SYSTEM_CONFIG.scalesJson);
+    expect(args.variableMapJson).toBe(SYSTEM_CONFIG.variableMapJson);
+    expect(args.contextualVarsJson).toBeNull();
+    expect(args.propConfigJson).toBe(SYSTEM_CONFIG.propConfig);
+    expect(args.groupRegistryJson).toBe(SYSTEM_CONFIG.groupRegistry);
+    expect(args.packageResolutionJson).toBe('{}');
+    expect(args.devMode).toBe(false);
+    expect(
+      parseRequiredJsonObject(args.emitterConfigJson, 'emitter config')
+    ).toEqual({
       runtime_import: '@animus-ui/system/runtime',
       css_module_id: '.animus/styles.css',
       system_props_module_id: 'virtual:animus/system-props',
     });
-    expect(args[9]).toBeNull();
-    expect(args[10]).toBeNull();
-    expect(args[11]).toBeNull();
-    expect(parseRequiredJsonObject(args[12], 'path aliases')).toEqual({
+    expect(args.selectorAliasesJson).toBeNull();
+    expect(args.globalStyleBlocksJson).toBeNull();
+    expect(
+      parseRequiredJsonObject(args.pathAliasesJson, 'path aliases')
+    ).toEqual({
       aliases: [
         {
           pattern: '@components/',
@@ -432,7 +436,7 @@ describe('production run (full pipeline)', () => {
         { pattern: '@sys', replacement: 'src/system.ts', type: 'exact' },
       ],
     });
-    expect(args[13]).toBeNull();
+    expect(args.keyframesJson).toBeNull();
 
     const files = parseFiles(args);
     expect(files.map((f) => f.path).sort()).toEqual([
@@ -460,17 +464,17 @@ describe('production run (full pipeline)', () => {
 
     await runHandlers[0](compiler);
 
-    expect(parseRequiredJsonObject(analyzeCall(0)[12], 'path aliases')).toEqual(
-      {
-        aliases: [
-          {
-            pattern: '@first/',
-            replacement: 'src/components/',
-            type: 'prefix',
-          },
-        ],
-      }
-    );
+    expect(
+      parseRequiredJsonObject(analyzeCall(0).pathAliasesJson, 'path aliases')
+    ).toEqual({
+      aliases: [
+        {
+          pattern: '@first/',
+          replacement: 'src/components/',
+          type: 'prefix',
+        },
+      ],
+    });
   });
 
   test('an offline system-props change moves the replacement epoch', async () => {
@@ -987,7 +991,7 @@ describe('watch mode (dev/HMR)', () => {
     await watchRunHandlers[0](compiler);
     expect(mocks.loadSystemModule).toHaveBeenCalledTimes(1);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
-    expect(analyzeCall(0)[7]).toBe(false);
+    expect(analyzeCall(0).devMode).toBe(false);
     const clearsAfterFull = mocks.clearAnalysisCache.mock.calls.length;
 
     nextComponentCss = '.btn{margin:16;}';
@@ -999,8 +1003,8 @@ describe('watch mode (dev/HMR)', () => {
     expect(mocks.clearAnalysisCache.mock.calls.length).toBe(clearsAfterFull);
 
     const args = analyzeCall(1);
-    expect(args[7]).toBe(true);
-    expect(args[6]).toBe('{}');
+    expect(args.devMode).toBe(true);
+    expect(args.packageResolutionJson).toBe('{}');
     const files = parseFiles(args);
     const button = files.find((f) => f.path === 'src/Button.tsx');
     expect(button?.source).toBe(BUTTON_SOURCE_CHANGED);
@@ -1048,7 +1052,7 @@ describe('watch mode (dev/HMR)', () => {
 
     expect(mocks.loadSystemModule).toHaveBeenCalledTimes(2);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
-    expect(analyzeCall(1)[7]).toBe(false);
+    expect(analyzeCall(1).devMode).toBe(false);
     expect(mocks.clearAnalysisCache.mock.calls.length).toBeGreaterThan(
       clearsBefore
     );
@@ -1124,7 +1128,7 @@ describe('watch mode (dev/HMR)', () => {
 
     await owner.watchRunHandlers[0](owner.compiler);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
-    expect(analyzeCall(1)[7]).toBe(true);
+    expect(analyzeCall(1).devMode).toBe(true);
   });
 
   test('a non-owning instance forwards its real modified set to the owner', async () => {

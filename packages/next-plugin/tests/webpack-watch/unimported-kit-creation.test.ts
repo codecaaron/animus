@@ -134,7 +134,7 @@ function parseAnalyzedFiles(filesJson: string): AnalyzedFile[] {
 
 function analyzedFileSets(): AnalyzedFile[][] {
   return mocks.analyzeProject.mock.calls.map((call) =>
-    parseAnalyzedFiles(call[0])
+    parseAnalyzedFiles(call[0].filesJson)
   );
 }
 

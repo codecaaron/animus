@@ -108,8 +108,8 @@ async function buildWithUnlinkedKit(
             }
       );
     },
-    analyzeProject: (...args: unknown[]) => {
-      analysed = String(args[0]);
+    analyzeProject: ({ filesJson }: { filesJson: string }) => {
+      analysed = filesJson;
       return JSON.stringify(makeManifest());
     },
   }));

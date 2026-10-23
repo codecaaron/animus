@@ -10,7 +10,7 @@ import { fakeEngineApi, nativeFunctions } from '../native-functions';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
+  analyzeProject: vi.fn<EngineApi['analyzeProject']>(),
   clearAnalysisCache: vi.fn(),
 }));
 
@@ -44,7 +44,7 @@ import {
   SYSTEM_CONFIG,
 } from './session-fixtures';
 
-import type { AnalyzeProjectArgs } from '../../pipeline';
+import type { EngineApi } from '../../pipeline';
 
 let restoreGlobals: () => void;
 
@@ -210,7 +210,7 @@ describe('a host runtime import', () => {
     await expect(session.runFullPipeline()).rejects.toThrow(
       /runtimeImport '@acme\/runtime' is valid only when every extracted terminal is \.asClass\(\)/
     );
-    const emitterJson = mocks.analyzeProject.mock.calls[0][8];
+    const emitterJson = mocks.analyzeProject.mock.calls[0][0].emitterConfigJson;
     expect(JSON.parse(emitterJson ?? '{}').runtime_import).toBe(
       '@acme/runtime'
     );
@@ -282,7 +282,7 @@ describe('a session that keeps its artifacts in memory', () => {
 
 describe("a host's engine and logger", () => {
   test('the session analyses through the host engine and reports to the host logger', async () => {
-    const hostAnalyze = vi.fn<(...args: AnalyzeProjectArgs) => string>(() =>
+    const hostAnalyze = vi.fn<EngineApi['analyzeProject']>(() =>
       buildManifest({})
     );
     setEngineApiOverride(null);
@@ -324,7 +324,7 @@ describe("a host's engine and logger", () => {
   });
 
   test('ANIMUS_TIMING_JSON prints the timings without turning on slot provenance', async () => {
-    const hostAnalyze = vi.fn<(...args: AnalyzeProjectArgs) => string>(() =>
+    const hostAnalyze = vi.fn<EngineApi['analyzeProject']>(() =>
       buildManifest({})
     );
     setEngineApiOverride(null);
@@ -387,10 +387,8 @@ describe("a host's engine and logger", () => {
     // the gatherer does.
     const engine = requireNativeEngine();
     let advanced = 0;
-    const hostAnalyze = vi.fn<(...args: AnalyzeProjectArgs) => string>(
-      (...args) => {
-        // `probeEvidence`, the last of `AnalyzeProjectArgs`.
-        const gather = args[25];
+    const hostAnalyze = vi.fn<EngineApi['analyzeProject']>(
+      (_inputs, gather) => {
         const start = performance.now();
         const clock = vi
           .spyOn(performance, 'now')

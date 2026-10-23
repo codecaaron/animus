@@ -85,7 +85,7 @@ async function buildWithUserExcludes(excludeOrLayout: string[] | BuildLayout) {
           imports: systemImportFacts(systemSource),
         },
       }),
-      analyzeProject: (filesJson: string) => {
+      analyzeProject: ({ filesJson }) => {
         // SAFETY: the host's own JSON.stringify of its analysis entries.
         const files = JSON.parse(filesJson) as Array<{ path: string }>;
         analyzed.push(...files.map((file) => file.path));

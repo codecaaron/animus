@@ -58,25 +58,27 @@ beforeAll(async () => {
 function analyze(staticCssJson: string | null) {
   const api = makeApi();
   api.clearAnalysisCache();
-  const manifestJson: string = api.analyzeProject(
-    JSON.stringify([
+  const manifestJson: string = api.analyzeProject({
+    filesJson: JSON.stringify([
       { path: 'tests/fixtures/reconciliation.tsx', source: FIXTURE },
     ]),
-    theme.scalesJson,
-    theme.variableMapJson,
-    theme.contextualVarsJson || null,
-    config.propConfig,
-    config.groupRegistry,
-    '{}',
-    false,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    staticCssJson
-  );
+    scalesJson: theme.scalesJson,
+    variableMapJson: theme.variableMapJson,
+    contextualVarsJson: theme.contextualVarsJson || null,
+    propConfigJson: config.propConfig,
+    groupRegistryJson: config.groupRegistry,
+    packageResolutionJson: '{}',
+    devMode: false,
+    emitterConfigJson: null,
+    selectorAliasesJson: null,
+    globalStyleBlocksJson: null,
+    pathAliasesJson: null,
+    keyframesJson: null,
+    staticCssJson,
+    conditionAliasesJson: null,
+    externalDirsJson: null,
+    transformSourcesJson: null,
+  });
   // SAFETY: `manifestJson` is this call's own `analyzeProject` return, serde
   // output from the Rust `AnalyzeResult` that `manifest-schema.ts` mirrors.
   const manifest = JSON.parse(manifestJson) as ProjectManifest;

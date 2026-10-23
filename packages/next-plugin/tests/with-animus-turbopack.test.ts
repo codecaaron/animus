@@ -58,8 +58,6 @@ setEngineApiOverride(() => ({
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
 
-const DEV_MODE_SLOT = 7;
-
 let restoreGlobals: () => void;
 let savedCwd: string;
 
@@ -440,7 +438,7 @@ describe('withAnimus Turbopack wiring', () => {
     expect(
       turbopackOptions(config).rules?.[ANIMUS_TURBOPACK_RULE_GLOB]
     ).toBeDefined();
-    expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
+    expect(mocks.analyzeProject.mock.calls[0][0].devMode).toBe(false);
   });
 
   test('an outer wrapper that copies the config into an object keeps its own keys and loses the Animus rules; applied to nextConfig first, both survive', async () => {
@@ -495,7 +493,7 @@ describe('withAnimus Turbopack wiring', () => {
     }
     // NODE_ENV is "test" here: a build, analyzed once for both.
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
-    expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
+    expect(mocks.analyzeProject.mock.calls[0][0].devMode).toBe(false);
   });
 });
 

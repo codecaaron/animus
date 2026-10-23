@@ -1,4 +1,3 @@
-import { buildAnalyzeProjectArgs } from './analyze-project-args';
 import { kitDescriptorDiagnostics } from './kit-descriptor';
 import {
   collectSelectorAliasDiagnostics,
@@ -15,9 +14,8 @@ import {
 import { checkCustomProperties } from './property-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
-import type { AnalyzeProjectInputs } from './analyze-project-args';
 import type { FontPreloadEntry } from './core-options';
-import type { EngineApi } from './engine-adapter';
+import type { AnalyzeProjectInputs, EngineApi } from './engine-adapter';
 import type { HostAssetClassification } from './host-assets';
 import type { HostLoadExpander } from './host-expansions';
 import type { KitDescriptorRecord } from './kit-descriptor';
@@ -390,9 +388,7 @@ export function runProjectAnalysis(
         probeEvidence += performance.now() - start;
       }
     });
-  const manifestJson: string = analyzeProject(
-    ...buildAnalyzeProjectArgs(inputs, timedGather)
-  );
+  const manifestJson: string = analyzeProject(inputs, timedGather);
   const extractMs = Math.round(performance.now() - t);
   const probeEvidenceMs = Math.round(probeEvidence);
   // SAFETY: the engine's own phase table, `{ phase: ms }`.

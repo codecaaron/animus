@@ -7,7 +7,7 @@ import { fakeEngineApi, nativeFunctions } from '../native-functions';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
+  analyzeProject: vi.fn<EngineApi['analyzeProject']>(),
   clearAnalysisCache: vi.fn(),
   moduleSpecifiers: vi.fn<(files: string, aliases?: string) => string>(),
 }));
@@ -34,7 +34,7 @@ import {
   SYSTEM_CONFIG,
 } from './session-fixtures';
 
-import type { AnalyzeProjectArgs } from '../../pipeline';
+import type { EngineApi } from '../../pipeline';
 
 let restoreGlobals: () => void;
 
@@ -48,8 +48,10 @@ beforeEach(() => {
     );
   // As the engine's `prepare` names them: each relative specifier, joined
   // to its importer's directory.
-  mocks.analyzeProject.mockReset().mockImplementation((...args) => {
-    const files: Array<{ path: string; source: string }> = JSON.parse(args[0]);
+  mocks.analyzeProject.mockReset().mockImplementation((inputs, gather) => {
+    const files: Array<{ path: string; source: string }> = JSON.parse(
+      inputs.filesJson
+    );
     const bases = files.flatMap(({ path, source }) =>
       [...source.matchAll(/from '(\.[^']+)'/g)].map((match) =>
         posix.join(posix.dirname(path), match[1])
@@ -70,8 +72,7 @@ beforeEach(() => {
         })
       )
     );
-    // `probeEvidence`, the last of `AnalyzeProjectArgs`.
-    args[25]?.(bases, 'identity', loads);
+    gather?.(bases, 'identity', loads);
     return buildManifest({});
   });
 });

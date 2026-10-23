@@ -50,17 +50,25 @@ beforeEach(() => {
   publishRecord(state, { manifestJson: '{}' });
   setEngineFactoryLoaderForTests(() => unreachableNative);
   // An analysis of no files: every path the loader sees is outside it.
-  engineApi(sessionKey(BUILD, ROOT)).analyzeProject(
-    '[]',
-    '{}',
-    '{}',
-    null,
-    '{}',
-    '{}',
-    '{}',
-    false,
-    '{}'
-  );
+  engineApi(sessionKey(BUILD, ROOT)).analyzeProject({
+    filesJson: '[]',
+    scalesJson: '{}',
+    variableMapJson: '{}',
+    contextualVarsJson: null,
+    propConfigJson: '{}',
+    groupRegistryJson: '{}',
+    packageResolutionJson: '{}',
+    devMode: false,
+    emitterConfigJson: '{}',
+    selectorAliasesJson: null,
+    globalStyleBlocksJson: null,
+    pathAliasesJson: null,
+    keyframesJson: null,
+    staticCssJson: null,
+    conditionAliasesJson: null,
+    externalDirsJson: null,
+    transformSourcesJson: null,
+  });
 });
 
 afterEach(() => {

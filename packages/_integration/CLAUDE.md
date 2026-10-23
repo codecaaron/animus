@@ -16,9 +16,8 @@ same adapter the production plugins use (`createEngineApi` from
 variables):
 
 1. `analyzeProject(filesJson, overrides?)` — named `AnalyzeProjectInputs` (the
-   production input surface) serialized into the positional NAPI tuple by the
-   production `buildAnalyzeProjectArgs`, then handed to the shared adapter,
-   which builds `EngineOptions`, constructs a fresh `ExtractEngine`, and
+   production input surface) handed whole to the shared adapter, which builds
+   `EngineOptions`, constructs a fresh `ExtractEngine`, and
    returns its `analyzePrepared()` manifest JSON. Fixture defaults supply the shared
    theme/config inputs and `null` for every optional engine input; call sites
    override only the inputs their case exercises. A new engine input reaches
