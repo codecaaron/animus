@@ -129,6 +129,16 @@ describe('mdxUsageSource', () => {
       '<StoryEmbed id="x" />\nimport A from \'./a.mdx\';\n\n# Title\nexport const b = 1;\n\nText\n',
       [2, 5],
     ],
+    [
+      'a JSX flow closing tag ends its block after inner paragraph text',
+      "<div>\ntext\n</div>\nimport R from './r';\n\n<R />\n",
+      [4],
+    ],
+    [
+      'a line blank but for its quote marker ends the quoted paragraph',
+      "> text\n>\nimport R from './r';\n\n<R />\n",
+      [3],
+    ],
   ])('%s', (_rule, source, rows) => {
     expect(esmRows(source).rows).toEqual(rows);
   });

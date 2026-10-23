@@ -92,10 +92,10 @@ const FENCE = block('(`{3,}|~{3,})', '');
 /** A line that opens an ESM block: `import` or `export` and a space at its
  *  first column. */
 const ESM = /^(?:import|export) /;
-/** The lines after which a paragraph is closed: blank, an ATX heading, a
- *  thematic break. */
+/** The lines after which a paragraph is closed: blank, blank but for its
+ *  quote markers, an ATX heading, a thematic break. */
 const CLOSES_PARAGRAPH = new RegExp(
-  `^\\s*$|^${CONTAINER}#{1,6}(?:\\s|$)|^${CONTAINER}([-*_])(?: *\\1){2,}\\s*$`
+  `^\\s*$|^[ \\t]*(?:(?:[-*+]|\\d{1,9}[.)])[ \\t]+|>[ \\t]*)*>\\s*$|^${CONTAINER}#{1,6}(?:\\s|$)|^${CONTAINER}([-*_])(?: *\\1){2,}\\s*$`
 );
 const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)\s*$/;
 const CONTAINER_PREFIX = new RegExp(`^${CONTAINER}`);
@@ -187,9 +187,9 @@ function esmBlockEnd(
 /**
  * The last row of the JSX flow line at `row`: content of nothing but tags
  * and `{expressions}` after its list and quote markers, possibly spanning
- * lines, which closes a paragraph as a block does. Undefined for any other
- * line, and for one whose tag or expression does not close, which the
- * inline scan reports.
+ * lines, which interrupts and closes a paragraph as a block does.
+ * Undefined for any other line, and for one whose tag or expression does
+ * not close, which the inline scan reports.
  */
 function flowLineEnd(
   source: string,
@@ -511,9 +511,7 @@ function mdxToTsx(source: string, filename: string) {
         out[line] = lines[line]!;
       }
     } else {
-      const flowEnd: number | undefined = paragraph
-        ? undefined
-        : flowLineEnd(source, lines, rowStarts, line);
+      const flowEnd = flowLineEnd(source, lines, rowStarts, line);
       const last = flowEnd ?? line;
       for (; line <= last; line++) inline[line] = true;
       paragraph =
