@@ -271,19 +271,27 @@ export interface CssAuditReport {
     /** How sites were matched to components: by the engine's tag table,
      *  or by binding name where the manifest carries none. */
     siteEvidence: 'component-id' | 'binding-name';
-    /** Where code may patch a built-in every render reads through (the
-     *  manifest's `patches-intrinsics` usage gaps), the engine keeps every
-     *  variant and state option of every component: how many such sites,
-     *  in how many files, the first few, `file:line`, and every site with
-     *  the rule that makes it count (`prototype-use`, `unowned-write`, …;
-     *  `null` where the manifest names none). The engine records the first
-     *  site of each kind in a file, so the count is a floor. `null` where
-     *  there is none, or the manifest carries no slot provenance. */
+    /** What keeps every variant and state option of every component, as
+     *  the engine holds pruning off. Where code may patch a built-in every
+     *  render reads through (the manifest's `patches-intrinsics` usage
+     *  gaps): how many such sites, in how many files, the first few,
+     *  `file:line`, and every site with the rule that makes it count
+     *  (`prototype-use`, `unowned-write`, …; `null` where the manifest names
+     *  none). The engine records the first site of each kind in a file, so
+     *  the count is a floor. `unseen`: each source the analysis may not
+     *  read, by kind, with what releases it. `null` where nothing holds, or
+     *  the manifest carries no slot provenance. */
     pruningHold: {
       patchSites: number;
       files: number;
       firstSites: string[];
       sites: Array<{ site: string; rule: string | null }>;
+      unseen: Array<{
+        kind: UnseenKind;
+        site: string;
+        detail: string | null;
+        release: string;
+      }>;
     } | null;
   };
 }
@@ -2939,37 +2947,81 @@ export async function runCssAudit(
   };
 }
 
-/** The sites that may patch a built-in every render reads through (the
- *  manifest's `patches-intrinsics` usage gaps): while any is open the
- *  engine keeps every variant and state option of every component. */
+/** The usage gaps where the analysis may not read a source that renders
+ *  (analyze_css.rs's `analysis_gaps`), each with what releases it. */
+const UNSEEN = {
+  'unread-load': {
+    what: 'a computed load that may load a file analysis does not read',
+    one: 'computed load that may load a file analysis does not read',
+    many: 'computed loads that may load a file analysis does not read',
+    release:
+      'analyse every file it may load, or narrow it to the files analysis reads; where the host lists no exact expansion of it, it may load any file',
+  },
+  'skipped-source': {
+    what: 'a source analysis skips',
+    one: 'source analysis skips',
+    many: 'sources analysis skips',
+    release: 'analyse it',
+  },
+  'incomplete-probe': {
+    what: 'an import that opens a file analysis does not read',
+    one: 'import that opens a file analysis does not read',
+    many: 'imports that open a file analysis does not read',
+    release: 'analyse the file it opens, or serve it as an asset',
+  },
+} satisfies Record<
+  string,
+  { what: string; one: string; many: string; release: string }
+>;
+
+type UnseenKind = keyof typeof UNSEEN;
+
+/** What holds pruning off, as the engine holds it: the sites that may
+ *  patch a built-in every render reads through (the manifest's
+ *  `patches-intrinsics` usage gaps), and every source the analysis may not
+ *  read (`UNSEEN`). While any is open the engine keeps every variant and
+ *  state option of every component. */
 function pruningHold(
   manifest: FullProjectManifest,
   root: string | undefined
 ): CssAuditReport['restructures']['pruningHold'] {
-  const patches = (manifest.slot_provenance?.usage ?? []).filter(
-    ({ rule }) => rule === 'patches-intrinsics'
-  );
-  if (patches.length === 0) return null;
-  const sites = patches.map(({ file, at, line, detail }) => {
-    const rule = detail ?? null;
-    if (file === undefined) return { site: '(unnamed file)', rule };
-    if (line !== undefined) return { site: `${file}:${line}`, rule };
-    if (at === undefined || root === undefined) return { site: file, rule };
+  const usage = manifest.slot_provenance?.usage ?? [];
+  const siteOf = ({ file, at, line }: (typeof usage)[number]) => {
+    if (file === undefined) return '(unnamed file)';
+    if (line !== undefined) return `${file}:${line}`;
+    if (at === undefined || root === undefined) return file;
     try {
       const found = lineAtByte(readFileSync(resolve(root, file)), at);
-      return {
-        site: found === null ? `${file}@${at}` : `${file}:${found}`,
-        rule,
-      };
+      return found === null ? `${file}@${at}` : `${file}:${found}`;
     } catch {
-      return { site: `${file}@${at}`, rule };
+      return `${file}@${at}`;
     }
+  };
+  const patches = usage.filter(({ rule }) => rule === 'patches-intrinsics');
+  const unseen = usage.flatMap((gap) => {
+    const entry = ownEntry(UNSEEN, gap.rule);
+    if (entry === undefined) return [];
+    return [
+      {
+        // SAFETY: `ownEntry` found the rule as an own key of `UNSEEN`.
+        kind: gap.rule as UnseenKind,
+        site: siteOf(gap),
+        detail: gap.detail ?? null,
+        release: entry.release,
+      },
+    ];
   });
+  if (patches.length === 0 && unseen.length === 0) return null;
+  const sites = patches.map((patch) => ({
+    site: siteOf(patch),
+    rule: patch.detail ?? null,
+  }));
   return {
     patchSites: patches.length,
     files: new Set(patches.map(({ file }) => file)).size,
     firstSites: sites.slice(0, SITES_SHOWN).map(({ site }) => site),
     sites,
+    unseen,
   };
 }
 
@@ -3163,10 +3215,32 @@ function holdLines(
     ([a, left], [b, right]) =>
       right.length - left.length || String(a).localeCompare(String(b))
   );
+  const unseen = new Map<UnseenKind, string[]>();
+  for (const { kind, site, detail } of hold.unseen) {
+    unseen.set(kind, [
+      ...(unseen.get(kind) ?? []),
+      detail === null ? site : `${site} ${detail}`,
+    ]);
+  }
+  const causes = [
+    ...(hold.patchSites > 0
+      ? [
+          `${plural(hold.patchSites, 'site', 'sites')} in ${plural(hold.files, 'file', 'files')} may patch a built-in every render reads through (patches-intrinsics)`,
+        ]
+      : []),
+    ...[...unseen].map(
+      ([kind, sites]) =>
+        `${plural(sites.length, UNSEEN[kind].one, UNSEEN[kind].many)} (${kind})`
+    ),
+  ];
   return [
-    `Variant and state pruning is off for this build: ${plural(hold.patchSites, 'site', 'sites')} in ${plural(hold.files, 'file', 'files')} may patch a built-in every render reads through (patches-intrinsics), so every component keeps every option. The hold releases only when no site is left: each listed below must be resolved, and no site change below can prune an option until then. The analysis records the first such site of each kind in a file, so resolving one can uncover the next in the same file.`,
+    `Variant and state pruning is off for this build: ${causes.join(', and ')}, so every component keeps every option. The hold releases only when no site is left: each listed below must be resolved, and no site change below can prune an option until then.${hold.patchSites > 0 ? ' The analysis records the first such site of each kind in a file, so resolving one can uncover the next in the same file.' : ''}`,
     ...groups.flatMap(([rule, sites]) => [
       `  ${rule ?? 'rule not recorded'}, ${plural(sites.length, 'site', 'sites')}${reason(rule)}`,
+      ...sites.map((site) => `    ${site}`),
+    ]),
+    ...[...unseen].flatMap(([kind, sites]) => [
+      `  ${kind}, ${plural(sites.length, 'site', 'sites')}: ${UNSEEN[kind].what}; to release it, ${UNSEEN[kind].release}`,
       ...sites.map((site) => `    ${site}`),
     ]),
   ];

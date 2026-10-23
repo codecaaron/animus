@@ -1644,6 +1644,7 @@ test('a derived or runtime-state site gets no site remedy, and the hold blocks e
         { site: 'src/patch.ts:9', rule: 'prop-key-store' },
         { site: 'src/dom.ts:4', rule: 'prototype-use' },
       ],
+      unseen: [],
     });
     // Every site under the rule that makes it count, the count, and what
     // releases the hold.
@@ -1655,6 +1656,77 @@ test('a derived or runtime-state site gets no site remedy, and the hold blocks e
         '    src/dom.ts:4',
         "  prop-key-store, 1 site: a store, under a key a render reads (a prop's, a variant's or a state's name, `children`, `ref`), into an object that may be the prototype every props object inherits",
         '    src/patch.ts:9',
+      ].join('\n')
+    );
+    expect(held.suggestion).toMatch(/^Blocked:/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** Contract: the audit holds pruning wherever the build does. A source the
+ *  analysis may not read (a computed load that may load a file it does not
+ *  read, a skipped source, an import that opens one) holds every option as
+ *  a patch site does: the hold names each by kind, with its site and what
+ *  releases it, and blocks each remedy. */
+test('the audit holds pruning wherever the build does', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
+  try {
+    const site = {
+      name: 'size',
+      values: [],
+      proven: false,
+      dynamicSpan: { start: 0, end: 4 },
+    };
+    const unheld = await forwardAudit(root, site, {});
+    expect(unheld.hold).toBeNull();
+    expect(unheld.suggestion).not.toMatch(/^Blocked:/);
+    const call = 'import.meta.glob("../../content/**/*.mdx")';
+    const held = await forwardAudit(
+      root,
+      site,
+      {},
+      {
+        slot_provenance: {
+          usage: [
+            {
+              rule: 'unread-load',
+              file: 'src/shell/Shell.tsx',
+              line: 102,
+              detail: call,
+            },
+            { rule: 'skipped-source', file: 'src/skipped.tsx' },
+            {
+              rule: 'incomplete-probe',
+              file: 'src/app.tsx',
+              detail: './opened',
+            },
+            { rule: 'uncertain-identity', file: 'src/app.tsx', line: 1 },
+          ],
+          owners: {},
+          props: {},
+          components: {},
+        },
+      }
+    );
+    expect(held.hold).toMatchObject({
+      patchSites: 0,
+      sites: [],
+      unseen: [
+        { kind: 'unread-load', site: 'src/shell/Shell.tsx:102', detail: call },
+        { kind: 'skipped-source', site: 'src/skipped.tsx', detail: null },
+        { kind: 'incomplete-probe', site: 'src/app.tsx', detail: './opened' },
+      ],
+    });
+    expect(held.text).toContain(
+      [
+        'Variant and state pruning is off for this build: 1 computed load that may load a file analysis does not read (unread-load), and 1 source analysis skips (skipped-source), and 1 import that opens a file analysis does not read (incomplete-probe), so every component keeps every option. The hold releases only when no site is left: each listed below must be resolved, and no site change below can prune an option until then.',
+        '  unread-load, 1 site: a computed load that may load a file analysis does not read; to release it, analyse every file it may load, or narrow it to the files analysis reads; where the host lists no exact expansion of it, it may load any file',
+        `    src/shell/Shell.tsx:102 ${call}`,
+        '  skipped-source, 1 site: a source analysis skips; to release it, analyse it',
+        '    src/skipped.tsx',
+        '  incomplete-probe, 1 site: an import that opens a file analysis does not read; to release it, analyse the file it opens, or serve it as an asset',
+        '    src/app.tsx ./opened',
       ].join('\n')
     );
     expect(held.suggestion).toMatch(/^Blocked:/);
