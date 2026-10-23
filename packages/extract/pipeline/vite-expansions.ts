@@ -243,6 +243,17 @@ function importVarsGlob(quasis: readonly string[]): string | undefined {
   return quasis.join('*');
 }
 
+/** The query a file is imported with: with
+ *  `experimental.importGlobRestoreExtension`, any but exactly `?raw` gains
+ *  `&lang.` and the specifier's extension as Rust's `Path::extension` reads
+ *  it, empty where it has none (rolldown 1.2.14's glob plugin). */
+function importQuery(specifier: string, query: string, restore: boolean) {
+  if (!restore || query === '' || query === '?raw') return query;
+  const name = specifier.slice(specifier.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  return `${query}&lang.${dot > 0 ? name.slice(dot + 1) : ''}`;
+}
+
 /** A Vite alias as its resolved configuration holds it. */
 interface ViteAlias {
   find: string | RegExp;
@@ -279,13 +290,16 @@ function aliasMatcher(
  * link. Vite aliases no pattern, but imports each file it expands to by
  * its path from the importer (`./a.js`, `../b.js`) and the load's query
  * through `aliases`: a load one of whose files an alias rewrites lists no
- * expansion. Anything this does not reproduce exactly lists none.
+ * expansion. `restoreQueryExtension` is the configuration's
+ * `experimental.importGlobRestoreExtension`. Anything this does not
+ * reproduce exactly lists none.
  */
 export function viteLoadExpander(
   viteRoot: string | undefined,
   importVars: boolean,
   preserveSymlinks = false,
-  aliases: readonly ViteAlias[] = []
+  aliases: readonly ViteAlias[] = [],
+  restoreQueryExtension = false
 ): HostLoadExpander {
   const rewrites = aliasMatcher(aliases);
   return {
@@ -339,36 +353,40 @@ export function viteLoadExpander(
       if (!globs.some((glob) => !glob.negated)) return undefined;
       // Vite imports each file by its path from the importer, `./` added
       // unless it leaves the directory (a dot-led name such as `.foo.js`
-      // gets one), with the load's query, through the aliases.
-      const aliased = (path: string) => {
+      // gets one), with its query, through the aliases.
+      const specifierOf = (path: string) => {
         const specifier = relative(importerDir, path)
           .split(sep)
           .join(posix.sep);
-        return rewrites(
-          `${specifier.startsWith('../') ? '' : './'}${specifier}${query}`
-        );
+        return `${specifier.startsWith('../') ? '' : './'}${specifier}`;
       };
-      let files: string[];
-      let base: string;
+      const queryOf = (path: string) =>
+        importQuery(specifierOf(path), query, restoreQueryExtension);
+      const aliased = (path: string) =>
+        rewrites(`${specifierOf(path)}${queryOf(path)}`);
+      const listed = new Map<string, ExpandedPath>();
       try {
         const walked = expandGlobs(globs, importer, exhaustive);
         if (walked === undefined || walked.some(aliased)) return undefined;
+        // A walked path runs through the root as the importer is named.
+        const base = preserveSymlinks ? rootDir : real(rootDir);
         // Each by the real path the resolver loads it by, or with
         // `preserveSymlinks` by its path through the walk, links kept, as
-        // Vite then loads it.
-        files = [
-          ...new Set(preserveSymlinks ? walked : walked.map(real)),
-        ].sort();
-        // A walked path runs through the root as the importer is named.
-        base = preserveSymlinks ? rootDir : real(rootDir);
+        // Vite then loads it, with the query its walked path is imported
+        // with.
+        for (const path of walked) {
+          const file = preserveSymlinks ? path : real(path);
+          const expanded = {
+            path: relative(base, file).split(sep).join(posix.sep),
+            query: queryOf(path),
+          };
+          listed.set(`${expanded.path}${expanded.query}`, expanded);
+        }
       } catch {
         // An unreadable directory, or a link that cannot be followed.
         return undefined;
       }
-      return files.map((file) => ({
-        path: relative(base, file).split(sep).join(posix.sep),
-        query,
-      }));
+      return [...listed.keys()].sort().map((id) => listed.get(id)!);
     },
   };
 }
@@ -399,7 +417,8 @@ function defaultImportVars(
 }
 
 /**
- * The expander for a resolved Vite configuration, reading its aliases:
+ * The expander for a resolved Vite configuration, reading its aliases and
+ * whether globs restore query extensions, both shared by every environment:
  * only where every environment is bundled (Vite 8, rolldown's native
  * plugins; an earlier Vite marks none) and resolves links alike
  * (`resolve.preserveSymlinks`).
@@ -409,6 +428,7 @@ function defaultImportVars(
 export function viteHostExpander(config: {
   root: string;
   resolve?: { alias?: readonly ViteAlias[]; preserveSymlinks?: boolean };
+  experimental?: { importGlobRestoreExtension?: boolean };
   environments?: Record<string, ViteEnvironmentReading>;
 }): HostLoadExpander | undefined {
   const environments = Object.values(config.environments ?? {});
@@ -433,6 +453,7 @@ export function viteHostExpander(config: {
       defaultImportVars(environment.build?.dynamicImportVarsOptions)
     ),
     preserved.has(true),
-    config.resolve?.alias
+    config.resolve?.alias,
+    config.experimental?.importGlobRestoreExtension === true
   );
 }

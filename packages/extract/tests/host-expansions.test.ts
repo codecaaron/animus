@@ -321,6 +321,47 @@ describe('viteLoadExpander', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // Contract: with `experimental.importGlobRestoreExtension`, a file
+  // reaches the aliases with its query and `&lang.` and its extension, as
+  // rolldown 1.2.14's glob plugin imports it, exactly `?raw` excepted.
+  test('a restored query extension is aliased with the query', () => {
+    const root = mkdtempSync(join(tmpdir(), 'animus-vite-restore-alias-'));
+    mkdirSync(join(root, 'src'));
+    for (const name of ['a.js', 'noext']) {
+      writeFileSync(join(root, 'src', name), 'export default 1;\n');
+    }
+    const expand = (name: string, query: string, find: RegExp) =>
+      viteHostExpander({
+        root,
+        resolve: { alias: [{ find }] },
+        experimental: { importGlobRestoreExtension: true },
+        environments: { client: { isBundled: true } },
+      })!.expand(
+        {
+          importer: 'src/load.js',
+          start: 0,
+          kind: 'glob',
+          args: { patterns: [`./${name}`], options: { query } },
+        },
+        root
+      );
+    try {
+      expect({
+        url: expand('a.js', '?url', /^\.\/a\.js\?url&lang\.js$/),
+        noExtension: expand('noext', '?url', /^\.\/noext\?url&lang\.$/),
+        raw: expand('a.js', '?raw', /^\.\/a\.js\?raw$/),
+        unaliased: expand('a.js', '?url', /^\.\/a\.js\?url$/),
+      }).toEqual({
+        url: undefined,
+        noExtension: undefined,
+        raw: undefined,
+        unaliased: [{ path: 'src/a.js', query: '?url&lang.js' }],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('viteHostExpander', () => {
