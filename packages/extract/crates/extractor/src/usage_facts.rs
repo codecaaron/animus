@@ -7542,13 +7542,15 @@ impl FactCollector<'_, '_> {
                 if let Some(ValueOrigin::Forwarded(forwarded)) = self.local_origins.get(&symbol) {
                     return Some(forwarded.clone());
                 }
-                (!self.params.empty_defaults.contains(&symbol)).then(|| self.params.props.get(&symbol).cloned()).flatten()
+                (!self.params.empty_defaults.contains(&symbol) && self.params.held_props.contains(&symbol))
+                    .then(|| self.params.props.get(&symbol).cloned())
+                    .flatten()
             }
             Expression::StaticMemberExpression(member) => {
                 let Expression::Identifier(object) = &member.object else { return None };
                 let object = symbol(object)?;
                 let key = member.property.name.to_string();
-                if let Some(component) = self.params.objects.get(&object) {
+                if let Some(component) = self.params.objects.get(&object).filter(|_| self.params.held_props.contains(&object)) {
                     return Some(ForwardedProp {
                         component: component.clone(),
                         prop: key,
@@ -7559,7 +7561,11 @@ impl FactCollector<'_, '_> {
                         default_unread: false,
                     });
                 }
-                let held = self.params.props.get(&object).filter(|_| self.params.object_props.contains(&object))?;
+                let held = self
+                    .params
+                    .props
+                    .get(&object)
+                    .filter(|_| self.params.object_props.contains(&object) && self.params.held_props.contains(&object))?;
                 (!held.defaulted() && held.path.is_empty()).then(|| ForwardedProp { path: vec![key], ..held.clone() })
             }
             Expression::LogicalExpression(logical) if logical.operator.is_coalesce() => {
@@ -7731,13 +7737,13 @@ impl FactCollector<'_, '_> {
                 // A `const` is traced where its value is: it holds no
                 // container, which no origin names.
                 true => {
-                    self.params.props.contains_key(&symbol)
+                    self.params.held_props.contains(&symbol)
                         || matches!(
                             self.local_origins.get(&symbol),
                             Some(ValueOrigin::Forwarded(_) | ValueOrigin::Derived(_) | ValueOrigin::Context(_))
                         )
                 }
-                false => self.params.objects.contains_key(&symbol) || self.params.held_props.contains(&symbol),
+                false => self.params.held_props.contains(&symbol),
             };
         }
         match expression {
@@ -7747,7 +7753,7 @@ impl FactCollector<'_, '_> {
                     && member_path(&member.object).is_some_and(|(root, path)| {
                         path.is_empty()
                             && symbol_of(scoping, root)
-                                .is_some_and(|symbol| self.params.objects.contains_key(&symbol) || self.params.held_props.contains(&symbol))
+                                .is_some_and(|symbol| self.params.held_props.contains(&symbol))
                     })
             }
             Expression::LogicalExpression(logical) => self.traced(&logical.left, false) && self.traced(&logical.right, false),
@@ -7886,8 +7892,9 @@ struct ComponentParams {
     empty_defaults: FxHashSet<SymbolId>,
     rests: FxHashMap<SymbolId, SpreadForward>,
     states: FxHashMap<SymbolId, RuntimeState>,
-    /// Each binding that names a read of React context, and the props a
-    /// member read of which may name the prop (`held_bindings`).
+    /// Each binding that names a read of React context, and the
+    /// destructured props and props objects a read of which may name a
+    /// prop (`held_bindings`).
     contexts: FxHashMap<SymbolId, ContextBinding>,
     held_props: FxHashSet<SymbolId>,
 }
@@ -8218,7 +8225,7 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
             oxc::ast_visit::walk::walk_unary_expression(self, unary);
         }
     }
-    let props: Vec<SymbolId> = params.props.keys().copied().collect();
+    let props: Vec<SymbolId> = params.props.keys().chain(params.objects.keys()).copied().collect();
     (params.contexts, params.held_props) = held_bindings(program, scoping, &props);
     params
 }
@@ -8227,7 +8234,8 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
 /// only the component's callers or a context provider decide: a binding
 /// React's own `useContext` initialises with a module-scope `const` or an
 /// imported context nothing writes (`const seg = useContext(Seg)`, or a
-/// destructuring of it), and each destructured prop in `props`. A root
+/// destructuring of it), and each prop binding in `props` (a destructured
+/// prop, or a props object). A root
 /// reaches a destructuring of what it reaches (nested patterns, literal
 /// defaults and a rest included), and a `const` whose initializer computes
 /// from it through operators (`const o = seg.opts ?? {}`). Every use of each
@@ -8239,9 +8247,10 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
 /// initializer of such a `const`. Any other use, anywhere in the module,
 /// leaves the root naming nothing, with all it reaches: a member written or
 /// called, a spread, an argument, a value stored, returned or iterated, a
-/// default, a class field. A value handed to an element is a read only
-/// where nothing read of the root lies below it: `ctx={seg}` beside
-/// `seg.size` is not. Returns each context binding that names a read, with
+/// default, a class field. A value handed on, to an element or as an
+/// argument of the outermost call in a JSX value or a `const`'s
+/// initializer, is a read only where nothing read of the root lies below
+/// it: `ctx={seg}` or `const r = touch(seg)` beside `seg.size` is not. Returns each context binding that names a read, with
 /// the member path it holds (a `const` of a member chain off one holds that
 /// chain), and the props that hold.
 fn held_bindings(
@@ -8374,7 +8383,14 @@ fn held_bindings(
                 };
                 if joined {
                     self.joined.insert(declarator.span.start);
-                    self.members.extend(bound);
+                    for (symbol, member) in bound {
+                        match self.members.entry(symbol) {
+                            std::collections::hash_map::Entry::Occupied(mut held) => held.get_mut().links.extend(member.links),
+                            std::collections::hash_map::Entry::Vacant(free) => {
+                                free.insert(member);
+                            }
+                        }
+                    }
                     self.changed = true;
                 }
             }
@@ -8386,7 +8402,9 @@ fn held_bindings(
     enum Slot {
         Other,
         Test,
-        /// The value of a JSX attribute or child.
+        /// A value handed on: the value of a JSX attribute or child, or an
+        /// argument of the outermost call in one or in a `const`'s
+        /// initializer.
         Value { outermost: bool },
         /// The initializer of a `const` a root reaches.
         Init { outermost: bool },
@@ -8482,7 +8500,7 @@ fn held_bindings(
                     self.visit_in(Slot::Other, &call.callee);
                     for argument in &call.arguments {
                         match argument.as_expression() {
-                            Some(argument) => self.visit_in(slot.under(), argument),
+                            Some(argument) => self.visit_in(Slot::Value { outermost: false }, argument),
                             None => self.visit_argument(argument),
                         }
                     }

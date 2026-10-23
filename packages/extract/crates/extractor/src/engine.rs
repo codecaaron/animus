@@ -2859,13 +2859,15 @@ mod tests {
     /// where its test is one too. Local code beside them (state, an
     /// imported `let`, a call, a local `let`, a conditional on another
     /// value, a function the component defines) decides the value too, so
-    /// none of these is named. A binding rooted at a context value or a
-    /// destructured prop names an origin only where every use of it, and of
-    /// each member chain rooted at it, is a read in a listed position (a
-    /// test, a comparison, `typeof`, a JSX value under operators, the
-    /// initializer of a `const` held to the same rule): a member written
-    /// or called, a value stored, spread, copied, returned, handed to a
-    /// call or to a child below what is read, all leave it naming nothing.
+    /// none of these is named. A binding rooted at a context value, a
+    /// destructured prop or a props object names an origin only where every
+    /// use of it, and of each member chain rooted at it, is a read in a
+    /// listed position (a test, a comparison, `typeof`, a JSX value under
+    /// operators, the initializer of a `const` held to the same rule): a
+    /// member written or called, a value stored, spread, copied or
+    /// returned, all leave it naming nothing, and a root chain passed to a
+    /// call or to a child names no origin for the reads below it, wherever
+    /// the call sits.
     /// A context is named only by a module-scope `const` or an import, and
     /// an outermost call counts only of a function a plain module-scope
     /// name holds. A literal destructuring default of a context member is
@@ -2922,6 +2924,17 @@ mod tests {
             ("prop-written", "opts.size = 'lg'; return <Box size={opts.size} />;"),
             // A binding redeclared with another value.
             ("redeclared", "var seg = useContext(Seg); var seg = { size: 'lg' }; return <Box size={seg.size} />;"),
+            // A root chain handed to a call that initialises a `const`.
+            ("init-object-assign", "const seg = useContext(Seg); const merged = Object.assign(seg.opts, { size: 'lg' }); return <Box size={seg.opts.size} />;"),
+            ("init-whole-binding", "const seg = useContext(Seg); const done = computeSize(seg); return <Box size={seg.size} />;"),
+            ("init-prop-root", "const done = Object.assign(opts, { size: 'lg' }); return <Box size={opts.size} />;"),
+            // A bare prop whose members are written.
+            ("prop-bare-written", "size.md = 'lg'; return <Box size={size} />;"),
+        ];
+        // The props object is a root as a destructured prop is.
+        let props_object = [
+            ("props-object-assign", "Object.assign(props.opts, { size: 'lg' }); return <Box size={props.opts.size} />;"),
+            ("props-object-alias", "const o = props.opts ?? {}; o.size = 'lg'; return <Box size={props.opts.size} />;"),
         ];
         let files: Vec<serde_json::Value> = cases
             .iter()
@@ -2935,6 +2948,9 @@ mod tests {
                     ),
                 })
             })
+            .chain(props_object.iter().map(|(name, body)| {
+                serde_json::json!({ "path": format!("{name}.tsx"), "source": format!("export function C(props) {{ {body} }}\n") })
+            }))
             .chain([
                 serde_json::json!({ "path": "seg.ts", "source": "import { createContext } from 'react';\nexport const Seg = createContext({ size: 'sm' });\nexport let DEFAULT = 'lg';\nexport const computeSize = () => 'lg';\nexport const sizes = { pick: (v) => v };\nexport function gutterFor(size) { return size; }\n" }),
                 serde_json::json!({ "path": "default.tsx", "source": "import { useContext } from 'react';\nimport { Seg } from './seg';\nexport function C() { const { size = 'lg' } = useContext(Seg); return <Box size={size} />; }\n" }),
@@ -2951,7 +2967,7 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_str(&engine.analyze_full(serde_json::Value::Array(files).to_string(), None).unwrap()).unwrap();
         let attr = |file: &str| manifest["fileFacts"][file]["proven"][0]["element"]["attrs"][0].clone();
-        for (name, _) in cases {
+        for (name, _) in cases.iter().chain(&props_object) {
             let attr = attr(&format!("{name}.tsx"));
             assert_eq!(attr["name"], "size", "{name}: {attr}");
             for origin in ["context", "derived", "forwarded"] {
