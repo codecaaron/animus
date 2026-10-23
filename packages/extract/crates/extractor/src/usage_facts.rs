@@ -8346,14 +8346,51 @@ fn held_bindings(
     /// namespace member (`const Alias = Seg`, `const S = segs.Seg`).
     enum Alias {
         Binding(SymbolId),
-        Member(SymbolId, String),
+        Member(SymbolId),
     }
+    /// The module's `const` aliases, the functions it defines (a
+    /// declaration, or a `const` of a function or arrow) and the bindings
+    /// its parameters bind.
     struct Aliases<'s> {
         scoping: &'s Scoping,
         kind: VariableDeclarationKind,
         found: FxHashMap<SymbolId, Alias>,
+        functions: FxHashSet<SymbolId>,
+        parameters: FxHashSet<SymbolId>,
+    }
+    fn bound(pattern: &BindingPattern<'_>, found: &mut FxHashSet<SymbolId>) {
+        match pattern {
+            BindingPattern::BindingIdentifier(id) => found.extend(id.symbol_id.get()),
+            BindingPattern::ObjectPattern(object) => {
+                for property in &object.properties {
+                    bound(&property.value, found);
+                }
+                if let Some(rest) = &object.rest {
+                    bound(&rest.argument, found);
+                }
+            }
+            BindingPattern::ArrayPattern(array) => {
+                for element in array.elements.iter().flatten() {
+                    bound(element, found);
+                }
+                if let Some(rest) = &array.rest {
+                    bound(&rest.argument, found);
+                }
+            }
+            BindingPattern::AssignmentPattern(assignment) => bound(&assignment.left, found),
+        }
     }
     impl<'a> Visit<'a> for Aliases<'_> {
+        fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
+            if let Some(id) = &function.id {
+                self.functions.extend(id.symbol_id.get());
+            }
+            oxc::ast_visit::walk::walk_function(self, function, flags);
+        }
+        fn visit_formal_parameter(&mut self, parameter: &oxc::ast::ast::FormalParameter<'a>) {
+            bound(&parameter.pattern, &mut self.parameters);
+            oxc::ast_visit::walk::walk_formal_parameter(self, parameter);
+        }
         fn visit_variable_declaration(&mut self, declaration: &oxc::ast::ast::VariableDeclaration<'a>) {
             let outer = std::mem::replace(&mut self.kind, declaration.kind);
             oxc::ast_visit::walk::walk_variable_declaration(self, declaration);
@@ -8363,11 +8400,14 @@ fn held_bindings(
             if let (VariableDeclarationKind::Const, BindingPattern::BindingIdentifier(id), Some(init)) =
                 (self.kind, &declarator.id, &declarator.init)
             {
+                if matches!(init.get_inner_expression(), Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)) {
+                    self.functions.extend(id.symbol_id.get());
+                }
                 let alias = match init.get_inner_expression() {
                     Expression::Identifier(held) => symbol_of(self.scoping, held).map(Alias::Binding),
                     Expression::StaticMemberExpression(member) => match &member.object {
                         Expression::Identifier(object) => {
-                            symbol_of(self.scoping, object).map(|object| Alias::Member(object, member.property.name.to_string()))
+                            symbol_of(self.scoping, object).map(Alias::Member)
                         }
                         _ => None,
                     },
@@ -8383,9 +8423,11 @@ fn held_bindings(
     /// The context each `useContext` or `use` call reads, by an identity
     /// that joins two spellings of one context rather than split them: a
     /// module `const` that `createContext` initialises, followed through
-    /// `const` aliases; an import, or a namespace import's member, by its
-    /// imported name, whatever its source. Any other argument is an
-    /// unknown context (`UNKNOWN`), which may be any of them.
+    /// `const` aliases; and every imported context, under any name, source
+    /// or namespace, as one (`IMPORTED`). Any other argument is an unknown
+    /// context (`UNKNOWN`), which may be any of them. So is the result of a
+    /// call the walk cannot follow (`followed`), which may be a hook of
+    /// another module, or a parameter, that reads one.
     struct ContextKeys<'s> {
         scoping: &'s Scoping,
         /// The hooks as imported, through a default or namespace import,
@@ -8393,22 +8435,58 @@ fn held_bindings(
         hooks: ReactNames,
         module: ModuleContexts,
         aliases: FxHashMap<SymbolId, Alias>,
+        functions: FxHashSet<SymbolId>,
+        parameters: FxHashSet<SymbolId>,
     }
     const UNKNOWN: &str = "\0unknown";
+    const IMPORTED: &str = "\0imported";
+    /// Globals whose functions read no React context.
+    const BUILTINS: [&str; 26] = [
+        "Array", "BigInt", "Boolean", "Date", "Error", "Intl", "JSON", "Map", "Math", "Number", "Object", "Promise", "Reflect",
+        "RegExp", "Set", "String", "Symbol", "WeakMap", "WeakSet", "console", "decodeURIComponent", "encodeURIComponent", "isNaN",
+        "parseFloat", "parseInt", "structuredClone",
+    ];
     impl ContextKeys<'_> {
         /// Whether `expression` names `useContext` or `use`.
         fn hook(&self, expression: &Expression<'_>) -> bool {
             matches!(self.hooks.export(expression), Some("useContext" | "use"))
         }
 
-        /// The context a call of `useContext` or `use` reads.
+        /// Whether the walk follows what `callee` calls: a function the
+        /// module defines, a method of a value that is no import, parameter
+        /// or `this` (what such a value holds, the walk already tracks: a
+        /// literal, a local, another call's result), a React runtime's
+        /// export, or a builtin global's.
+        fn followed(&self, callee: &Expression<'_>) -> bool {
+            let (base, path) = match member_base(callee) {
+                Some(found) => found,
+                None => return false,
+            };
+            let Expression::Identifier(ident) = base else {
+                return !path.is_empty() && !matches!(base, Expression::ThisExpression(_));
+            };
+            match symbol_of(self.scoping, ident) {
+                None => BUILTINS.contains(&ident.name.as_str()) || (ident.name == "React" && !path.is_empty()),
+                Some(symbol) if self.module.react.contains(&symbol) => true,
+                Some(symbol) if path.is_empty() => self.functions.contains(&symbol),
+                Some(symbol) => {
+                    !(self.module.imports.contains_key(&symbol) || self.module.namespaces.contains(&symbol) || self.parameters.contains(&symbol))
+                }
+            }
+        }
+
+        /// The context a call of `useContext` or `use` reads, or, for a
+        /// call the walk cannot follow, an unknown context.
         fn call(&self, call: &CallExpression<'_>) -> Option<String> {
-            self.hook(&call.callee).then(|| match call.arguments.first().and_then(Argument::as_expression) {
+            if !self.hook(&call.callee) {
+                return (!self.followed(&call.callee)).then(|| UNKNOWN.to_string());
+            }
+            Some(match call.arguments.first().and_then(Argument::as_expression) {
                 Some(context) => match context.get_inner_expression() {
                     Expression::Identifier(ident) => symbol_of(self.scoping, ident).map_or(UNKNOWN.to_string(), |symbol| self.binding(symbol, 0)),
                     Expression::StaticMemberExpression(member) => match &member.object {
                         Expression::Identifier(object) => symbol_of(self.scoping, object)
-                            .map_or(UNKNOWN.to_string(), |object| self.member(object, &member.property.name)),
+                            .map_or(UNKNOWN.to_string(), |object| self.member(object)),
                         _ => UNKNOWN.to_string(),
                     },
                     _ => UNKNOWN.to_string(),
@@ -8425,22 +8503,22 @@ fn held_bindings(
         }
 
         fn binding(&self, symbol: SymbolId, depth: usize) -> String {
-            if let Some(imported) = self.module.imports.get(&symbol) {
-                return format!("import\0{imported}");
+            if self.module.imports.contains_key(&symbol) {
+                return IMPORTED.to_string();
             }
             if self.module.created.contains(&symbol) {
                 return format!("local\0{symbol:?}");
             }
             match self.aliases.get(&symbol) {
                 Some(Alias::Binding(held)) if depth < 8 => self.binding(*held, depth + 1),
-                Some(Alias::Member(object, name)) => self.member(*object, name),
+                Some(Alias::Member(object)) => self.member(*object),
                 _ => UNKNOWN.to_string(),
             }
         }
 
-        fn member(&self, object: SymbolId, name: &str) -> String {
+        fn member(&self, object: SymbolId) -> String {
             match self.module.namespaces.contains(&object) {
-                true => format!("import\0{name}"),
+                true => IMPORTED.to_string(),
                 false => UNKNOWN.to_string(),
             }
         }
@@ -8584,6 +8662,23 @@ fn held_bindings(
             self.slot = slot;
             self.visit_expression(expression);
         }
+
+        /// A call's callee and arguments: an outermost call in a JSX value
+        /// or a `const`'s initializer hands its arguments on; any other
+        /// call's arguments escape.
+        fn visit_call_in(&mut self, slot: Slot, call: &CallExpression<'_>) {
+            let outermost = matches!(slot, Slot::Value { outermost: true } | Slot::Init { outermost: true });
+            self.visit_in(Slot::Other, &call.callee);
+            for argument in &call.arguments {
+                match argument.as_expression() {
+                    Some(argument) if outermost => self.visit_in(Slot::Value { outermost: false }, argument),
+                    _ => {
+                        self.slot = Slot::Other;
+                        self.visit_argument(argument);
+                    }
+                }
+            }
+        }
     }
     impl<'a> Visit<'a> for Uses<'_, '_> {
         fn visit_expression(&mut self, expression: &Expression<'a>) {
@@ -8597,24 +8692,31 @@ fn held_bindings(
                 }
                 // A call's result is a root of its context, used where the
                 // call, or a member chain off it, stands.
-                if let Some((key, path)) = contexts.chain(expression) {
-                    match slot {
-                        Slot::Other => {
-                            self.call_escaped.insert(key);
+                if let Some((Expression::CallExpression(call), path)) = member_base(expression) {
+                    if let Some(key) = contexts.call(call) {
+                        let empty = path.is_empty();
+                        match slot {
+                            Slot::Other => {
+                                self.call_escaped.insert(key);
+                            }
+                            Slot::Value { .. } => {
+                                self.call_handed.push((key.clone(), path.clone()));
+                                self.call_reads.push((key, path));
+                            }
+                            Slot::Test | Slot::Init { .. } => self.call_reads.push((key, path)),
                         }
-                        Slot::Value { .. } => {
-                            self.call_handed.push((key.clone(), path.clone()));
-                            self.call_reads.push((key, path));
+                        // A hook's argument names its context; any other
+                        // call's parts are walked as before, the call alone
+                        // in its own slot, a member chain off it in none.
+                        if !contexts.hook(&call.callee) {
+                            return self.visit_call_in(if empty { slot } else { Slot::Other }, call);
                         }
-                        Slot::Test | Slot::Init { .. } => self.call_reads.push((key, path)),
-                    }
-                    if let Some((Expression::CallExpression(call), _)) = member_base(expression) {
                         for argument in &call.arguments {
                             self.slot = Slot::Other;
                             self.visit_argument(argument);
                         }
+                        return;
                     }
-                    return;
                 }
             }
             if let Some((root, path)) = member_path(expression) {
@@ -8676,13 +8778,7 @@ fn held_bindings(
                     }
                 }
                 Expression::CallExpression(call) if matches!(slot, Slot::Value { outermost: true } | Slot::Init { outermost: true }) => {
-                    self.visit_in(Slot::Other, &call.callee);
-                    for argument in &call.arguments {
-                        match argument.as_expression() {
-                            Some(argument) => self.visit_in(Slot::Value { outermost: false }, argument),
-                            None => self.visit_argument(argument),
-                        }
-                    }
+                    self.visit_call_in(slot, call);
                 }
                 _ => oxc::ast_visit::walk::walk_expression(self, expression),
             }
@@ -8726,13 +8822,21 @@ fn held_bindings(
         return (FxHashMap::default(), FxHashSet::default());
     }
     let contexts = hooks.as_ref().map(|hooks| {
-        let mut aliases = Aliases { scoping, kind: VariableDeclarationKind::Var, found: FxHashMap::default() };
+        let mut aliases = Aliases {
+            scoping,
+            kind: VariableDeclarationKind::Var,
+            found: FxHashMap::default(),
+            functions: FxHashSet::default(),
+            parameters: FxHashSet::default(),
+        };
         aliases.visit_program(program);
         ContextKeys {
             scoping,
             hooks: ReactNames::importing(program, scoping, &CONTEXT_HOOKS, &[], true),
             module: literal_contexts(program, hooks),
             aliases: aliases.found,
+            functions: aliases.functions,
+            parameters: aliases.parameters,
         }
     });
     let mut join = Join {
@@ -8837,12 +8941,14 @@ fn held_bindings(
 /// literal, an inline object of literals, or nothing, which no code but the
 /// context then holds (a default held under another name may be written
 /// through it); every module-scope `const` that `createContext` initialises;
-/// each import's imported name; and each namespace import.
+/// each import's imported name; each namespace import; and each import of
+/// a React runtime.
 struct ModuleContexts {
     literal: FxHashSet<SymbolId>,
     created: FxHashSet<SymbolId>,
     imports: FxHashMap<SymbolId, String>,
     namespaces: FxHashSet<SymbolId>,
+    react: FxHashSet<SymbolId>,
 }
 
 fn literal_contexts(program: &Program<'_>, hooks: &ReactNames) -> ModuleContexts {
@@ -8865,11 +8971,18 @@ fn literal_contexts(program: &Program<'_>, hooks: &ReactNames) -> ModuleContexts
         created: FxHashSet::default(),
         imports: FxHashMap::default(),
         namespaces: FxHashSet::default(),
+        react: FxHashSet::default(),
     };
     for statement in &program.body {
         let declaration = match statement {
             Statement::ImportDeclaration(import) => {
+                let runtime = import.source.value.as_str().is_some_and(|source| {
+                    REACT_RUNTIMES.contains(&source) || AUTOMATIC_RUNTIMES.iter().any(|(runtime, _)| *runtime == source)
+                });
                 for specifier in import.specifiers.iter().flatten() {
+                    if runtime {
+                        found.react.extend(specifier.local().symbol_id.get());
+                    }
                     let (local, imported) = match specifier {
                         ImportDeclarationSpecifier::ImportSpecifier(named) => (&named.local, named.imported.name().to_string()),
                         ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => (&default.local, "default".to_string()),

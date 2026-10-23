@@ -3013,11 +3013,12 @@ mod tests {
     /// Contract: every write or escape of a context's value, through any
     /// spelling or a direct call, invalidates that context's named reads. A
     /// context is one identity however the module spells it (a `const`
-    /// alias, an import under another specifier or a namespace, React's hook
-    /// through a namespace, React 19's `use`); a call's result written or
-    /// handed on without a binding is a root like a bound one; and a context
-    /// the walk cannot resolve, or a hook used other than called, may be any
-    /// context. Reads alone, and a write to another known context, keep it.
+    /// alias, React's hook through a namespace, React 19's `use`), and every
+    /// imported context is one, under any name, specifier or namespace; a
+    /// call's result written or handed on without a binding is a root like a
+    /// bound one; and a context the walk cannot resolve, a hook used other
+    /// than called, or the result of a call it cannot follow (an imported
+    /// hook), may be any context. Reads alone, and a write to another known context, keep it.
     #[test]
     fn a_context_written_through_any_spelling_or_a_direct_call_names_no_origin() {
         let read = "const seg = useContext(Seg);";
@@ -3033,6 +3034,11 @@ mod tests {
             ("direct-write", "", "", "useContext(Seg).size = 'lg';"),
             ("direct-assign", "", "", "Object.assign(useContext(Seg), { size: 'lg' });"),
             ("direct-argument", "", "", "touch(useContext(Seg));"),
+            // Every imported context is one, under any name; an imported
+            // hook's result may hold any context.
+            ("reexport-renamed", "import { Other } from './reexport';\n", "", "useContext(Other).size = 'lg';"),
+            ("default-import", "import SegDefault from './seg';\n", "", "useContext(SegDefault).size = 'lg';"),
+            ("imported-hook", "import { useSeg } from './hooks';\n", "", "useSeg().size = 'lg';"),
         ];
         let controls = [
             ("direct-read", "", "", "const label = useContext(Seg).size;"),
@@ -3051,10 +3057,17 @@ mod tests {
             .iter()
             .chain(&controls)
             .map(|(name, prelude, params, body)| serde_json::json!({ "path": format!("{name}.tsx"), "source": source(prelude, params, body) }))
-            .chain([serde_json::json!({
-                "path": "seg.ts",
-                "source": "import { createContext } from 'react';\nexport const Seg = createContext({ size: 'sm' });\nexport const touch = (o) => { o.size = 'lg'; };\n",
-            })])
+            .chain([
+                serde_json::json!({
+                    "path": "seg.ts",
+                    "source": "import { createContext } from 'react';\nexport const Seg = createContext({ size: 'sm' });\nexport default Seg;\nexport const touch = (o) => { o.size = 'lg'; };\n",
+                }),
+                serde_json::json!({ "path": "reexport.ts", "source": "export { Seg as Other } from './seg';\n" }),
+                serde_json::json!({
+                    "path": "hooks.ts",
+                    "source": "import { useContext } from 'react';\nimport { Seg } from './seg';\nexport const useSeg = () => useContext(Seg);\n",
+                }),
+            ])
             .collect();
         let mut engine = ExtractEngine::new(None).unwrap();
         let manifest: serde_json::Value =
