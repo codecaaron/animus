@@ -1215,6 +1215,71 @@ test('a forward whose default the engine cannot read names the callers that leav
   }
 });
 
+/** Contract: a forward of a member of an object prop
+ *  (`splitSize={buttonProps.size}`) reads a caller's inline object member
+ *  by member where the object is no static value as a whole: a literal
+ *  beside a function is read, a member written with a value the engine
+ *  cannot read is not, and a key the object leaves out takes what leaving
+ *  the prop out does, unless a spread or computed key may write it. */
+test("an inline object's literal members are read beside a function", async () => {
+  const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
+  try {
+    const site = {
+      name: 'size',
+      values: [],
+      proven: false,
+      dynamicSpan: { start: 0, end: 4 },
+      forwarded: { component: 'Wrap', prop: 'buttonProps', path: ['size'] },
+    };
+    const passing = (members: JsonValue) =>
+      forwardAudit(
+        root,
+        site,
+        {
+          'src/app.tsx': [
+            {
+              element: {
+                tag: { ident: 'Wrap' },
+                attrs: [
+                  {
+                    name: 'buttonProps',
+                    values: [],
+                    proven: false,
+                    dynamicSpan: { start: 0, end: 4 },
+                    members,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        { tag_declarations: { 'src/app.tsx': { Wrap: 'src/wrap.tsx::Wrap' } } }
+      );
+
+    const split = await passing({
+      readable: { size: 'sm', variant: 'secondary' },
+      unreadable: ['onClick'],
+    });
+    expect(split.reachedByCallers).toEqual([{ axis: 'size', options: ['sm'] }]);
+    expect(split.matchedCallers?.unexplained).toBe(false);
+    expect(split.text).not.toContain(
+      'a matched caller passes a value the audit cannot read'
+    );
+
+    const unreadMember = await passing({ readable: {}, unreadable: ['size'] });
+    expect(unreadMember.matchedCallers?.unexplained).toBe(true);
+
+    const open = await passing({ readable: { tone: 'a' }, open: true });
+    expect(open.matchedCallers?.unexplained).toBe(true);
+
+    const closed = await passing({ readable: { tone: 'a' } });
+    expect(closed.matchedCallers?.unexplained).toBe(false);
+    expect(closed.reachedByCallers).toEqual([{ axis: 'size', options: [] }]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 /** Contract: a derived or runtime-state site gets no site remedy, and the
  *  hold blocks every remedy. A value computed from its component's props
  *  names those props and points at its callers, never a literal at the

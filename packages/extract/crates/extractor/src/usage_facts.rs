@@ -84,6 +84,59 @@ pub struct AttrFact {
     /// does: a variant's default, a state off.
     #[serde(skip)]
     pub absent: bool,
+    /// For an inline object literal that is no static value as a whole
+    /// (`{ onClick: () => …, size: 'small' }`), the members it writes, each
+    /// read on its own. Enriched collection only; evidence for the css
+    /// audit, which no pruning reads.
+    #[serde(skip)]
+    pub members: Option<ObjectMembers>,
+}
+
+/// The members an inline object literal writes, each read on its own: the
+/// keys whose values are literals, and the keys it writes with a value the
+/// walk cannot read (a function, a getter, a shorthand). `open` where a
+/// spread or a computed key may write any key; neither is read past, so
+/// only the keys written after the last one are listed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ObjectMembers {
+    pub readable: serde_json::Map<String, Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unreadable: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub open: bool,
+}
+
+/// `object`'s members, read without statics: a literal member is listed
+/// with its value, `undefined` as left out, any other value as unreadable.
+fn object_members(object: &oxc::ast::ast::ObjectExpression<'_>, origins: Option<&Scoping>) -> ObjectMembers {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKind};
+    let mut members = ObjectMembers::default();
+    for property in &object.properties {
+        let key = match property {
+            ObjectPropertyKind::ObjectProperty(property) if !property.computed => eval_property_key(&property.key),
+            _ => None,
+        };
+        let (Some(key), ObjectPropertyKind::ObjectProperty(property)) = (key, property) else {
+            members = ObjectMembers { open: true, ..ObjectMembers::default() };
+            continue;
+        };
+        members.readable.remove(&key);
+        members.unreadable.retain(|unread| *unread != key);
+        let value = crate::chain_walk::unwrap_type_assertions(&property.value);
+        if property.kind == PropertyKind::Init && is_absent(value, origins) {
+            continue;
+        }
+        let read = (property.kind == PropertyKind::Init && !property.shorthand)
+            .then(|| evaluate_with_statics(value, crate::eval::Statics::empty(), None))
+            .flatten();
+        match read {
+            Some(value) => {
+                members.readable.insert(key, value);
+            }
+            None => members.unreadable.push(key),
+        }
+    }
+    members
 }
 
 /// Where an attribute's runtime value comes from (`AttrFact::value_origin`).
@@ -379,6 +432,8 @@ pub(crate) fn serialize_proven<S: serde::Serializer>(
         derived: Option<&'u DerivedProp>,
         #[serde(skip_serializing_if = "Option::is_none")]
         runtime_state: Option<&'u RuntimeState>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        members: Option<&'u ObjectMembers>,
     }
     let facts = usage.iter().flatten().filter_map(|fact| match fact {
         UsageFact::Element { tag, attrs, spread, spread_forward, .. } => Some(ProvenFact::Element {
@@ -403,6 +458,7 @@ pub(crate) fn serialize_proven<S: serde::Serializer>(
                     forwarded,
                     derived,
                     runtime_state,
+                    members: attr.members.as_ref(),
                     }
                 })
                 .collect(),
@@ -6881,6 +6937,7 @@ impl<'a> FactCollector<'a, '_> {
                         at: spread_attribute.span.start,
                         value_origin: ValueOrigin::Unknown,
                         absent: false,
+                        members: None,
                     })),
                     None => {
                         spread = Some(attrs.len());
@@ -7051,6 +7108,12 @@ impl<'a> FactCollector<'a, '_> {
                     at: attr.span.start,
                     value_origin,
                     absent,
+                    members: match written {
+                        Some(Expression::ObjectExpression(object)) if dynamic && self.enrich => {
+                            Some(object_members(object, self.origins))
+                        }
+                        _ => None,
+                    },
                 });
             }
         }
@@ -7126,6 +7189,7 @@ fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
             at,
             value_origin: ValueOrigin::Unknown,
             absent: false,
+            members: None,
         },
         None => AttrFact {
             name: "children".to_string(),
@@ -7142,6 +7206,7 @@ fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
             at,
             value_origin: ValueOrigin::Unknown,
             absent: false,
+            members: None,
         },
     })
 }

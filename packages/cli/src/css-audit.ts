@@ -303,6 +303,14 @@ interface UsageAttr {
   derived?: { component: string; props: string[]; through?: string };
   /** The state slot of a React state hook, its call at byte `at`. */
   runtimeState?: { hook: string; at: number };
+  /** For an inline object no static value as a whole, its members read
+   *  one by one: literal `readable` ones, `unreadable` keys, and `open`
+   *  where a spread or computed key may write any key. */
+  members?: {
+    readable: { [key: string]: JsonValue };
+    unreadable?: string[];
+    open?: boolean;
+  };
 }
 
 /** The props of its component a value is computed from (`UsageAttr`). */
@@ -1862,6 +1870,22 @@ function memberAt(
   return isLiteral(current) ? current : null;
 }
 
+/** The literal an inline object's `members` hold at `path`, `undefined`
+ *  where the object leaves it out, or `null` where they cannot say: a
+ *  member written with a value the engine cannot read, or a key an open
+ *  object may write. */
+function membersAt(
+  members: NonNullable<UsageAttr['members']>,
+  path: readonly string[]
+): Literal | undefined | null {
+  const [key, ...rest] = path;
+  if (key === undefined) return null;
+  const value = ownEntry(members.readable, key);
+  if (value !== undefined) return memberAt(value, rest);
+  if ((members.unreadable ?? []).includes(key)) return null;
+  return members.open ? null : undefined;
+}
+
 /** Every value `site` passes as `forwarded`'s prop, or the prop of its own
  *  component it passes on there, or the origin a caller's value has (React
  *  state, or computed from its own component's props), or `null` where one
@@ -1985,7 +2009,15 @@ function callerValues(
         },
       };
     }
-    if (!attr.proven) return null;
+    if (!attr.proven) {
+      // An inline object's literal members read on their own.
+      if (path.length === 0 || attr.members === undefined) return null;
+      const member = membersAt(attr.members, path);
+      if (member === null) return null;
+      take(member ?? nullish);
+      if (!attr.optional) return { values };
+      continue;
+    }
     for (const value of attr.values) {
       if (path.length > 0) {
         const member = memberAt(value, path);
