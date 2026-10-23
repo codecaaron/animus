@@ -11,9 +11,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 
 use crate::chain_merge::{
-    authors_variant_entry, authors_variant_key, effective_variant_configs, inherit_custom_configs,
-    inherit_variant_stages, topological_sort, ProvenanceNode,
-    TopoResult, VariantConfigs,
+    authors_entry, authors_key, authors_variant_entry, authors_variant_key, effective_configs,
+    inherit_custom_configs, inherit_stages, topological_sort, InheritedConfigs, ProvenanceNode,
+    TopoResult,
 };
 use crate::chain_walk::{MemberParentExtension, TerminalKind};
 use crate::css::{
@@ -4104,8 +4104,8 @@ fn warn_invalid_opacity_modifiers(
     }
 }
 
-/// Runs before the extension merge, so parent contributions are already shed
-/// and each leak is diagnosed once, on its defining component.
+/// Sheds the unresolved aliases from every group of the component's CSS,
+/// reporting each one.
 fn shed_unresolved_aliases(
     css: &mut ComponentCss,
     scale_check: &ScaleCheck<'_>,
@@ -9342,6 +9342,8 @@ fn run_with_system_floor(
         dropped_keys: None,
         ..resolve_ctx
     };
+    // Resolves for the resolved-CSS checks alone, reporting nothing else.
+    let checks_ctx = ResolveContext { transform_failures: None, token_misses: None, dropped_keys: None, ..resolve_ctx };
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
     let mut unresolvable_extensions: FxHashSet<String> = FxHashSet::default();
@@ -9452,7 +9454,10 @@ fn run_with_system_floor(
     let mut inherited_active_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     // An extension's callback props it reads from its parent's component.
     let mut parent_callbacks: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
-    let mut inherited_variant_configs: FxHashMap<String, VariantConfigs> = FxHashMap::default();
+    let parent_ids: FxHashSet<String> = parent_map.values().cloned().collect();
+    // What each extended component hands its extensions before resolution.
+    let mut inherited_configs: FxHashMap<String, InheritedConfigs> = FxHashMap::default();
+    let no_configs = InheritedConfigs::default();
     // The system and the definition name a production class, and an
     // installed kit's in development too, since its source never changes in
     // place; elsewhere, development names it by where it is defined, so an
@@ -9577,11 +9582,13 @@ fn run_with_system_floor(
         }
         let own = chain.stages.iter().flat_map(|stage| stage.skipped.iter().map(|(key, _)| (stage.method.clone(), key.clone())));
         skipped_keys.insert(component_id.clone(), own.chain(inherited).collect());
-        let parent_variant_configs = parent_map
+        let parent_configs = parent_map
             .get(component_id)
-            .and_then(|parent_id| inherited_variant_configs.get(parent_id))
-            .map_or(&[][..], Vec::as_slice);
-        let merged_chain = inherit_variant_stages(chain, parent_variant_configs);
+            .and_then(|parent_id| inherited_configs.get(parent_id))
+            .unwrap_or(&no_configs);
+        // Base and state declarations merged in from the parent were reported
+        // at the parent's declaration; only this chain's own remain.
+        let (merged_chain, inherits_styles) = inherit_stages(chain, parent_configs);
         // A component's own declaration props bind under its name scope; an
         // inherited one keeps the scope of the component that declared it.
         let result = process_chain_facts(
@@ -9597,6 +9604,11 @@ fn run_with_system_floor(
             }
             Ok(out)
         });
+        if inherits_styles {
+            transform_failures
+                .borrow_mut()
+                .retain(|failure| failure.variant_origin.is_some() || authors_key(chain, &failure.prop));
+        }
         // Drained before the match so failures recorded before a later bail
         // still report; topo order keeps emission deterministic.
         drain_transform_failures(
@@ -9611,18 +9623,15 @@ fn run_with_system_floor(
             // A parent option merged into this chain was reported at the
             // parent's declaration; only this chain's own declarations remain.
             token_misses.borrow_mut().retain_mut(|miss| {
-                let Some((axis, option)) = &miss.variant_origin else {
+                let (prop, origin) = (&miss.prop, &miss.variant_origin);
+                if origin.is_none() && !inherits_styles {
                     return true;
-                };
-                miss.rejected.retain(|(breakpoint, entry)| {
-                    authors_variant_entry(
-                        chain,
-                        axis,
-                        option.as_deref(),
-                        &miss.prop,
-                        breakpoint.as_deref(),
-                        entry,
-                    )
+                }
+                miss.rejected.retain(|(breakpoint, entry)| match origin {
+                    Some((axis, option)) => {
+                        authors_variant_entry(chain, axis, option.as_deref(), prop, breakpoint.as_deref(), entry)
+                    }
+                    None => authors_entry(chain, prop, breakpoint.as_deref(), entry),
                 });
                 !miss.rejected.is_empty()
             });
@@ -9639,10 +9648,15 @@ fn run_with_system_floor(
         if merged_chain.is_some() {
             // A parent option's dropped key was reported at the parent's
             // declaration, naming this chain among its inheritors.
-            dropped_keys.borrow_mut().retain(|dropped| {
-                dropped.variant_origin.as_ref().is_none_or(|(axis, option)| {
-                    authors_variant_key(chain, axis, option.as_deref(), dropped.dropped.key())
-                })
+            dropped_keys.borrow_mut().retain(|dropped| match &dropped.variant_origin {
+                Some((axis, option)) => authors_variant_key(chain, axis, option.as_deref(), dropped.dropped.key()),
+                None if !inherits_styles => true,
+                // Of two keys on one property, the one without effect is the
+                // child's concern only when the child wrote it.
+                None => match &dropped.dropped {
+                    crate::theme::DroppedStyleKey::SharedProperty { overridden, .. } => authors_key(chain, overridden),
+                    other => authors_key(chain, other.key()),
+                },
             });
         }
         let inheritors: Vec<&str> = if dropped_keys.borrow().iter().any(|d| d.variant_origin.is_some()) {
@@ -9785,6 +9799,18 @@ fn run_with_system_floor(
                     }
                 }
 
+                // The resolved-CSS checks report what this chain declares: an
+                // extension that merged in its parent's styles is checked as
+                // resolved without them, which its parent's checks covered.
+                let own_css = if inherits_styles {
+                    let variants_only = InheritedConfigs { variants: parent_configs.variants.clone(), ..Default::default() };
+                    let (own_chain, _) = inherit_stages(chain, &variants_only);
+                    process_chain_facts(own_chain.as_ref().unwrap_or(chain), &checks_ctx, &inputs.group_registry)
+                        .ok()
+                        .map(|out| out.component_css)
+                } else {
+                    None
+                };
                 if is_external_file(file_path, &inputs.external_dirs) {
                     record_external_token_candidates(
                         &CandidateWalk {
@@ -9794,29 +9820,29 @@ fn run_with_system_floor(
                             file: file_path,
                             component: &chain.descriptor.binding,
                         },
-                        &component_css,
+                        own_css.as_ref().unwrap_or(&component_css),
                         &mut diagnostics,
                     );
                 }
 
-                shed_unresolved_aliases(
-                    &mut component_css,
-                    &ScaleCheck {
-                        family: &scale_family_props,
-                        tokens: &theme_tokens,
-                        theme: &inputs.theme,
-                        variable_map: &inputs.variable_map,
-                        external: is_external_file(file_path, &inputs.external_dirs),
-                    },
-                    file_path,
-                    &chain.descriptor.binding,
-                    &mut diagnostics,
-                );
+                let scale_check = ScaleCheck {
+                    family: &scale_family_props,
+                    tokens: &theme_tokens,
+                    theme: &inputs.theme,
+                    variable_map: &inputs.variable_map,
+                    external: is_external_file(file_path, &inputs.external_dirs),
+                };
+                let binding = &chain.descriptor.binding;
+                let mut merged_in = Vec::new();
+                let sink = if own_css.is_some() { &mut merged_in } else { &mut diagnostics };
+                shed_unresolved_aliases(&mut component_css, &scale_check, file_path, binding, sink);
+                if let Some(mut own_css) = own_css {
+                    shed_unresolved_aliases(&mut own_css, &scale_check, file_path, binding, &mut diagnostics);
+                }
                 warn_invalid_opacity_modifiers(chain, file_path, &mut diagnostics);
 
-                let variant_configs = effective_variant_configs(chain, parent_variant_configs);
-                if !variant_configs.is_empty() {
-                    inherited_variant_configs.insert(component_id.clone(), variant_configs);
+                if parent_ids.contains(component_id) {
+                    inherited_configs.insert(component_id.clone(), effective_configs(chain, parent_configs));
                 }
 
                 let mut compound_configs: Vec<(BTreeMap<String, Value>, String)> = Vec::new();
@@ -9848,66 +9874,10 @@ fn run_with_system_floor(
                     if let Some((parent_css, _, _, _, _, _, parent_compound_configs)) =
                         evaluated.get(parent_id)
                     {
-                        match (&parent_css.base, &component_css.base) {
-                            (Some(parent_base), Some(child_base)) => {
-                                let mut merged_decls = parent_base.declarations.clone();
-                                let child_props: FxHashSet<&str> = child_base
-                                    .declarations
-                                    .iter()
-                                    .map(|d| d.property.as_str())
-                                    .collect();
-                                merged_decls.retain(|d| !child_props.contains(d.property.as_str()));
-                                merged_decls.extend(child_base.declarations.clone());
-
-                                let mut merged_pseudos = parent_base.pseudo_selectors.clone();
-                                for child_group in &child_base.pseudo_selectors {
-                                    if let Some(entry) =
-                                        merged_pseudos.iter_mut().find(|(s, _, _)| *s == child_group.0)
-                                    {
-                                        *entry = child_group.clone();
-                                    } else {
-                                        merged_pseudos.push(child_group.clone());
-                                    }
-                                }
-
-                                // Child groups replace parent groups by name
-                                // (breakpoints) or by conditions+selector.
-                                let mut merged = ResolvedStyles {
-                                    declarations: merged_decls,
-                                    pseudo_selectors: merged_pseudos,
-                                    conditioned: parent_base.conditioned.clone(),
-                                };
-                                for (bp, decls) in child_base.breakpoint_groups() {
-                                    let slot = merged.breakpoint_decls_mut(bp);
-                                    *slot = decls.clone();
-                                }
-                                for child_group in &child_base.conditioned {
-                                    let plain_breakpoint = matches!(
-                                        child_group.emit_order,
-                                        crate::theme::ConditionEmitOrder::Breakpoint
-                                    ) && child_group.selector.is_none()
-                                        && child_group.conditions.len() == 1;
-                                    if plain_breakpoint {
-                                        continue;
-                                    }
-                                    if let Some(existing) =
-                                        merged.conditioned.iter_mut().find(|g| {
-                                            g.conditions == child_group.conditions
-                                                && g.selector == child_group.selector
-                                        })
-                                    {
-                                        *existing = child_group.clone();
-                                    } else {
-                                        merged.conditioned.push(child_group.clone());
-                                    }
-                                }
-
-                                component_css.base = Some(merged);
-                            }
-                            (Some(parent_base), None) => {
-                                component_css.base = Some(parent_base.clone());
-                            }
-                            _ => {}
+                        // A child that declares styles resolved them merged
+                        // over its parent's, as the runtime builder does.
+                        if component_css.base.is_none() {
+                            component_css.base = parent_css.base.clone();
                         }
 
                         // Within a layer the ancestors' rules come first, so
@@ -12303,7 +12273,6 @@ fn run_with_system_floor(
         })
         .collect();
 
-    let parent_ids: FxHashSet<String> = parent_map.values().cloned().collect();
     // Copies share their usage: one class, and one full identity, so a short
     // name two definitions would take never pools them.
     let mut copies: FxHashMap<(&str, &str), Vec<&str>> = FxHashMap::default();
@@ -16539,6 +16508,183 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         assert!(out.dynamic_props.contains_key("p"), "{one_file}");
     }
 
+    /// Each rule naming `name`'s class, under the at-rules that hold it, with
+    /// the class written `.C`, sorted.
+    fn rules_of(css: &str, name: &str) -> Vec<String> {
+        const CLASS_HASH_LEN: usize = 8;
+        let class = format!(".animus-{name}-");
+        let mut open: Vec<String> = Vec::new();
+        let mut rules = Vec::new();
+        let mut body: Option<(String, Vec<String>)> = None;
+        for line in css.lines().map(str::trim) {
+            if let Some(head) = line.strip_suffix('{').map(str::trim) {
+                match head.find(&class) {
+                    Some(at) => {
+                        let after_hash = at + class.len() + CLASS_HASH_LEN;
+                        let selector = format!("{}.C{}", &head[..at], &head[after_hash..]);
+                        body = Some((format!("{} {selector}", open.join(" ")), Vec::new()));
+                    }
+                    None => open.push(head.to_string()),
+                }
+            } else if line == "}" {
+                match body.take() {
+                    Some((selector, declarations)) => rules.push(format!("{selector} {{ {} }}", declarations.join(" "))),
+                    None => {
+                        open.pop();
+                    }
+                }
+            } else if let Some((_, declarations)) = body.as_mut() {
+                declarations.push(line.to_string());
+            }
+        }
+        rules.sort();
+        rules
+    }
+
+    /// Contract: an extension's partial redeclaration keeps every parent
+    /// declaration it doesn't override. Its styles, states and variants
+    /// merge over its parent's before resolution, as the runtime builder's
+    /// `deepMerge` holds them, so the extension's rules are those of one
+    /// component declared with the merged config.
+    #[test]
+    fn an_extensions_partial_redeclaration_keeps_every_parent_declaration_it_does_not_override() {
+        // (parent, the extension's stages, the merged config written out)
+        let cases = [
+            // A selector, a nested selector, a responsive record and a condition.
+            (
+                "ds.styles({ '&:hover': { color: 'red', opacity: 0.5 } })",
+                ".styles({ '&:hover': { opacity: 1 } })",
+                "ds.styles({ '&:hover': { color: 'red', opacity: 1 } })",
+            ),
+            (
+                "ds.styles({ '&:hover': { color: 'red', '& > span': { color: 'blue', opacity: 0.5 } } })",
+                ".styles({ '&:hover': { '& > span': { opacity: 1 } } })",
+                "ds.styles({ '&:hover': { color: 'red', '& > span': { color: 'blue', opacity: 1 } } })",
+            ),
+            (
+                "ds.styles({ color: { _: 'green', sm: 'blue' }, opacity: { sm: 0.5 } })",
+                ".styles({ opacity: { sm: 1 } })",
+                "ds.styles({ color: { _: 'green', sm: 'blue' }, opacity: { sm: 1 } })",
+            ),
+            (
+                "ds.styles({ '@media (hover: hover)': { color: 'red', opacity: 0.5 } })",
+                ".styles({ '@media (hover: hover)': { opacity: 1 } })",
+                "ds.styles({ '@media (hover: hover)': { color: 'red', opacity: 1 } })",
+            ),
+            // A redeclared state, an inherited one and a new one.
+            (
+                "ds.styles({ display: 'block' }).states({ busy: { color: 'red', opacity: 0.5 }, idle: { color: 'gray' } })",
+                ".states({ busy: { opacity: 1 }, fresh: { color: 'pink' } })",
+                "ds.styles({ display: 'block' }).states({ busy: { color: 'red', opacity: 1 }, idle: { color: 'gray' }, fresh: { color: 'pink' } })",
+            ),
+            // A redeclared variant option and default.
+            (
+                "ds.variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { color: 'red', opacity: 0.5 }, lg: { color: 'blue' } } })",
+                ".variant({ prop: 'size', defaultVariant: 'lg', variants: { sm: { opacity: 1 } } })",
+                "ds.variant({ prop: 'size', defaultVariant: 'lg', variants: { sm: { color: 'red', opacity: 1 }, lg: { color: 'blue' } } })",
+            ),
+            // A value that is no plain object replaces the parent's whole, and
+            // `null` leaves a declaration out.
+            (
+                "ds.styles({ color: { _: 'green', sm: 'blue' } })",
+                ".styles({ color: 'red' })",
+                "ds.styles({ color: 'red' })",
+            ),
+            (
+                "ds.styles({ '&:hover': { color: 'red', opacity: 0.5 } })",
+                ".styles({ '&:hover': { color: null } })",
+                "ds.styles({ '&:hover': { opacity: 0.5 } })",
+            ),
+            // Keys that write one property keep the merged config's order.
+            ("ds.styles({ p: 8 })", ".styles({ padding: '1px' })", "ds.styles({ p: 8, padding: '1px' })"),
+            (
+                "ds.styles({ margin: 0, marginTop: '4px' })",
+                ".styles({ margin: '8px' })",
+                "ds.styles({ margin: '8px', marginTop: '4px' })",
+            ),
+        ];
+        for (parent, child, merged) in cases {
+            let source = format!(
+                "export const Parent = {parent}.asElement('div');\n\
+                 export const Child = Parent.extend(){child}.asElement('div');\n\
+                 export const Merged = {merged}.asElement('div');\n\
+                 export const App = () => <><Child busy idle fresh size=\"sm\" /><Child size=\"lg\" />\
+                 <Merged busy idle fresh size=\"sm\" /><Merged size=\"lg\" /><Parent /></>;\n"
+            );
+            let out = analyze(&[("app.tsx", &source)], &test_inputs());
+            let rules = rules_of(&out.css, "Child");
+            assert!(!rules.is_empty(), "{child}");
+            assert_eq!(rules, rules_of(&out.css, "Merged"), "{child}\n{}", out.css);
+            // What the parent declares was reported at the parent.
+            let child_diagnostics: Vec<_> = out.diagnostics.iter().filter(|d| d.component == "Child").collect();
+            assert!(child_diagnostics.is_empty(), "{child}: {child_diagnostics:?}");
+        }
+
+        // An alias the extension writes still loses to the parent's raw CSS
+        // property, as in one config, and the extension hears of it.
+        let source = "export const Parent = ds.styles({ padding: '1px' }).asElement('div');\n\
+                      export const Child = Parent.extend().styles({ p: 8 }).asElement('div');\n\
+                      export const Merged = ds.styles({ padding: '1px', p: 8 }).asElement('div');\n\
+                      export const App = () => <><Child /><Merged /></>;\n";
+        let out = analyze(&[("app.tsx", source)], &test_inputs());
+        assert_eq!(rules_of(&out.css, "Child"), rules_of(&out.css, "Merged"));
+        let shared = |component: &str| {
+            out.diagnostics
+                .iter()
+                .filter(|d| d.component == component && d.code.as_deref() == Some(crate::theme::KEYS_SHARE_PROPERTY))
+                .count()
+        };
+        assert_eq!((shared("Child"), shared("Merged")), (1, 1));
+
+        // What an extension merges in was reported at the parent; what it
+        // writes itself is reported at the extension.
+        let mut inputs = battle_transform_inputs("(v) => { throw new Error('kaboom') }");
+        inputs.config.get_mut("p").unwrap().strict = Some(true);
+        let reported = |own: &str| {
+            let source = format!(
+                "export const Parent = ds.styles({{ '&:hover': {{ color: 'red', p: 999, w: 3, span: {{ color: 'blue' }}, outlineColor: '{{colors.missing}}' }} }}).asElement('div');\n\
+                 export const Child = Parent.extend().styles({{ '&:hover': {{ {own} }} }}).asElement('div');\n\
+                 export const App = () => <><Parent /><Child /></>;\n"
+            );
+            let out = analyze(&[("app.tsx", &source)], &inputs);
+            let codes = |component: &str| {
+                let mut codes: Vec<String> =
+                    out.diagnostics.iter().filter(|d| d.component == component).filter_map(|d| d.code.clone()).collect();
+                codes.sort();
+                codes
+            };
+            (codes("Parent"), codes("Child"))
+        };
+        let (parent, child) = reported("opacity: 1");
+        assert_eq!(parent.len(), 4, "{parent:?}");
+        assert!(child.is_empty(), "{child:?}");
+        let (_, child) = reported("p: 777, w: 4");
+        assert_eq!(child, [STRICT_TOKEN_MISS.to_string(), TRANSFORM_THREW.to_string()]);
+
+        // Each level merges over everything above it; a parent in another
+        // module keeps its own module's values and the callbacks it delivers.
+        let parent = (
+            "parent.tsx",
+            "const hover = { color: 'red', opacity: 0.5 };\n\
+             export const Parent = ds\n  .props({ inl: { property: 'minWidth', transform: (v) => `${v * 2}px` } })\n  \
+             .styles({ '&:hover': hover })\n  .asElement('div');\n",
+        );
+        let child = (
+            "child.tsx",
+            "import { Parent } from './parent';\n\
+             const hover = { opacity: 1 };\n\
+             export const Child = Parent.extend().styles({ '&:hover': hover }).asElement('div');\n\
+             export const Grand = Child.extend().styles({ '&:hover': { outline: 'none' } }).asElement('div');\n\
+             export const Merged = ds.styles({ '&:hover': { color: 'red', opacity: 1, outline: 'none' } }).asElement('div');\n\
+             export const App = ({ n }) => <><Grand inl={n} /><Merged /></>;\n",
+        );
+        let out = analyze(&[parent, child], &test_inputs());
+        let rules = rules_of(&out.css, "Grand");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules, rules_of(&out.css, "Merged"), "{}", out.css);
+        assert!(out.components["child.tsx::Grand"].replacement.contains("Child.customTransforms"));
+    }
+
     /// Contract: an Animus element whose `as` is a static string renders
     /// a host element, so it hands off nothing rendered inside it, while
     /// an `as` naming a value or a spread still may.
@@ -19290,7 +19436,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         );
     }
 
-    fn analyze_with_battle_transform(transform_source: &str) -> CssOutput {
+    /// The test inputs with a prop `w` whose transform `battle` is
+    /// `transform_source`.
+    fn battle_transform_inputs(transform_source: &str) -> CssInputs {
         let mut inputs = test_inputs();
         inputs.config.insert(
             "w".into(),
@@ -19304,6 +19452,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 &serde_json::json!({ "battle@system.w": transform_source }).to_string(),
             ))
             .unwrap();
+        inputs
+    }
+
+    fn analyze_with_battle_transform(transform_source: &str) -> CssOutput {
+        let inputs = battle_transform_inputs(transform_source);
         analyze(
             &[(
                 "a.tsx",

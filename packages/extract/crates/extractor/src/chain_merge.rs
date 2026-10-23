@@ -48,32 +48,67 @@ fn merge_variant_config(inherited: &Value, config: &Value) -> Value {
     deep_merge(inherited, &authored)
 }
 
-/// The chain with each variant axis it redeclares deep-merged over the
-/// inherited config, as the runtime builder merges `variants`; `None` when
-/// no stage redeclares an inherited axis.
-pub fn inherit_variant_stages(
-    chain: &ChainFacts,
-    inherited: &[(String, Value)],
-) -> Option<ChainFacts> {
+/// What an extension inherits before resolution, as the runtime builder
+/// holds it: the raw `styles` and `states` configs and each variant axis's
+/// config, each merged over what its own parent inherited.
+#[derive(Debug, Clone, Default)]
+pub struct InheritedConfigs {
+    pub styles: Option<Value>,
+    pub states: Option<Value>,
+    pub variants: VariantConfigs,
+}
+
+impl InheritedConfigs {
+    /// The inherited raw config a `styles` or `states` stage merges over.
+    fn raw(&self, method: &str) -> Option<&Option<Value>> {
+        match method {
+            "styles" => Some(&self.styles),
+            "states" => Some(&self.states),
+            _ => None,
+        }
+    }
+
+    fn raw_mut(&mut self, method: &str) -> Option<&mut Option<Value>> {
+        match method {
+            "styles" => Some(&mut self.styles),
+            "states" => Some(&mut self.states),
+            _ => None,
+        }
+    }
+}
+
+/// The chain with its `styles` and `states` stages and each variant axis it
+/// redeclares deep-merged over the inherited configs, as the runtime builder
+/// merges them (`None` when no stage redeclares anything inherited), and
+/// whether a `styles` or `states` stage merged.
+pub fn inherit_stages(chain: &ChainFacts, inherited: &InheritedConfigs) -> (Option<ChainFacts>, bool) {
     let mut merged_chain: Option<ChainFacts> = None;
     let mut merged_props: FxHashSet<&str> = FxHashSet::default();
+    let mut merged_methods: FxHashSet<&str> = FxHashSet::default();
     for (idx, stage) in chain.stages.iter().enumerate() {
-        let Some(value) = stage.value.as_ref().filter(|_| stage.method == "variant") else {
+        let Some(value) = stage.value.as_ref() else {
             continue;
         };
-        let prop = variant_prop(value);
-        // A later same-prop stage keeps its own-chain handling; the parent
-        // merges into the first declaration only.
-        if !merged_props.insert(prop) {
-            continue;
-        }
-        let Some((_, parent_config)) = inherited.iter().find(|(p, _)| p == prop) else {
-            continue;
+        let merged = match (stage.method.as_str(), inherited.raw(&stage.method)) {
+            // The parent merges into the first declaration only.
+            (method, Some(Some(parent))) if merged_methods.insert(method) => deep_merge(parent, value),
+            ("variant", _) => {
+                let prop = variant_prop(value);
+                // A later same-prop stage keeps its own-chain handling; the
+                // parent merges into the first declaration only.
+                if !merged_props.insert(prop) {
+                    continue;
+                }
+                let Some((_, parent_config)) = inherited.variants.iter().find(|(p, _)| p == prop) else {
+                    continue;
+                };
+                merge_variant_config(parent_config, value)
+            }
+            _ => continue,
         };
-        merged_chain.get_or_insert_with(|| chain.clone()).stages[idx].value =
-            Some(merge_variant_config(parent_config, value));
+        merged_chain.get_or_insert_with(|| chain.clone()).stages[idx].value = Some(merged);
     }
-    merged_chain
+    (merged_chain, !merged_methods.is_empty())
 }
 
 /// Whether the chain's own variant stages author `entry` for `prop` under the
@@ -115,6 +150,32 @@ pub fn authors_variant_key(chain: &ChainFacts, axis: &str, option: Option<&str>,
         .any(|styles| writes_key(styles, key))
 }
 
+/// The style objects the chain's own `styles`, `states` and compound stages
+/// write, rather than ones merged in from a parent.
+fn own_style_objects(chain: &ChainFacts) -> impl Iterator<Item = &Value> {
+    chain.stages.iter().flat_map(|stage| {
+        let (styles, states) = match stage.method.as_str() {
+            "styles" => (stage.value.as_ref(), None),
+            "states" => (None, stage.value.as_ref().and_then(Value::as_object)),
+            "compound" => (stage.second_value.as_ref(), None),
+            _ => (None, None),
+        };
+        styles.into_iter().chain(states.into_iter().flat_map(|states| states.values()))
+    })
+}
+
+/// Whether the chain's own `styles`, `states` or compound stages author
+/// `entry` for `prop` (at `breakpoint`), rather than inheriting it.
+pub fn authors_entry(chain: &ChainFacts, prop: &str, breakpoint: Option<&str>, entry: &Value) -> bool {
+    own_style_objects(chain).any(|styles| declares(styles, prop, breakpoint, entry))
+}
+
+/// Whether the chain's own `styles`, `states` or compound stages write
+/// `key`, at any depth, rather than inheriting it.
+pub fn authors_key(chain: &ChainFacts, key: &str) -> bool {
+    own_style_objects(chain).any(|styles| writes_key(styles, key))
+}
+
 fn writes_key(styles: &Value, key: &str) -> bool {
     styles
         .as_object()
@@ -132,21 +193,22 @@ fn declares(styles: &Value, prop: &str, breakpoint: Option<&str>, entry: &Value)
     })
 }
 
-/// The variant configs a child hands its own extensions: the inherited
-/// configs with each of the chain's variant stages merged in order.
-pub fn effective_variant_configs(
-    chain: &ChainFacts,
-    inherited: &[(String, Value)],
-) -> VariantConfigs {
-    let mut configs = inherited.to_vec();
+/// The configs a child hands its own extensions: the inherited configs with
+/// each of the chain's `styles`, `states` and variant stages merged in order.
+pub fn effective_configs(chain: &ChainFacts, inherited: &InheritedConfigs) -> InheritedConfigs {
+    let mut configs = inherited.clone();
     for stage in &chain.stages {
-        let Some(value) = stage.value.as_ref().filter(|_| stage.method == "variant") else {
+        let Some(value) = stage.value.as_ref() else {
             continue;
         };
-        let prop = variant_prop(value);
-        match configs.iter_mut().find(|(p, _)| p == prop) {
-            Some((_, config)) => *config = merge_variant_config(config, value),
-            None => configs.push((prop.to_string(), value.clone())),
+        if stage.method == "variant" {
+            let prop = variant_prop(value);
+            match configs.variants.iter_mut().find(|(p, _)| p == prop) {
+                Some((_, config)) => *config = merge_variant_config(config, value),
+                None => configs.variants.push((prop.to_string(), value.clone())),
+            }
+        } else if let Some(slot) = configs.raw_mut(&stage.method) {
+            *slot = Some(slot.as_ref().map_or_else(|| value.clone(), |parent| deep_merge(parent, value)));
         }
     }
     configs

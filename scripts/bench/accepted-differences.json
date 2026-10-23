@@ -89,5 +89,12 @@
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
     "candidate": "f7d6647bf3b41934ec134d129273dde676ac47c0895b8f5f3d2c5ffb0a65d6fd",
     "reason": "Beside the differences above, only the manifest's fileFacts differ: 68 files gain `proven`, the per-element record of what the pruning analysis proves of each attribute (its known values, proven only where its proof holds, and the last spread that can replace it), with a forward named where an attribute passes on its component's own prop unchanged. Then 14 of those files' records also say where a value comes from: 29 attributes gain `derived` (computed from the component's props), 19 `runtimeState` (a React state hook's state slot), 6 `forwarded` records appear or gain a member path, a `??` literal or a literal default, and 3 elements gain `spreadForward` (a spread of the props, or of a rest of them); and one attribute bound to a `const` of literal branches is now proven, with its values; and one proven attribute whose value may also be `undefined` or `null` (SyntaxBlock's `diff`) says so (`absent`). With `proven` removed the manifest is identical to the candidate this entry follows (4853ea9c…): CSS (270,340 bytes), the 204 components and the 73 diagnostics are unchanged."
+  },
+  {
+    "row": "analysis:showcase",
+    "fixture": "showcase-analysis",
+    "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
+    "candidate": "aa69aef67a4aa6f9562b30e55ef916d87655a183697ba0283682b158727984fd",
+    "reason": "Beside the differences above, only one rule's declaration order differs: an extension's styles now merge over its parent's before resolution, so ButtonDisplay (Button.extend().styles({ textTransform, letterSpacing, fontWeight })) lists its base declarations in the order the resolver gives the merged object, font-weight after font-family and text-transform and letter-spacing before cursor and outline, in the CSS, the base sheet and its component fragment. Its declarations are unchanged and no two of them share a property. Against this checkout's engine before the change (015fb28d), on the same captured input, only that rule moves: CSS (270,340 bytes), the 204 components and the 73 diagnostics are unchanged."
   }
 ]
