@@ -32,6 +32,14 @@ pub fn diagnostic_codes() -> String {
     analyze_css::diagnostic_codes_json()
 }
 
+/// JSON: `{ "selectors": { "_hover": "&:hover", … }, "conditions": {
+/// "_print": { "value": "@media print", "order": 320, "kind": "media" }, … } }`,
+/// the built-in aliases the system fingerprint leaves out unchanged.
+#[napi]
+pub fn built_in_aliases() -> String {
+    builtin_aliases::json()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -43,6 +51,7 @@ mod tests {
 }
 
 pub mod assemble;
+pub mod builtin_aliases;
 pub mod ast_store;
 pub mod emit;
 pub mod engine;

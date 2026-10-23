@@ -19,6 +19,7 @@ const SESSION_TESTS_TARGET = 'packages/extract/tests/session';
  */
 const ENGINE_BOUND = new Set([
   'alias-agreement.test.ts',
+  'builtin-aliases.test.ts',
   'canary.test.ts',
   'collect-external-packages.test.ts',
   'discover-packages.test.ts',

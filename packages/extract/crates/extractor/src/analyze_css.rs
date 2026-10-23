@@ -412,14 +412,20 @@ impl CssInputs {
             }
         };
         let keyframes_blocks = parse_opt_value("keyframesJson", keyframes_json)?;
+        // A built-in alias the system keeps unchanged is the Animus
+        // version's, not the system's: only custom and overridden ones
+        // name its classes, so adding a built-in renames none.
+        use crate::builtin_aliases::{is_built_in_condition, is_built_in_selector, without_built_ins};
+        let custom_selectors = without_built_ins(selector_aliases_json, is_built_in_selector);
+        let custom_conditions = without_built_ins(condition_aliases_json, is_built_in_condition);
         let system_hash = [
             config_json,
             group_registry_json,
             theme_json,
             variable_map_json,
             contextual_vars_json,
-            selector_aliases_json,
-            condition_aliases_json,
+            custom_selectors.as_deref(),
+            custom_conditions.as_deref(),
         ]
         .into_iter()
         .fold(crate::ids::FNV_OFFSET, fold_system_input);

@@ -43,6 +43,13 @@ export declare class ExtractEngine {
 }
 
 /**
+ * JSON: `{ "selectors": { "_hover": "&:hover", … }, "conditions": {
+ * "_print": { "value": "@media print", "order": 320, "kind": "media" }, … } }`,
+ * the built-in aliases the system fingerprint leaves out unchanged.
+ */
+export declare function builtInAliases(): string
+
+/**
  * The built-in extension policy, as JSON (`{ appended, nodeNext, alias }`):
  * the order in which a relative or aliased specifier's candidate files are
  * tried wherever a host names none.
