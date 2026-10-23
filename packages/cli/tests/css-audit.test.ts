@@ -1101,6 +1101,120 @@ test("a forward's callers are read through what passes their values on", async (
   }
 });
 
+/** Contract: a forward whose destructuring default the engine cannot read
+ *  (`color = FALLBACK`, an import) is read through its callers as any
+ *  forward is, and a matched caller that leaves the prop out, itself or
+ *  through a forward of its own that leaves it undefined, passes a value
+ *  the audit names as that unread default, never one it guesses: no
+ *  options left out are listed, and the remedy is a literal default or a
+ *  literal at those callers. */
+test('a forward whose default the engine cannot read names the callers that leave it out', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
+  try {
+    const forward = (fact: JsonValue) => ({
+      name: 'size',
+      values: [],
+      proven: false,
+      dynamicSpan: { start: 0, end: 4 },
+      forwarded: fact,
+    });
+    const literal = (value: JsonValue) => ({
+      name: 'size',
+      values: [value],
+      proven: true,
+    });
+    const tag = (ident: string, attrs: JsonValue[]) => ({
+      element: { tag: { ident }, attrs },
+    });
+    const unread = forward({
+      component: 'Wrap',
+      prop: 'size',
+      defaultUnread: true,
+    });
+    const declared = {
+      tag_declarations: {
+        'src/app.tsx': {
+          Wrap: 'src/wrap.tsx::Wrap',
+          Outer: 'src/outer.tsx::Outer',
+        },
+        'src/outer.tsx': { Wrap: 'src/wrap.tsx::Wrap' },
+      },
+    };
+
+    // One caller passes sm, one leaves size out.
+    const leftOut = await forwardAudit(
+      root,
+      unread,
+      { 'src/app.tsx': [tag('Wrap', [literal('sm')]), tag('Wrap', [])] },
+      declared
+    );
+    expect(leftOut.reachedByCallers).toEqual([
+      { axis: 'size', options: ['sm'] },
+    ]);
+    expect(leftOut.notPassedByMatchedCallers).toBeNull();
+    expect(leftOut.matchedCallers?.unreadDefaults).toEqual(["Wrap's size"]);
+    expect(leftOut.matchedCallers?.unexplained).toBe(false);
+    expect(leftOut.text).toContain(
+      "a matched caller leaves out Wrap's size, whose default is a value the audit cannot read"
+    );
+    expect(leftOut.suggestion).toContain(
+      "Wrap's size defaults to a value the audit cannot read (an import or an expression), and a matched caller leaves it out: a literal default, or a literal at those callers, would let the engine see which options they reach."
+    );
+
+    // Callers that all pass a literal never reach the default.
+    const written = await forwardAudit(
+      root,
+      unread,
+      {
+        'src/app.tsx': [
+          tag('Wrap', [literal('sm')]),
+          tag('Wrap', [literal('lg')]),
+        ],
+      },
+      declared
+    );
+    expect(written.notPassedByMatchedCallers).toEqual([]);
+    expect(written.matchedCallers?.unreadDefaults).toEqual([]);
+
+    // Outer passes its own size on; a caller that leaves Outer's out
+    // leaves Wrap's undefined, which takes Wrap's unread default.
+    const through = await forwardAudit(
+      root,
+      unread,
+      {
+        'src/outer.tsx': [
+          tag('Wrap', [forward({ component: 'Outer', prop: 'size' })]),
+        ],
+        'src/app.tsx': [tag('Outer', [])],
+      },
+      declared
+    );
+    expect(through.matchedCallers?.unreadDefaults).toEqual(["Wrap's size"]);
+
+    // Outer's own default is unread: a caller that leaves it out passes
+    // that, whatever Wrap's default is.
+    const outers = await forwardAudit(
+      root,
+      forward({ component: 'Wrap', prop: 'size', default: 'md' }),
+      {
+        'src/outer.tsx': [
+          tag('Wrap', [
+            forward({ component: 'Outer', prop: 'size', defaultUnread: true }),
+          ]),
+        ],
+        'src/app.tsx': [tag('Outer', []), tag('Outer', [literal('lg')])],
+      },
+      declared
+    );
+    expect(outers.reachedByCallers).toEqual([
+      { axis: 'size', options: ['lg'] },
+    ]);
+    expect(outers.matchedCallers?.unreadDefaults).toEqual(["Outer's size"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 /** Contract: a derived or runtime-state site gets no site remedy, and the
  *  hold blocks every remedy. A value computed from its component's props
  *  names those props and points at its callers, never a literal at the

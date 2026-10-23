@@ -203,6 +203,9 @@ export interface Unproven {
     /** A matched caller passes a value the audit cannot read and cannot
      *  say where it comes from. */
     unexplained: boolean;
+    /** The forwarded props a matched caller leaves out whose default is a
+     *  value the audit cannot read, as `Component's prop`. */
+    unreadDefaults: string[];
   } | null;
   /** The build-wide hold (`CssAuditReport.restructures.pruningHold`) keeps
    *  every option of this component, so no change at a site can remove one
@@ -317,6 +320,13 @@ interface ForwardedFact {
   default?: Literal;
   nullish?: Literal;
   nullToUndefined?: boolean;
+  /** Its destructuring defaults the prop to a value the engine cannot
+   *  read (an import, an expression). */
+  defaultUnread?: boolean;
+  /** Whose unread default a prop left out here takes, as `Component's
+   *  prop`, where a forward passes it on to another component's; the
+   *  audit's own, never the engine's. */
+  unreadDefaultOf?: string;
 }
 
 interface UsageFact {
@@ -1705,6 +1715,7 @@ function reachedByCallers(
     states: [],
     derived: [],
     unexplained: false,
+    unreadDefaults: [],
   };
   const read = { byDeclaration, routes, reading };
   for (const { axis, options, dynamic } of kept) {
@@ -1767,6 +1778,9 @@ interface CallerReading {
   derived: Array<{ site: Site; at: number | null; derived: Derived }>;
   /** A matched caller passes a value no origin explains. */
   unexplained: boolean;
+  /** The forwarded props a matched caller leaves out whose default the
+   *  audit cannot read, as `Component's prop`. */
+  unreadDefaults: string[];
 }
 
 /** Every value the matched callers of `forwarded`, declared in `file`, pass
@@ -1813,6 +1827,11 @@ function forwardedValues(
     } else if ('derived' in passed) {
       reading.unread = true;
       reading.derived.push({ site: caller, ...passed });
+    } else if ('unreadDefault' in passed) {
+      reading.unread = true;
+      if (!reading.unreadDefaults.includes(passed.unreadDefault)) {
+        reading.unreadDefaults.push(passed.unreadDefault);
+      }
     } else if ('forwarded' in passed) {
       const inner = forwardedValues(
         caller.file,
@@ -1849,7 +1868,8 @@ function memberAt(
  *  may be a value the audit cannot read: no proven literal, a member it
  *  cannot read, or a spread that can replace the attribute or deliver the
  *  prop. A prop left out takes its default, else its `nullish` literal;
- *  `null` and a missing member take the `nullish` literal. */
+ *  `null` and a missing member take the `nullish` literal. A prop left out
+ *  whose default the engine cannot read is named (`unreadDefault`). */
 function callerValues(
   site: Site,
   forwarded: ForwardedFact
@@ -1858,18 +1878,24 @@ function callerValues(
   | { forwarded: ForwardedFact }
   | { state: NonNullable<UsageAttr['runtimeState']> }
   | { derived: Derived; at: number | null }
+  | { unreadDefault: string }
   | null {
   const { prop, path = [] } = forwarded;
   let nullish = forwarded.nullish;
   let omitted = forwarded.default ?? nullish;
+  let defaultUnread = forwarded.defaultUnread === true;
   if (site.attrs === null) return null;
   const values = new Set<string>();
   const take = (value: Literal | undefined) => {
     if (value !== undefined && value !== null) values.add(String(value));
   };
-  const leftOut = () => ({
-    values: new Set(omitted == null ? [] : [String(omitted)]),
-  });
+  const unreadOf =
+    forwarded.unreadDefaultOf ?? `${forwarded.component}'s ${prop}`;
+  const unreadDefault = { unreadDefault: unreadOf };
+  const leftOut = () =>
+    defaultUnread
+      ? unreadDefault
+      : { values: new Set(omitted == null ? [] : [String(omitted)]) };
   const passing = site.through?.(prop);
   if (passing === 'kept') return leftOut();
   if (passing === 'unread') return null;
@@ -1878,6 +1904,7 @@ function callerValues(
   if (passing !== undefined && passing.omitted !== undefined) {
     omitted = passing.omitted;
     nullish = passing.omitted;
+    defaultUnread = false;
   }
   // A spread that may hold the prop: any but a rest that never carries it.
   const spread =
@@ -1887,7 +1914,7 @@ function callerValues(
       : undefined;
   // A spread of the enclosing component's props passes on what its
   // callers write, `null` included, or `fallback` where they leave it out.
-  const throughSpread = (fallback: Literal | undefined) =>
+  const throughSpread = (fallback: Literal | undefined, unread = false) =>
     site.spreadForward === undefined || path.length > 0 || values.size > 0
       ? null
       : {
@@ -1896,6 +1923,7 @@ function callerValues(
             prop,
             ...(fallback !== undefined && { default: fallback }),
             ...(nullish !== undefined && { nullish }),
+            ...(unread && { defaultUnread: true, unreadDefaultOf: unreadOf }),
           },
         };
   // Walking back, an attribute settles the prop unless a branch of a
@@ -1931,8 +1959,19 @@ function callerValues(
       // What the caller leaves out or makes null falls through to this
       // forward's own fallbacks, then this prop's; a `null` it passes on
       // as `undefined` arrives here left out.
-      const { nullToUndefined, ...passedOn } = inner;
-      const fallback = inner.default ?? inner.nullish ?? omitted;
+      // A default the engine cannot read, the caller's own or this
+      // prop's where the caller's leaves it to it, stays unread.
+      const {
+        nullToUndefined,
+        defaultUnread: innerUnread,
+        ...passedOn
+      } = inner;
+      const toOurs = inner.default === undefined && inner.nullish === undefined;
+      const ours = defaultUnread && (toOurs || nullToUndefined === true);
+      const unread = innerUnread === true || ours;
+      const fallback = innerUnread
+        ? undefined
+        : (inner.default ?? inner.nullish ?? omitted);
       const nullFallback = nullToUndefined
         ? omitted
         : (inner.nullish ?? nullish);
@@ -1941,6 +1980,8 @@ function callerValues(
           ...passedOn,
           ...(fallback !== undefined && { default: fallback }),
           ...(nullFallback !== undefined && { nullish: nullFallback }),
+          ...(unread && { defaultUnread: true }),
+          ...(ours && !innerUnread && { unreadDefaultOf: unreadOf }),
         },
       };
     }
@@ -1957,6 +1998,7 @@ function callerValues(
     // the prop out does, and what `null` does.
     if (attr.absent) {
       if (path.length > 0) return null;
+      if (defaultUnread) return unreadDefault;
       take(omitted);
       take(nullish);
     }
@@ -1964,7 +2006,8 @@ function callerValues(
   }
   // Left out by the spread's callers, the prop takes what leaving it out
   // here does.
-  if (spread !== undefined) return throughSpread(omitted);
+  if (spread !== undefined) return throughSpread(omitted, defaultUnread);
+  if (defaultUnread) return unreadDefault;
   take(omitted);
   return { values };
 }
@@ -2013,10 +2056,19 @@ function keptSuggestion(unproven: Unproven): string {
     const matched = unproven.matchedCallers;
     const origins =
       matched !== null &&
-      matched.runtimeState.length + matched.derived.length > 0;
+      matched.runtimeState.length +
+        matched.derived.length +
+        matched.unreadDefaults.length >
+        0;
     if (!origins || matched.unexplained) {
       parts.push(
         `${props.join(' and ')} ${props.length === 1 ? 'passes' : 'pass'} on what ${components.size === 1 ? 'its callers write' : 'their callers write'}: literals at ${origins ? 'the callers whose value the audit cannot read' : 'those callers'} would let the engine see which options they reach.`
+      );
+    }
+    if (matched !== null && matched.unreadDefaults.length > 0) {
+      const named = matched.unreadDefaults;
+      parts.push(
+        `${named.join(' and ')} ${named.length === 1 ? 'defaults' : 'default'} to a value the audit cannot read (an import or an expression), and a matched caller leaves ${named.length === 1 ? 'it' : 'them'} out: a literal default, or a literal at those callers, would let the engine see which options they reach.`
       );
     }
     for (const { hook, at } of matched?.runtimeState ?? []) {
@@ -2085,6 +2137,8 @@ function callerEvidence(unproven: Unproven | undefined): string | null {
           ),
           matched.unexplained &&
             'a matched caller passes a value the audit cannot read',
+          matched.unreadDefaults.length > 0 &&
+            `a matched caller leaves out ${matched.unreadDefaults.join(' and ')}, whose default is a value the audit cannot read`,
           matched.unmatchedRoute &&
             'a forwarding component is also reached where the audit cannot match its callers (a dynamic import, a use other than as a tag, a namespace member, or an element handed to code the analysis does not read), so no list of options left out is given',
         ]

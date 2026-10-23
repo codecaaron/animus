@@ -125,6 +125,19 @@ pub struct ForwardedProp {
     /// ordinary component's parameter default where `null` would not.
     #[serde(rename = "nullToUndefined", skip_serializing_if = "std::ops::Not::not")]
     pub null_to_undefined: bool,
+    /// Its destructuring defaults the prop to a value the walk cannot read
+    /// (`color = FALLBACK`, an import): a caller that leaves the prop out
+    /// passes on a value no fact names.
+    #[serde(rename = "defaultUnread", skip_serializing_if = "std::ops::Not::not")]
+    pub default_unread: bool,
+}
+
+impl ForwardedProp {
+    /// Whether leaving the prop out passes on its destructuring's default,
+    /// read or not.
+    fn defaulted(&self) -> bool {
+        self.default.is_some() || self.default_unread
+    }
 }
 
 /// The props of the enclosing component an attribute's value is computed
@@ -7378,10 +7391,18 @@ impl FactCollector<'_, '_> {
                 let object = symbol(object)?;
                 let key = member.property.name.to_string();
                 if let Some(component) = self.params.objects.get(&object) {
-                    return Some(ForwardedProp { component: component.clone(), prop: key, path: Vec::new(), default: None, nullish: None, null_to_undefined: false });
+                    return Some(ForwardedProp {
+                        component: component.clone(),
+                        prop: key,
+                        path: Vec::new(),
+                        default: None,
+                        nullish: None,
+                        null_to_undefined: false,
+                        default_unread: false,
+                    });
                 }
                 let held = self.params.props.get(&object).filter(|_| self.params.object_props.contains(&object))?;
-                (held.default.is_none() && held.path.is_empty()).then(|| ForwardedProp { path: vec![key], ..held.clone() })
+                (!held.defaulted() && held.path.is_empty()).then(|| ForwardedProp { path: vec![key], ..held.clone() })
             }
             Expression::LogicalExpression(logical) if logical.operator.is_coalesce() => {
                 let left = self.forwarded_prop(&logical.left)?;
@@ -7394,7 +7415,7 @@ impl FactCollector<'_, '_> {
                     });
                 }
                 let literal = default_value(&logical.right)?;
-                (left.default.is_none() && left.nullish.is_none() && !left.null_to_undefined)
+                (!left.defaulted() && left.nullish.is_none() && !left.null_to_undefined)
                     .then(|| ForwardedProp { nullish: Some(literal), ..left })
             }
             _ => None,
@@ -7647,7 +7668,21 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
             if uses.tracked.contains_key(&symbol) && uses.passes_on(symbol) {
                 params.object_props.insert(symbol);
             }
-            params.props.insert(symbol, ForwardedProp { component: name.clone(), prop: key, path: Vec::new(), default, nullish: None, null_to_undefined: false });
+            let default_unread = matches!(default, Some(PropDefault::Unread));
+            let default = match default {
+                Some(PropDefault::Literal(value)) => Some(value),
+                _ => None,
+            };
+            let forwarded = ForwardedProp {
+                component: name.clone(),
+                prop: key,
+                path: Vec::new(),
+                default,
+                nullish: None,
+                null_to_undefined: false,
+                default_unread,
+            };
+            params.props.insert(symbol, forwarded);
         }
         for (symbol, tracked) in &uses.tracked {
             // A rest the body takes copies the props object as it then is.
@@ -7710,8 +7745,8 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
         props: Option<SymbolId>,
         tracked: FxHashMap<SymbolId, Use>,
         /// Each binding a `const { … } = object` of a tracked object names:
-        /// the object, the binding, its key and its literal default.
-        destructured: Vec<(SymbolId, SymbolId, String, Option<Value>)>,
+        /// the object, the binding, its key and its default.
+        destructured: Vec<(SymbolId, SymbolId, String, Option<PropDefault>)>,
     }
     /// The object a member chain starts from (`props` of `props.style.color`).
     fn root<'e, 'a>(mut expression: &'e Expression<'a>) -> &'e Expression<'a> {
@@ -7920,14 +7955,22 @@ fn unwritten(scoping: &Scoping, id: &oxc::ast::ast::BindingIdentifier<'_>) -> Op
     id.symbol_id.get().filter(|symbol| !crate::identity::reassigned(scoping, *symbol))
 }
 
-/// A binding a props pattern names, its key and its literal default.
-type PropBinding = (SymbolId, String, Option<Value>);
+/// A binding a props pattern names, its key and its default.
+type PropBinding = (SymbolId, String, Option<PropDefault>);
 
-/// The bindings an object pattern names, with their keys and literal
-/// defaults; the keys it names (what a rest of it never carries); and the
-/// bindings an empty object defaults. A property with a default the walk
-/// cannot read, or one that destructures further, may pass any value and
-/// is left out of the bindings.
+/// A destructured prop's default: a literal the walk reads, or another
+/// value (`color = FALLBACK`, an import), which a caller leaving the prop
+/// out passes on unread.
+#[derive(Debug, Clone)]
+enum PropDefault {
+    Literal(Value),
+    Unread,
+}
+
+/// The bindings an object pattern names, with their keys and defaults; the
+/// keys it names (what a rest of it never carries); and the bindings an
+/// empty object defaults. A property that destructures further may pass
+/// any value and is left out of the bindings.
 fn pattern_props(scoping: &Scoping, object: &oxc::ast::ast::ObjectPattern<'_>) -> (Vec<PropBinding>, Vec<String>, Vec<SymbolId>) {
     use oxc::ast::ast::BindingPattern;
     let mut named = Vec::new();
@@ -7940,13 +7983,14 @@ fn pattern_props(scoping: &Scoping, object: &oxc::ast::ast::ObjectPattern<'_>) -
         let (id, default) = match &property.value {
             BindingPattern::BindingIdentifier(id) => (id, None),
             BindingPattern::AssignmentPattern(assignment) => match (&assignment.left, default_value(&assignment.right)) {
-                (BindingPattern::BindingIdentifier(id), Some(value)) => (id, Some(value)),
+                (BindingPattern::BindingIdentifier(id), Some(value)) => (id, Some(PropDefault::Literal(value))),
                 (BindingPattern::BindingIdentifier(id), None)
                     if matches!(assignment.right.get_inner_expression(), Expression::ObjectExpression(object) if object.properties.is_empty()) =>
                 {
                     empty.extend(unwritten(scoping, id));
                     (id, None)
                 }
+                (BindingPattern::BindingIdentifier(id), None) => (id, Some(PropDefault::Unread)),
                 _ => continue,
             },
             _ => continue,

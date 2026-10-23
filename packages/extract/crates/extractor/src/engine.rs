@@ -2697,14 +2697,16 @@ mod tests {
 
     /// Contract: the manifest says where a runtime value comes from: a prop
     /// passed on unchanged (through body destructuring, as a member of an
-    /// object prop, with a boolean default, or `?? literal`, which replaces
-    /// a missing or `null` prop), a prop a site computes from, a React
+    /// object prop, with a boolean default or one it cannot read, or
+    /// `?? literal`, which replaces a missing or `null` prop), a prop a site
+    /// computes from, a React
     /// state hook's state slot, and a spread that passes on the props object
     /// or a rest of it.
     #[test]
     fn manifest_proven_says_where_a_value_comes_from() {
         let mut engine = ExtractEngine::new(None).unwrap();
         let source = "import { useState } from 'react';\n\
+                      import { FALLBACK } from './theme';\n\
                       export function Item(props) { const { type, disabled } = props; return <Box tone={type} />; }\n\
                       export function Split({ buttonProps = {} }) { return <Box size={buttonProps.size} />; }\n\
                       export function Card({ interactive = false }) { return <Box interactive={interactive} />; }\n\
@@ -2715,7 +2717,10 @@ mod tests {
                       export function Custom({ normal, ...props }) { return <Box {...props} tone={normal} />; }\n\
                       export function Frame({ borderRadius, interactive = false }) { const radius = borderRadius ?? (interactive ? 'md' : 'none'); return <Box radius={radius} />; }\n\
                       export function Alias({ size }) { const kept = size; return <Box size={kept} />; }\n\
-                      export function Opts({ options = {} }) { return <Box value={options} />; }\n";
+                      export function Opts({ options = {} }) { return <Box value={options} />; }\n\
+                      export function Tile({ color = FALLBACK }) { return <Box bg={parseThemeColor(color)} />; }\n\
+                      export function Tint({ color = FALLBACK }) { return <Box bg={color} />; }\n\
+                      export function Body(props) { const { tone = FALLBACK } = props; return <Box tone={tone} />; }\n";
         let manifest: serde_json::Value = serde_json::from_str(
             &engine.analyze_full(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string(), None).unwrap(),
         )
@@ -2743,6 +2748,15 @@ mod tests {
         // it out, so it is computed from the prop, not the prop unchanged.
         assert_eq!(attr(10)["forwarded"], serde_json::Value::Null);
         assert_eq!(attr(10)["derived"]["props"], serde_json::json!(["options"]));
+        // A default the walk cannot read (an import) leaves the binding the
+        // prop: a site computes from it, or passes it on with a default no
+        // fact names.
+        assert_eq!(
+            attr(11)["derived"],
+            serde_json::json!({ "component": "Tile", "props": ["color"], "through": "parseThemeColor" })
+        );
+        assert_eq!(attr(12)["forwarded"], serde_json::json!({ "component": "Tint", "prop": "color", "defaultUnread": true }));
+        assert_eq!(attr(13)["forwarded"], serde_json::json!({ "component": "Body", "prop": "tone", "defaultUnread": true }));
     }
 
     #[test]
