@@ -30,7 +30,7 @@ export const theme = createTheme()
   })
   .build();
 
-const bundle = createSystem()
+export const bundle = createSystem()
   .addGroup('space', space)
   .addGroup('colors', color)
   .addGroup('backgrounds', background)

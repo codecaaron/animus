@@ -64,6 +64,7 @@ export type {
   ViewTransitionData,
 } from './SystemBuilder';
 export { createSystem, SystemBuilder } from './SystemBuilder';
+export type { GroupsOf, PropsOf, SealedBundle } from './kit-vocabulary';
 export {
   createScale,
   numericOrStringScale,

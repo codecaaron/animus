@@ -604,7 +604,9 @@ type LiteralKeyMap<M> = string extends keyof M
   ? VocabularyIndexSignatureRejected
   : unknown;
 
-declare const VOCABULARY_BRAND: unique symbol;
+// Exported to `kit-vocabulary`, which reads the vocabulary a bundle seals
+// with; not from the package entry.
+export declare const VOCABULARY_BRAND: unique symbol;
 
 /**
  * What `seal()` returns. The registered names ride as phantom type state so

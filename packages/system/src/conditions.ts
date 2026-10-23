@@ -17,8 +17,10 @@ export type ConditionKind =
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface Conditions {}
 
-declare const CONDS_BRAND: unique symbol;
-declare const SELS_BRAND: unique symbol;
+// Exported to `kit-vocabulary`, which reads the axes as a system carries them;
+// not from the package entry.
+export declare const CONDS_BRAND: unique symbol;
+export declare const SELS_BRAND: unique symbol;
 
 /**
  * Type-only phantom brand on a built system, carrying the registered
