@@ -8545,6 +8545,18 @@ fn held_bindings(
             Some((self.members.get(&symbol_of(self.scoping, root)?)?, path))
         }
 
+        /// The roots a `const`'s initializer reaches through its operands,
+        /// with the path below each.
+        fn operand_links(&self, init: &Expression<'_>) -> Vec<(usize, Vec<String>)> {
+            let mut links = Vec::new();
+            operands(init, true, &mut |operand| {
+                if let Some((member, path)) = self.chain(operand) {
+                    links.extend(member.links.iter().map(|(root, base)| (*root, [base.as_slice(), &path].concat())));
+                }
+            });
+            links
+        }
+
         /// The context a call of `useContext` or `use` reads in `init`, or
         /// in a member chain off one there, by its identity
         /// (`ContextKeys`), with the chain's path; and, for the call alone,
@@ -8575,19 +8587,22 @@ fn held_bindings(
                 let mut bound = Vec::new();
                 let joined = if let Some((context, key, path)) = self.context(init) {
                     let read = context.map(|context| ContextBinding { context, path: Vec::new(), default: None });
-                    let joined = bind(self.scoping, &declarator.id, &[(self.roots.len(), path)], read.as_ref(), &mut bound).is_some();
+                    let mut links = vec![(self.roots.len(), path)];
+                    // An unfollowed call's result holds what its operands
+                    // reach as well, as any other `const`'s does.
+                    let hook = matches!(member_base(init), Some((Expression::CallExpression(call), _))
+                        if self.contexts.is_some_and(|contexts| contexts.hook(&call.callee)));
+                    if !hook && self.kind == VariableDeclarationKind::Const {
+                        links.extend(self.operand_links(init));
+                    }
+                    let joined = bind(self.scoping, &declarator.id, &links, read.as_ref(), &mut bound).is_some();
                     if joined {
                         self.keys.insert(self.roots.len(), key);
                         self.roots.push(None);
                     }
                     joined
                 } else if self.kind == VariableDeclarationKind::Const {
-                    let mut links = Vec::new();
-                    operands(init, true, &mut |operand| {
-                        if let Some((member, path)) = self.chain(operand) {
-                            links.extend(member.links.iter().map(|(root, base)| (*root, [base.as_slice(), &path].concat())));
-                        }
-                    });
+                    let links = self.operand_links(init);
                     // A `const` of one member chain names what the chain
                     // reads.
                     let naming = self.chain(init).and_then(|(member, path)| {
