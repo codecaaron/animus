@@ -13,6 +13,8 @@ import { describe, expect, it } from 'vitest';
 import { animusExtract } from '../../src/index';
 import { createDevFixture } from './fixture';
 
+import type { ViteDevServer } from 'vite-plus';
+
 /** A fixture whose entry imports Animus's stylesheet and nothing with a
  *  component, with one declared vendor sheet inside the root and one
  *  outside it, each with an image; the outside sheet's image lies in
@@ -72,8 +74,21 @@ describe('quarantine delivers declared sheets with Animus stylesheet', () => {
         'src/main.ts',
         "import 'virtual:animus/styles.css';\nimport '../vendor/vendor.css';\n"
       );
-      // SAFETY: a build with no watcher and one environment returns one output.
-      const output = (await build({
+      // SAFETY: vite-plus runs Vite's build and consumes the same plugin hooks;
+      // only the nominal declarations differ, and tsc overflows on them. A
+      // build with no watcher and one environment returns one output.
+      const runBuild = build as (config: {
+        root: string;
+        configFile: false;
+        logLevel: 'silent';
+        plugins: ReturnType<typeof animusExtract>[];
+        build: {
+          write: false;
+          minify: false;
+          rollupOptions: { input: string };
+        };
+      }) => Promise<{ output: Array<{ fileName: string; source?: unknown }> }>;
+      const output = await runBuild({
         root: app.root,
         configFile: false,
         logLevel: 'silent',
@@ -83,7 +98,7 @@ describe('quarantine delivers declared sheets with Animus stylesheet', () => {
           minify: false,
           rollupOptions: { input: join(app.root, 'src/main.ts') },
         },
-      })) as { output: Array<{ fileName: string; source?: unknown }> };
+      });
       const files = output.output.map((item) => item.fileName);
       const css = output.output
         .filter((item) => item.fileName.endsWith('.css'))
@@ -109,7 +124,16 @@ describe('quarantine delivers declared sheets with Animus stylesheet', () => {
   // reaches of a declared sheet is layered.
   it('serves files outside the root and finishes linked stylesheets in development', async () => {
     const app = globalOnlyFixture();
-    const server = await createServer({
+    // SAFETY: vite-plus runs Vite's server and consumes the same plugin hooks;
+    // only the nominal declarations differ, and tsc overflows on them.
+    const startServer = createServer as (config: {
+      root: string;
+      configFile: false;
+      logLevel: 'silent';
+      plugins: ReturnType<typeof animusExtract>[];
+      server: { port: number };
+    }) => Promise<ViteDevServer>;
+    const server = await startServer({
       root: app.root,
       configFile: false,
       logLevel: 'silent',
