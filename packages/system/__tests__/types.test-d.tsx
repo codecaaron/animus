@@ -2151,3 +2151,56 @@ function AsComponentForward() {
 }
 
 void AsComponentForward;
+
+// Contract: varRef accepts exactly the theme's token paths (and a runtime
+// string): a typo is a type error.
+// Contract: varRef's return is always `string | undefined`.
+const varRefColor = tokens.varRef('colors.red');
+type _VarRefNullable = Assert<IsExact<typeof varRefColor, string | undefined>>;
+void tokens.varRef('space.8');
+void tokens.varRef('colors.primary');
+// @ts-expect-error — a misspelled token path
+void tokens.varRef('colors.rde');
+// @ts-expect-error — a scale the theme does not have
+void tokens.varRef('sizes.8');
+// @ts-expect-error — breakpoints are structural, not a token scale
+void tokens.varRef('breakpoints.sm');
+declare const varRefPath: string;
+declare const varRefTone: string;
+const varRefRuntime = tokens.varRef(varRefPath);
+const varRefTemplate = tokens.varRef(`colors.${varRefTone}`);
+type _VarRefRuntime = Assert<IsExact<typeof varRefRuntime, string | undefined>>;
+type _VarRefTemplate = Assert<
+  IsExact<typeof varRefTemplate, string | undefined>
+>;
+// A nested `_` default by its own path and by its parent's, which an
+// emitted scale's variable takes.
+const varRefNested = createTheme()
+  .addColors({ gray: { _: '#888', 500: '#555' } })
+  .build();
+void varRefNested.varRef('colors.gray');
+void varRefNested.varRef('colors.gray._');
+void varRefNested.varRef('colors.gray.500');
+// A scale that emits no variables resolves `_` only by its own path.
+const varRefRaw = createTheme()
+  .addScale({ name: 'space', values: { inset: { _: '1px', lg: '2px' } } })
+  .build();
+void varRefRaw.varRef('space.inset._');
+// @ts-expect-error — the parent path of a non-emitted `_` names no token
+void varRefRaw.varRef('space.inset');
+// A `Theme` augmented from two built themes, a library's and an app's that
+// extends it (gamut's shape), extends one `varRef`, which checks the paths
+// of the theme it is called on.
+const varRefLibrary = createTheme()
+  .addScale({ name: 'space', values: { 8: '0.5rem' } })
+  .addColors({ red: '#f00' })
+  .build();
+const varRefApp = createTheme().extend(varRefLibrary).build();
+type VarRefLibraryTheme = typeof varRefLibrary;
+type VarRefAppTheme = typeof varRefApp;
+interface VarRefBoth extends VarRefLibraryTheme, VarRefAppTheme {}
+declare const varRefBoth: VarRefBoth;
+void varRefBoth.varRef('space.8');
+void varRefBoth.varRef('colors.red');
+// @ts-expect-error — still a misspelled token path
+void varRefBoth.varRef('colors.rde');

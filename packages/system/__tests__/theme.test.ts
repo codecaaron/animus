@@ -412,7 +412,9 @@ describe('varRef', () => {
   });
 
   it('returns undefined for unknown path', () => {
-    expect(theme.varRef('colors.nonexistent')).toBeUndefined();
+    // A path known only at run time: a literal one must name a token.
+    const path: string = 'colors.nonexistent';
+    expect(theme.varRef(path)).toBeUndefined();
   });
 
   it('is non-enumerable', () => {

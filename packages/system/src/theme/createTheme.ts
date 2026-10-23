@@ -397,6 +397,60 @@ type ContextualVarNames<Vars> = {
 
 type ThemeScaleKeys<T> = Exclude<keyof T & string, ThemeStructuralKey>;
 
+/** A nested `_` default, by its parent's path: the key `variableMap` gives
+ *  an emitted one (`gray._` is `gray`). */
+type FoldedDefault<Key extends string> = Key extends `${infer Parent}._`
+  ? Parent
+  : never;
+
+/** The dot paths `varRef` accepts on a built theme, its token paths: each
+ *  scale's own (flat) keys, numeric ones included, and, in an emitted scale,
+ *  each nested `_` default by its parent's path, which only an emitted
+ *  scale's variable map holds. A scale whose name starts with `_`, and a
+ *  method, is never a token scale. */
+type VarRefPath<Theme> = {
+  [
+    Scale in Exclude<ThemeScaleKeys<Theme>, `_${string}`>
+  ]: Theme[Scale] extends (...args: never[]) => unknown
+    ? never
+    : Theme[Scale] extends Record<string, unknown>
+      ? `${Scale}.${
+          | (keyof Theme[Scale] & (string | number))
+          | (Theme extends { readonly __emitted: infer Emitted }
+              ? Scale extends keyof Emitted
+                ? FoldedDefault<keyof Theme[Scale] & string>
+                : never
+              : never)}`
+      : never;
+}[Exclude<ThemeScaleKeys<Theme>, `_${string}`>];
+
+/** A string type with infinitely many members, `string` or a template
+ *  pattern such as `` `colors.${string}` ``: a path known only at run time. */
+type OpenString<S extends string> = {} extends Record<S, true> ? true : false;
+
+/**
+ * `varRef`, the same member on every built theme: its paths are those of the
+ * theme it is called on (`this`), so a `Theme` augmented from two built
+ * themes (a library's and an app's) extends one `varRef`, not two that
+ * differ. A type literal, not an interface, so a built theme keeps the
+ * implicit index signature `Record<string, unknown>` checks read.
+ */
+type ThemeVarRef = {
+  /** Dot-path token → `var()` ref, or the raw value if not emitted. A
+   *  literal path must name one of the theme's token paths; a path known only
+   *  at run time is accepted. Either may find nothing (a contextual
+   *  variable's name, a value of `undefined`, a key the type cannot prove),
+   *  so the result is always `string | undefined`. */
+  varRef<Self, Path extends string>(
+    this: Self,
+    tokenPath: OpenString<Path> extends true
+      ? Path
+      : Path extends VarRefPath<Self>
+        ? Path
+        : VarRefPath<Self>
+  ): string | undefined;
+};
+
 /** Theme data plus boundary members, non-enumerable at runtime. */
 type BuiltTheme<T, Emitted extends EmittedNames> = {
   [K in keyof T]: T[K];
@@ -406,9 +460,7 @@ type BuiltTheme<T, Emitted extends EmittedNames> = {
   readonly __emitted: AsEmittedSet<Emitted>;
   manifest: ThemeManifest;
   serialize(): SerializedTheme;
-  /** Dot-path token → `var()` ref, or the raw value if not emitted. */
-  varRef(tokenPath: string): string | undefined;
-};
+} & ThemeVarRef;
 
 interface BuilderState {
   theme: Record<string, unknown>;
