@@ -28,7 +28,12 @@ export const Badge = ds.styles({
   _hover: { opacity: 0.8 },
   _motionReduce: { opacity: 0.9 },
 }).asElement('em');
-export const App = () => <><Row /><Chip /><Badge /></>;`;
+export const Toggle = ds.styles({
+  _enabled: { _hover: { opacity: 0.8 } },
+  _hover: { cursor: 'pointer' },
+  _disabled: { opacity: 0.4 },
+}).asElement('button');
+export const App = () => <><Row /><Chip /><Badge /><Toggle /></>;`;
 const manifest = JSON.parse(
   analyzeProject(JSON.stringify([{ path: 'fixtures/raw-order.tsx', source }]), {
     selectorAliasesJson: config.selectorAliases,
@@ -73,5 +78,16 @@ test('selector and condition aliases alone keep their authored order, not a regi
     '@media print opacity: 1;',
     ':hover opacity: 0.8;',
     '@media (prefers-reduced-motion: reduce) opacity: 0.9;',
+  ]);
+});
+
+// Contract: `_enabled` is `_disabled`'s selector set negated, in one
+// `:not()`, so it nests (`_enabled: { _hover }`) and keeps one
+// pseudo-class's specificity beside a plain `_hover`.
+test('_enabled negates _disabled and nests a hover', () => {
+  expect(rulesOf('Toggle')).toEqual([
+    ':not(:disabled, [disabled], [aria-disabled="true"], [data-disabled]):hover opacity: 0.8;',
+    ':hover cursor: pointer;',
+    ':is(:disabled, [disabled], [aria-disabled="true"], [data-disabled]) opacity: 0.4;',
   ]);
 });

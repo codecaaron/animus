@@ -187,6 +187,8 @@ const BUILT_IN_SELECTOR_ALIASES = {
   _expanded: '&[aria-expanded="true"], &[data-expanded]',
   _selected: '&[aria-selected="true"], &[data-selected]',
   _pressed: '&[aria-pressed="true"], &[data-pressed]',
+  _enabled:
+    '&:not(:disabled, [disabled], [aria-disabled="true"], [data-disabled])',
   _disabled:
     '&:disabled, &[disabled], &[aria-disabled="true"], &[data-disabled]',
   _before: '&::before',

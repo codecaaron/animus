@@ -1286,17 +1286,9 @@ const ExtendedAlias = AliasBox.extend()
   .asElement('section');
 void (<ExtendedAlias _hover={{ p: 8 }} />);
 void (<ExtendedAlias _disabled={{ bg: 'red' }} />);
-
-import { BUILT_IN_SELECTORS } from '../src/selectors';
-
-import type { BuiltInSelectorAlias } from '../src/types/config';
-
-type AssertAllKeysAreAliases = {
-  [K in keyof typeof BUILT_IN_SELECTORS]: K extends BuiltInSelectorAlias
-    ? true
-    : never;
-};
-void (0 as unknown as AssertAllKeysAreAliases);
+// `_enabled` is built in: an alias prop, and a styles key that nests a hover.
+void (<ExtendedAlias _enabled={{ p: 8 }} />);
+ds.styles({ _enabled: { _hover: { opacity: '0.8' } } });
 
 import type { ConditionsOf, SelectorsOf } from '../src';
 

@@ -525,6 +525,7 @@ export type BuiltInSelectorAlias =
   | '_focusWithin'
   | '_active'
   | '_target'
+  | '_enabled'
   | '_disabled'
   | '_checked'
   | '_invalid'

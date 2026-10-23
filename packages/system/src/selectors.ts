@@ -1,3 +1,5 @@
+import type { BuiltInSelectorAlias } from './types/config';
+
 /**
  * `order` is cascade precedence inside a layer: a later entry overrides an
  * earlier one at equal specificity.
@@ -17,7 +19,11 @@ export type SelectorAliasMap = Record<string, SelectorAlias>;
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface Selectors {}
 
-export const BUILT_IN_SELECTORS: SelectorAliasMap = {
+/**
+ * Every built-in alias, keyed exactly by `BuiltInSelectorAlias`: an alias
+ * missing from either, or only in one, fails the `satisfies` check.
+ */
+const BUILT_IN_SELECTOR_TABLE = {
   _link: { selector: '&:link', order: 10 },
   _visited: { selector: '&:visited', order: 20 },
   _hover: { selector: '&:hover', order: 30 },
@@ -53,6 +59,15 @@ export const BUILT_IN_SELECTORS: SelectorAliasMap = {
     order: 160,
   },
 
+  // `_disabled`'s set, negated: interactive and not disabled, for
+  // `_enabled: { _hover: … }`. One `:not()` over the list keeps the
+  // specificity of a single pseudo-class, as `_hover` and `_disabled` have,
+  // so a plain `_hover` beside it still applies.
+  _enabled: {
+    selector:
+      '&:not(:disabled, [disabled], [aria-disabled="true"], [data-disabled])',
+    order: 190,
+  },
   _disabled: {
     selector:
       '&:disabled, &[disabled], &[aria-disabled="true"], &[data-disabled]',
@@ -69,7 +84,9 @@ export const BUILT_IN_SELECTORS: SelectorAliasMap = {
   _even: { selector: '&:nth-child(even)', order: 420 },
   _odd: { selector: '&:nth-child(odd)', order: 430 },
   _empty: { selector: '&:empty', order: 440 },
-};
+} satisfies Record<BuiltInSelectorAlias, SelectorAlias>;
+
+export const BUILT_IN_SELECTORS: SelectorAliasMap = BUILT_IN_SELECTOR_TABLE;
 
 /**
  * Order allocation continues past the highest existing order (floor 490, so
