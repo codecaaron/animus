@@ -502,6 +502,14 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
       forwards: [],
       derived: [],
       runtimeState: [],
+      context: [],
+      byAxis: [
+        {
+          site: 'src/app.tsx:2',
+          axis: 'size',
+          origin: 'a value the audit cannot trace',
+        },
+      ],
       reachedByCallers: null,
       notPassedByMatchedCallers: null,
       matchedCallers: null,
@@ -1337,6 +1345,163 @@ test("an inline object's literal members are read beside a function", async () =
       { tag_declarations: { 'src/app.tsx': { Wrap: 'src/wrap.tsx::Wrap' } } }
     );
     expect(proto.matchedCallers?.unexplained).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** A project whose `src/wrap.tsx` renders Chip (size and tone, sm/md/lg
+ *  and a/b/c, defaults md and a) with `attrs`. */
+async function axesAudit(root: string, attrs: JsonValue[]) {
+  const { manifest, manifestPath, dist } = writeProject(root);
+  const chip: ManifestComponentDescriptor = {
+    ...component('Chip'),
+    replacement: `createComponent('div', 'animus-Chip', {"variants":{"size":{"options":["sm","md","lg"],"default":"md"},"tone":{"options":["a","b","c"],"default":"a"}}})`,
+  };
+  const rules = [
+    ...['sm', 'md', 'lg'].map(
+      (v) => `.animus-Chip--size-${v}{${WIDE};font-size:${v}}`
+    ),
+    ...['a', 'b', 'c'].map(
+      (v) => `.animus-Chip--tone-${v}{${WIDE};color:${v}}`
+    ),
+  ];
+  const css = `@layer anm-variants{${rules.join('')}}`;
+  mkdirSync(join(root, 'src'), { recursive: true });
+  writeFileSync(
+    manifestPath,
+    JSON.stringify({
+      ...manifest,
+      css,
+      components: { 'src/ui.tsx::Chip': chip },
+      files: { 'src/ui.tsx': ['src/ui.tsx::Chip'] },
+      component_fragments: { 'src/ui.tsx::Chip': { variants: '' } },
+      tag_components: { 'src/wrap.tsx': { Chip: 'src/ui.tsx::Chip' } },
+      fileFacts: {
+        'src/wrap.tsx': {
+          proven: [{ element: { tag: { ident: 'Chip' }, attrs } }],
+        },
+      },
+    })
+  );
+  writeFileSync(join(dist, 'assets', 'index.css'), css);
+  writeFileSync(join(dist, 'assets', 'index.js'), '"animus-Chip"');
+  const report = await runCssAudit({ manifest: manifestPath, dist, root });
+  const finding = report.restructures.findings.find(
+    (found) => found.components[0] === 'src/ui.tsx::Chip'
+  );
+  return {
+    ...finding?.unproven,
+    suggestion: finding?.suggestion,
+    text: formatCssAudit(report),
+  };
+}
+
+/** Contract: a kept finding names each axis's origin at each site: a site
+ *  that keeps two axes from different origins (a prop and React context)
+ *  names both, a second derived origin at the site is kept, and an axis
+ *  whose value has no origin says so. A value read from React context
+ *  points at what provides it, never at a literal at the site, and names
+ *  the default its destructuring gives it; a derived value that also reads
+ *  context says the context decides it beside the callers. */
+test("a kept finding names each axis's origin, React context included", async () => {
+  const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
+  try {
+    const dynamic = (name: string, more: { [key: string]: JsonValue }) => ({
+      name,
+      values: [],
+      proven: false,
+      dynamicSpan: { start: 0, end: 4 },
+      ...more,
+    });
+    // SegmentOption's shape: size from the prop and context, treatment
+    // from context alone.
+    const segment = await axesAudit(root, [
+      dynamic('size', {
+        derived: {
+          component: 'Wrap',
+          props: ['size'],
+          contexts: ['SegmentContext.size'],
+          through: '??',
+        },
+      }),
+      dynamic('tone', {
+        context: { reads: ['SegmentContext.treatment'], through: '??' },
+      }),
+    ]);
+    expect(segment.byAxis).toEqual([
+      {
+        site: 'src/wrap.tsx@0',
+        axis: 'size',
+        origin: "derived from Wrap's size and SegmentContext.size through ??",
+      },
+      {
+        site: 'src/wrap.tsx@0',
+        axis: 'tone',
+        origin: 'read from SegmentContext.treatment through ??',
+      },
+    ]);
+    expect(segment.text).toContain(
+      "(size: derived from Wrap's size and SegmentContext.size through ??; tone: read from SegmentContext.treatment through ??)"
+    );
+    expect(segment.suggestion).toContain(
+      "This site's value is read from SegmentContext.treatment through ??: what provides SegmentContext decides it, so a change belongs where it is provided; a literal here would drop the context."
+    );
+    expect(segment.suggestion).not.toContain('At the site');
+    // A derived value that also reads context: the context decides it
+    // wherever the value does not take the prop, not the callers alone.
+    expect(segment.suggestion).toContain(
+      "what Wrap's callers pass decides it, and what provides SegmentContext decides it wherever the value does not take the prop (where a caller leaves it out, for one), so a change belongs at those callers and where SegmentContext is provided"
+    );
+
+    // DialogContentStyle's shape: two derived axes at one site, both kept.
+    const dialog = await axesAudit(root, [
+      dynamic('size', {
+        derived: { component: 'Wrap', props: ['size'], through: '??' },
+      }),
+      dynamic('tone', {
+        derived: {
+          component: 'Wrap',
+          props: ['corners'],
+          through: 'useLayerCorners',
+        },
+      }),
+    ]);
+    expect(dialog.derived).toHaveLength(2);
+    expect(dialog.text).toContain(
+      "(size: derived from Wrap's size through ??; tone: derived from Wrap's corners through useLayerCorners)"
+    );
+
+    // A context read its destructuring defaults names the default.
+    const defaulted = await axesAudit(root, [
+      dynamic('size', {
+        context: {
+          reads: ['SegmentContext.size'],
+          defaults: { 'SegmentContext.size': 'lg' },
+        },
+      }),
+      dynamic('tone', {}),
+    ]);
+    expect(defaulted.context).toEqual([
+      {
+        site: 'src/wrap.tsx@0',
+        reads: ['SegmentContext.size'],
+        defaults: { 'SegmentContext.size': 'lg' },
+        through: null,
+      },
+    ]);
+    expect(defaulted.text).toContain(
+      '(size: read from SegmentContext.size (default "lg"); tone: a value the audit cannot trace)'
+    );
+
+    // An axis with no origin beside one with an origin.
+    const mixed = await axesAudit(root, [
+      dynamic('size', { context: { reads: ['TabsContext.size'] } }),
+      dynamic('tone', {}),
+    ]);
+    expect(mixed.text).toContain(
+      '(size: read from TabsContext.size; tone: a value the audit cannot trace)'
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -161,11 +161,29 @@ export interface Unproven {
     site: string;
     component: string;
     props: string[];
+    /** The React context it also reads, as `Context.member`. */
+    contexts?: string[];
+    /** The literal a destructuring defaults a context read to, by read. */
+    contextDefaults?: Record<string, JsonValue>;
     through: string | null;
   }>;
   /** The sites among them that pass a React state hook's state slot, which
    *  changes at run time: \`at\` is the hook's call, \`file:line\`. */
   runtimeState: Array<{ site: string; hook: string; at: string }>;
+  /** The sites among them whose value is read from React context and no
+   *  prop (`Context.member`): what provides the context decides it. */
+  context: Array<{
+    site: string;
+    reads: string[];
+    /** The literal a destructuring defaults a read to, by read: what the
+     *  value takes where the context leaves the member out. */
+    defaults?: Record<string, JsonValue>;
+    through: string | null;
+  }>;
+  /** Each site's origin for each axis it keeps, as the text reads it: one
+   *  site can pass one axis from a prop and another from context, and an
+   *  axis whose value has no origin says so. */
+  byAxis: Array<{ site: string; axis: string; origin: string }>;
   /** Evidence, where every dynamic site forwards: the listed options, by
    *  axis, that the callers the engine matches to the forwarding component
    *  through the module graph pass, as values the analysis proves. A caller
@@ -198,6 +216,8 @@ export interface Unproven {
       at: string;
       component: string;
       props: string[];
+      contexts?: string[];
+      contextDefaults?: Record<string, JsonValue>;
       through: string | null;
     }>;
     /** A matched caller passes a value the audit cannot read and cannot
@@ -307,8 +327,22 @@ interface UsageAttr {
   /** The enclosing component's own prop a runtime value passes on
    *  unchanged. */
   forwarded?: ForwardedFact;
-  /** The enclosing component's props a runtime value is computed from. */
-  derived?: { component: string; props: string[]; through?: string };
+  /** The enclosing component's props a runtime value is computed from,
+   *  and the React context it also reads (`Context.member`). */
+  derived?: {
+    component: string;
+    props: string[];
+    contexts?: string[];
+    contextDefaults?: Record<string, JsonValue>;
+    through?: string;
+  };
+  /** The React context a runtime value is read from, and no prop, with
+   *  the literal a destructuring defaults a read to. */
+  context?: {
+    reads: string[];
+    defaults?: Record<string, JsonValue>;
+    through?: string;
+  };
   /** The state slot of a React state hook, its call at byte `at`. */
   runtimeState?: { hook: string; at: number };
   /** For an inline object no static value as a whole, its members read
@@ -1513,6 +1547,8 @@ interface DynamicSite {
   derived?: NonNullable<UsageAttr['derived']>;
   /** The React state slot the site passes. */
   runtimeState?: NonNullable<UsageAttr['runtimeState']>;
+  /** The React context the site reads its value from, and no prop. */
+  context?: NonNullable<UsageAttr['context']>;
 }
 
 function literalsOf(
@@ -1540,6 +1576,7 @@ function literalsOf(
           ...(attr.forwarded && { forwarded: attr.forwarded }),
           ...(attr.derived && { derived: attr.derived }),
           ...(attr.runtimeState && { runtimeState: attr.runtimeState }),
+          ...(attr.context && { context: attr.context }),
         });
       }
     }
@@ -1588,46 +1625,74 @@ function keptOptions(
       .join('; ');
     const count = kept.reduce((n, { options }) => n + options.length, 0);
     // A site is counted once, however many axes it leaves unproven, and
-    // names each prop it passes on.
-    const bySite = new Map<Site, DynamicSite[]>();
-    for (const dynamic of kept.flatMap((axis) => axis.dynamic)) {
-      bySite.set(dynamic.site, [...(bySite.get(dynamic.site) ?? []), dynamic]);
+    // names each origin it passes, for each axis.
+    const bySite = new Map<
+      Site,
+      Array<{ axis: string; dynamic: DynamicSite }>
+    >();
+    for (const { axis, dynamic: list } of kept) {
+      for (const dynamic of list) {
+        bySite.set(dynamic.site, [
+          ...(bySite.get(dynamic.site) ?? []),
+          { axis, dynamic },
+        ]);
+      }
     }
     const where: string[] = [];
     const forwards: Unproven['forwards'] = [];
     const derived: Unproven['derived'] = [];
     const runtimeState: Unproven['runtimeState'] = [];
+    const context: Unproven['context'] = [];
+    const byAxis: Unproven['byAxis'] = [];
+    const same = <Entry>(a: Entry, b: Entry) =>
+      JSON.stringify(a) === JSON.stringify(b);
     for (const list of bySite.values()) {
-      const site = locate(list[0]!);
+      const site = locate(list[0]!.dynamic);
       where.push(site);
-      for (const dynamic of list) {
+      for (const { axis, dynamic } of list) {
         if (dynamic.forwarded !== undefined) {
           const { component: owner, prop } = dynamic.forwarded;
-          if (
-            !forwards.some(
-              (f) => f.site === site && f.component === owner && f.prop === prop
-            )
-          ) {
-            forwards.push({ site, component: owner, prop });
-          }
-        } else if (
-          dynamic.derived !== undefined &&
-          !derived.some((d) => d.site === site)
-        ) {
-          derived.push({
+          const entry = { site, component: owner, prop };
+          if (!forwards.some((f) => same(f, entry))) forwards.push(entry);
+          byAxis.push({
+            site,
+            axis,
+            origin: `forwarded from ${owner}'s ${prop}`,
+          });
+        } else if (dynamic.derived !== undefined) {
+          const entry = {
             site,
             ...dynamic.derived,
             through: dynamic.derived.through ?? null,
-          });
-        } else if (
-          dynamic.runtimeState !== undefined &&
-          !runtimeState.some((r) => r.site === site)
-        ) {
+          };
+          if (!derived.some((d) => same(d, entry))) derived.push(entry);
+          byAxis.push({ site, axis, origin: derivedPhrase(entry) });
+        } else if (dynamic.runtimeState !== undefined) {
           const { hook, at } = dynamic.runtimeState;
-          runtimeState.push({
+          const entry = {
             site,
             hook,
             at: locate({ site: dynamic.site, start: at }),
+          };
+          if (!runtimeState.some((r) => same(r, entry))) {
+            runtimeState.push(entry);
+          }
+          byAxis.push({ site, axis, origin: `runtime state from ${hook}` });
+        } else if (dynamic.context !== undefined) {
+          const { reads, defaults, through } = dynamic.context;
+          const entry = {
+            site,
+            reads,
+            ...(defaults !== undefined && { defaults }),
+            through: through ?? null,
+          };
+          if (!context.some((c) => same(c, entry))) context.push(entry);
+          byAxis.push({ site, axis, origin: contextPhrase(entry) });
+        } else {
+          byAxis.push({
+            site,
+            axis,
+            origin: 'a value the audit cannot trace',
           });
         }
       }
@@ -1637,6 +1702,8 @@ function keptOptions(
       forwards,
       derived,
       runtimeState,
+      context,
+      byAxis,
       ...reachedByCallers(kept, byDeclaration, routes, locate),
       blocked,
       savingMeans: 'removed-if-proven-unreached',
@@ -1789,6 +1856,10 @@ function reachedByCallers(
         at: locate({ site, start: at }),
         component: from.component,
         props: from.props,
+        ...(from.contexts !== undefined && { contexts: from.contexts }),
+        ...(from.contextDefaults !== undefined && {
+          contextDefaults: from.contextDefaults,
+        }),
         through: from.through ?? null,
       })),
     },
@@ -2083,14 +2154,68 @@ function callerValues(
 function derivedPhrase({
   component,
   props,
+  contexts = [],
+  contextDefaults,
   through,
 }: {
   component: string;
   props: string[];
+  contexts?: string[];
+  contextDefaults?: Record<string, JsonValue>;
   through: string | null;
 }): string {
-  const named = props.map((prop) => `${component}'s ${prop}`).join(' and ');
+  const named = [
+    ...props.map((prop) => `${component}'s ${prop}`),
+    ...contexts.map((read) => withDefault(read, contextDefaults)),
+  ].join(' and ');
   return `derived from ${named}${through === null ? '' : ` through ${through}`}`;
+}
+
+/** "read from SegmentContext.treatment through ??"; a read a destructuring
+ *  defaults says so: "SegmentContext.size (default lg)". */
+function contextPhrase({
+  reads,
+  defaults,
+  through,
+}: {
+  reads: string[];
+  defaults?: Record<string, JsonValue>;
+  through: string | null;
+}): string {
+  return `read from ${reads.map((read) => withDefault(read, defaults)).join(' and ')}${through === null ? '' : ` through ${through}`}`;
+}
+
+/** A context read with the literal its destructuring defaults it to. */
+function withDefault(
+  read: string,
+  defaults: Record<string, JsonValue> | undefined
+): string {
+  const fallback = defaults?.[read];
+  return fallback === undefined
+    ? read
+    : `${read} (default ${JSON.stringify(fallback)})`;
+}
+
+/** The contexts a list of reads names (`SegmentContext` of
+ *  `SegmentContext.size`), joined. */
+function contextsOf(reads: string[]): string {
+  return [...new Set(reads.map((name) => name.split('.')[0]))].join(' and ');
+}
+
+/** Who decides a derived value: its component's callers, and where it
+ *  also reads React context, what provides that context wherever the
+ *  value does not take the props (a caller leaving them out, for one). */
+function derivedDecides(
+  derived: { component: string; props: string[]; contexts?: string[] },
+  where: 'here' | 'there'
+): string {
+  const { component, props, contexts = [] } = derived;
+  const prop = props.length === 1 ? 'prop' : 'props';
+  if (contexts.length === 0) {
+    return `what ${component}'s callers pass decides it, so a change belongs at those callers; a literal ${where} would drop ${component}'s ${prop}.`;
+  }
+  const provided = contextsOf(contexts);
+  return `what ${component}'s callers pass decides it, and what provides ${provided} decides it wherever the value does not take the ${prop} (where a caller leaves ${props.length === 1 ? 'it' : 'them'} out, for one), so a change belongs at those callers and where ${provided} is provided; a literal ${where} would drop ${component}'s ${prop} and the context.`;
 }
 /** What a change could let the engine see for a kept finding's options:
  *  literals at a forward's callers, a literal at a site that computes its
@@ -2145,20 +2270,26 @@ function keptSuggestion(unproven: Unproven): string {
     }
     for (const from of matched?.derived ?? []) {
       parts.push(
-        `A matched caller passes a value ${derivedPhrase(from)} (at ${from.at}): what ${from.component}'s callers pass decides it, so a change belongs at those callers; a literal there would drop ${from.component}'s ${from.props.length === 1 ? 'prop' : 'props'}.`
+        `A matched caller passes a value ${derivedPhrase(from)} (at ${from.at}): ${derivedDecides(from, 'there')}`
       );
     }
   }
   for (const derived of unproven.derived) {
-    const { component, props } = derived;
     parts.push(
-      `This site's value is ${derivedPhrase(derived)}: what ${component}'s callers pass decides it, so a change belongs at those callers; a literal here would drop ${component}'s ${props.length === 1 ? 'prop' : 'props'}.`
+      `This site's value is ${derivedPhrase(derived)}: ${derivedDecides(derived, 'here')}`
+    );
+  }
+  for (const read of unproven.context) {
+    const contexts = contextsOf(read.reads);
+    parts.push(
+      `This site's value is ${contextPhrase(read)}: what provides ${contexts} decides it, so a change belongs where it is provided; a literal here would drop the context.`
     );
   }
   const explained = new Set([
     ...unproven.forwards.map(({ site }) => site),
     ...unproven.derived.map(({ site }) => site),
     ...unproven.runtimeState.map(({ site }) => site),
+    ...unproven.context.map(({ site }) => site),
   ]).size;
   const others = sites - explained;
   if (others > 0) {
@@ -3063,6 +3194,22 @@ function titleText({ title, unproven }: Restructure | Refusal): string {
   }
   for (const { site, hook } of unproven.runtimeState) {
     forwarded.set(site, `runtime state from ${hook}`);
+  }
+  for (const read of unproven.context) {
+    forwarded.set(read.site, contextPhrase(read));
+  }
+  // A site that keeps more than one axis names each axis's origin.
+  const axesAt = new Map<string, Array<{ axis: string; origin: string }>>();
+  for (const { site, axis, origin } of unproven.byAxis) {
+    axesAt.set(site, [...(axesAt.get(site) ?? []), { axis, origin }]);
+  }
+  for (const [site, axes] of axesAt) {
+    if (new Set(axes.map(({ axis }) => axis)).size > 1) {
+      forwarded.set(
+        site,
+        axes.map(({ axis, origin }) => `${axis}: ${origin}`).join('; ')
+      );
+    }
   }
   let previous: string | null = null;
   const named = dynamicSites.slice(0, SITES_SHOWN).map((site) => {
