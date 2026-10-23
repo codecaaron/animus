@@ -211,8 +211,10 @@ describe('viteLoadExpander', () => {
         ],
         dotDot: ['src/dots/..foo.js'],
       });
-      // An environment that leaves a variable import at runtime, or an
-      // alias that could rewrite a relative specifier, is not reproduced.
+      // An environment that leaves a variable import at runtime is not
+      // reproduced, nor a load whose file an alias rewrites: Vite imports
+      // each by its path from the importer (here `./sub/d.js`) through the
+      // aliases, and aliases no pattern (vite-plus-core 1.3.0).
       const bundled = {
         isBundled: true,
         build: { dynamicImportVarsOptions: { exclude: [/node_modules/] } },
@@ -252,13 +254,21 @@ describe('viteLoadExpander', () => {
           [{ find: /^\/?@vite\/env/ }, { find: /^\/?@vite\/client/ }]
         )?.map(({ path }) => path),
         ssrExcluded: host(['**/entry.js'], []),
-        relativeAlias: host([/node_modules/], [{ find: './pages' }]),
-        regExpAlias: host([/node_modules/], [{ find: /^@/ }]),
+        matchingString: host([/node_modules/], [{ find: './sub' }]),
+        matchingRegExp: host([/node_modules/], [{ find: /^\.\/sub\/d\.js$/ }]),
+        otherDirectory: host([/node_modules/], [{ find: './pages' }]),
+        namePrefix: host([/node_modules/], [{ find: './su' }]),
+        fromRoot: host([/node_modules/], [{ find: '/src/pages/sub' }]),
+        packageRegExp: host([/node_modules/], [{ find: /^@/ }]),
       }).toEqual({
         everyDefault: ['src/pages/sub/d.js'],
         ssrExcluded: undefined,
-        relativeAlias: undefined,
-        regExpAlias: undefined,
+        matchingString: undefined,
+        matchingRegExp: undefined,
+        otherDirectory: [{ path: 'src/pages/sub/d.js', query: '' }],
+        namePrefix: [{ path: 'src/pages/sub/d.js', query: '' }],
+        fromRoot: [{ path: 'src/pages/sub/d.js', query: '' }],
+        packageRegExp: [{ path: 'src/pages/sub/d.js', query: '' }],
       });
       // Environments that resolve links differently load a globbed link by
       // different paths: no one expansion is exact.
@@ -274,6 +284,66 @@ describe('viteLoadExpander', () => {
       ).toBeUndefined();
     } finally {
       chmodSync(join(root, 'locked'), 0o755);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('viteHostExpander', () => {
+  // Contract: a Vite glob of adapted originals reads as their analysed
+  // children under aliases that rewrite none of its files, as in a docs app
+  // that aliases its snippets from the root.
+  test('an mdx glob under root aliases reads as its analysed children', () => {
+    const root = mkdtempSync(join(tmpdir(), 'animus-vite-mdx-glob-'));
+    for (const file of [
+      'src/shell/Shell.tsx',
+      'content/ui/a.mdx',
+      'content/guide/deep/b.mdx',
+      'content/snippets/s.mdx',
+    ]) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      writeFileSync(join(root, file), '\n');
+    }
+    try {
+      const expander = viteHostExpander({
+        root,
+        resolve: {
+          alias: [
+            { find: '/snippets/ui/StoryEmbed.mdx' },
+            { find: /^\/snippets\// },
+          ],
+        },
+        environments: { client: { isBundled: true } },
+      });
+      const children = ['content/ui/a.mdx.tsx', 'content/guide/deep/b.mdx.tsx'];
+      const expansions = hostExpansions(
+        [
+          {
+            importer: 'src/shell/Shell.tsx',
+            start: 0,
+            kind: 'glob',
+            args: {
+              patterns: ['../../content/{ui,guide}/**/*.mdx'],
+              options: null,
+            },
+          },
+        ],
+        root,
+        new Set(['src/shell/Shell.tsx', ...children]),
+        expander!,
+        undefined,
+        new Map([
+          ['content/ui/a.mdx', [children[0]!]],
+          ['content/guide/deep/b.mdx', [children[1]!]],
+        ])
+      );
+      expect(expansions.map(({ files }) => files)).toEqual([
+        [
+          { path: 'content/guide/deep/b.mdx.tsx', status: 'analysed' },
+          { path: 'content/ui/a.mdx.tsx', status: 'analysed' },
+        ],
+      ]);
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
