@@ -1,15 +1,21 @@
 parity baseline — engines: baseline:extractor vs extractor — devMode: false
 
-Units passed: 64/66 (96.97%)
-Divergences: 6 (6 unregistered)
+Units passed: 62/66 (93.94%)
+Divergences: 12 (12 unregistered)
 
 Failing units (sorted):
-  extract-all · css [selector] (UNREGISTERED) [ae2a8d0a76a4bb4242c5dc97dd485f0bbf9e6bc44611505e0084d6a843c64412 -> ace19b83d0cb58f22a9311b457be2b489bf35e8820ae49047a42f9f4a016eae1] — CSS bytes differ (46970 vs 46929)
-  extract-all · observables (UNREGISTERED) [f0f38888a863a42e3eee4352aed99bc175e0e74a2c1f3a4ccb677efafa4e1168 -> 6097f1c90c7fb652c095efe4857698726283e9c371e790343ea077ef45fdad97] — componentFragmentsJson differs
-  extract-all · observables (UNREGISTERED) [f0f38888a863a42e3eee4352aed99bc175e0e74a2c1f3a4ccb677efafa4e1168 -> 6097f1c90c7fb652c095efe4857698726283e9c371e790343ea077ef45fdad97] — sheetsJson differs
-  integration/selector-rules · css [selector] (UNREGISTERED) [990d303495c4e0fceeac953e1ce649bd71ebbe37ad0f1d7eb81aa8573c84d201 -> f55b36e0f425cbea8adacad838ec5b146ee1b4ed58a3ffd39c098eca174727ef] — CSS bytes differ (2182 vs 2162)
-  integration/selector-rules · observables (UNREGISTERED) [a45744b8a055eb13c79da11e7c25df3b88c768917a4d4323d1612566c5253bda -> 56c5b5b3572106cc57e512bd37e8772a22e836f6a2a73c8de62cd6c4c4fec2d1] — componentFragmentsJson differs
-  integration/selector-rules · observables (UNREGISTERED) [a45744b8a055eb13c79da11e7c25df3b88c768917a4d4323d1612566c5253bda -> 56c5b5b3572106cc57e512bd37e8772a22e836f6a2a73c8de62cd6c4c4fec2d1] — sheetsJson differs
+  extract-all · css [value] (UNREGISTERED) [ace19b83d0cb58f22a9311b457be2b489bf35e8820ae49047a42f9f4a016eae1 -> cf750ff096a368b335037912708d4f3739669a2f0a27f8e60f33812a4390f2d3] — CSS bytes differ (46929 vs 46951)
+  extract-all · observables (UNREGISTERED) [6097f1c90c7fb652c095efe4857698726283e9c371e790343ea077ef45fdad97 -> 702a76366494cadd4521f70b8c7f58ec2471a9d7315c372f2eeb9acab0cedf0c] — componentFragmentsJson differs
+  extract-all · observables (UNREGISTERED) [6097f1c90c7fb652c095efe4857698726283e9c371e790343ea077ef45fdad97 -> 702a76366494cadd4521f70b8c7f58ec2471a9d7315c372f2eeb9acab0cedf0c] — sheetsJson differs
+  extract/extension-child.tsx · css [value] (UNREGISTERED) [fbaaf6424884eeac1fa918ad94e4f7059de036a191783e6c274700966c9be736 -> f180e2d7f1c7718aa16e73e674412d7abd15d39a46f6b0c9e4a30b03d46b8f2b] — CSS bytes differ (1027 vs 1049)
+  extract/extension-child.tsx · observables (UNREGISTERED) [2e78d743a0d66094e9c92f79163345c5e4e7c7de7ba6a397b96e5e287f5cb3c9 -> 7b4dabfbdb5a057c296c4a86a3a4a6d96f7ee211fd7387779335fc7181bcbc49] — componentFragmentsJson differs
+  extract/extension-child.tsx · observables (UNREGISTERED) [2e78d743a0d66094e9c92f79163345c5e4e7c7de7ba6a397b96e5e287f5cb3c9 -> 7b4dabfbdb5a057c296c4a86a3a4a6d96f7ee211fd7387779335fc7181bcbc49] — sheetsJson differs
+  integration/extended.tsx · css [value] (UNREGISTERED) [5a8f5006231a2bfdc7d717ddc66086cc9c7ce851176925bfc718f036fbab445d -> 3a25a2e591c60e5c7d269b55844c518f3815e7132640b43ec6e1c53cf451398c] — CSS bytes differ (3264 vs 3264)
+  integration/extended.tsx · observables (UNREGISTERED) [9b8fab5e6ccba3eb8830f33a403b2595785240914ee8a0ebff638f910263a438 -> f6f0e0344adf932997a918fbf91a1109f39a88f30b74ee1625fe3d40581836a8] — componentFragmentsJson differs
+  integration/extended.tsx · observables (UNREGISTERED) [9b8fab5e6ccba3eb8830f33a403b2595785240914ee8a0ebff638f910263a438 -> f6f0e0344adf932997a918fbf91a1109f39a88f30b74ee1625fe3d40581836a8] — sheetsJson differs
+  parity/extension-compounds · css [formatting] (UNREGISTERED) [3d72cbf9e3cece49e0d1b14c908c233f5b6e408411eb7a1528c6fbb75eb5b47e -> af50de72a7ac477c28a2a071a7b4b77acea8db218b55effceea7137f05be192f] — CSS bytes differ (1837 vs 1837)
+  parity/extension-compounds · observables (UNREGISTERED) [03e1f69835df78cd74c8ca258026db87028ba947f64eb1015df57a50add78786 -> 220b148d37ad559704a3a3c326ed435980df328a04c15f3a6108cfc5efa86055] — componentFragmentsJson differs
+  parity/extension-compounds · observables (UNREGISTERED) [03e1f69835df78cd74c8ca258026db87028ba947f64eb1015df57a50add78786 -> 220b148d37ad559704a3a3c326ed435980df328a04c15f3a6108cfc5efa86055] — sheetsJson differs
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -23,27 +29,31 @@ Usage-case families:
   ok string-transforms-literal — expected identical, observed identical
   ok cyclic-extension — expected identical, observed identical
   ok duplicate-compose-modules — expected identical, observed identical
-  ok extension-compounds — expected identical, observed identical
+  VIOLATED extension-compounds — expected identical, observed divergence
   ok compose-default — expected identical, observed identical
   ok compose-slot-bail — expected identical, observed identical
+  VIOLATED family extension-compounds: expected identical, saw 3 divergence(s)
 
 ---
 
 parity baseline — engines: baseline:extractor vs extractor — devMode: true
 
-Units passed: 63/66 (95.45%)
-Divergences: 9 (9 unregistered)
+Units passed: 62/66 (93.94%)
+Divergences: 12 (12 unregistered)
 
 Failing units (sorted):
-  extract-all · css [selector] (UNREGISTERED) [b24b9658857c0523ea56385d851267c055f08cc565b8aff90102df590e3848a2 -> 93e5930f4e52112502b151f5cf6b91a662bb827248199f857c6a54e9ec080926] — CSS bytes differ (54316 vs 54275)
-  extract-all · observables (UNREGISTERED) [4e7237d4945cb10a33cbed8eb07018b25905c2689f8822474b0b46cc5b5ed05e -> 244bcd8fce9e76e78d80527af657715760e320467ecd24d137a01b83d2b52804] — componentFragmentsJson differs
-  extract-all · observables (UNREGISTERED) [4e7237d4945cb10a33cbed8eb07018b25905c2689f8822474b0b46cc5b5ed05e -> 244bcd8fce9e76e78d80527af657715760e320467ecd24d137a01b83d2b52804] — sheetsJson differs
-  extract/button.tsx · css [selector] (UNREGISTERED) [fd5b33a4a334dc474fea9547376bbec65b7853d087cc338d616d2ef63e78e1db -> 4fd5862724b14d19a553ab2259a85ec7112672569e5c4745bcaac0463e89f3aa] — CSS bytes differ (1865 vs 1824)
-  extract/button.tsx · observables (UNREGISTERED) [6c6d15a29956db38108f3b073cc00ebb3ebc755e3bcdb9354048739714c43420 -> 9c8d35b33e8bd82115b98afd3814295edf676a43b09712cce35180228651f212] — componentFragmentsJson differs
-  extract/button.tsx · observables (UNREGISTERED) [6c6d15a29956db38108f3b073cc00ebb3ebc755e3bcdb9354048739714c43420 -> 9c8d35b33e8bd82115b98afd3814295edf676a43b09712cce35180228651f212] — sheetsJson differs
-  integration/selector-rules · css [selector] (UNREGISTERED) [5e93e4eed8a00f2e1f820cd2ea907ee7daca4586f4c9bf2238cb68aa89d6f299 -> c81ed6b8bbb58fc98b3f35c2afb4543aadf5f21c1723c0b703757bc376dadd67] — CSS bytes differ (2427 vs 2407)
-  integration/selector-rules · observables (UNREGISTERED) [4c0c283f5a700100fa13c4957a516837c9f987b6e87529e058093f5d3e599db9 -> fd697a347a460ca8d0c30c6e7b6823067632a39ef4a40f1641583c2224fa3fa7] — componentFragmentsJson differs
-  integration/selector-rules · observables (UNREGISTERED) [4c0c283f5a700100fa13c4957a516837c9f987b6e87529e058093f5d3e599db9 -> fd697a347a460ca8d0c30c6e7b6823067632a39ef4a40f1641583c2224fa3fa7] — sheetsJson differs
+  extract-all · css [value] (UNREGISTERED) [93e5930f4e52112502b151f5cf6b91a662bb827248199f857c6a54e9ec080926 -> 8c81e5aaa3b655491eaa223629a7d58469571dfe467ca017dd1c3cf44a4c4e39] — CSS bytes differ (54275 vs 54297)
+  extract-all · observables (UNREGISTERED) [244bcd8fce9e76e78d80527af657715760e320467ecd24d137a01b83d2b52804 -> 4041d91c7ee415313435fc37cc4cbc71d4fc7621f74d62b9855545e63852a955] — componentFragmentsJson differs
+  extract-all · observables (UNREGISTERED) [244bcd8fce9e76e78d80527af657715760e320467ecd24d137a01b83d2b52804 -> 4041d91c7ee415313435fc37cc4cbc71d4fc7621f74d62b9855545e63852a955] — sheetsJson differs
+  extract/extension-child.tsx · css [value] (UNREGISTERED) [50f0d930c6aa369919d645f0cd4633b831269230bc6e949fbd1454ed901722ac -> 5b7b37587996f6fbaa674f26912db8a64261b5bb5e0e4081713b92bb5503d23d] — CSS bytes differ (17429 vs 17451)
+  extract/extension-child.tsx · observables (UNREGISTERED) [d0489a217dda338e0c43c631c7756a9a86f18dfbd7a660d76dc3e4c1cc288abf -> 180b61b26bd04553a331556139ebd5dd106a66e1fb35ebbf7416fdda9c0cf342] — componentFragmentsJson differs
+  extract/extension-child.tsx · observables (UNREGISTERED) [d0489a217dda338e0c43c631c7756a9a86f18dfbd7a660d76dc3e4c1cc288abf -> 180b61b26bd04553a331556139ebd5dd106a66e1fb35ebbf7416fdda9c0cf342] — sheetsJson differs
+  integration/extended.tsx · css [value] (UNREGISTERED) [f2f71ee82220d112cc40ca2e120549e7398efe71cfbfa1668cfc24354ab36c1c -> 6b4888306489349ca4e9edc61a1f0e10248e7809a1b4aaa4fa87a5536f4143e9] — CSS bytes differ (3264 vs 3264)
+  integration/extended.tsx · observables (UNREGISTERED) [2fa5ea84709627d8454ca20bf6d324715f45c910a1c4506efd966f4da182ce7a -> 9460081aaa9b5c6d54a4cb84bcd9a7da7fdc089f019cd7d1eb4e1b342dcb455a] — componentFragmentsJson differs
+  integration/extended.tsx · observables (UNREGISTERED) [2fa5ea84709627d8454ca20bf6d324715f45c910a1c4506efd966f4da182ce7a -> 9460081aaa9b5c6d54a4cb84bcd9a7da7fdc089f019cd7d1eb4e1b342dcb455a] — sheetsJson differs
+  parity/extension-compounds · css [formatting] (UNREGISTERED) [1e3c8beba6c5136f4db1444fed1d186b620103d40db24f60974e2b4224c898c2 -> 2dca2e7f8096d484c7b22e176229dc649392b9764434a42829b16f8abcbe33c8] — CSS bytes differ (1837 vs 1837)
+  parity/extension-compounds · observables (UNREGISTERED) [46320e834841834b95f66811952ef4d2e8c47001aa5a2260a905687cf7d64c37 -> edc7319a83d15cdc3e77d863bc6cdb457d502c9d1c0dda3a6d7f6a158158cb23] — componentFragmentsJson differs
+  parity/extension-compounds · observables (UNREGISTERED) [46320e834841834b95f66811952ef4d2e8c47001aa5a2260a905687cf7d64c37 -> edc7319a83d15cdc3e77d863bc6cdb457d502c9d1c0dda3a6d7f6a158158cb23] — sheetsJson differs
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -57,6 +67,7 @@ Usage-case families:
   ok string-transforms-literal — expected identical, observed identical
   ok cyclic-extension — expected identical, observed identical
   ok duplicate-compose-modules — expected identical, observed identical
-  ok extension-compounds — expected identical, observed identical
+  VIOLATED extension-compounds — expected identical, observed divergence
   ok compose-default — expected identical, observed identical
   ok compose-slot-bail — expected identical, observed identical
+  VIOLATED family extension-compounds: expected identical, saw 3 divergence(s)
