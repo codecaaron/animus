@@ -72,7 +72,7 @@
     "magic-string": "^0.30.21"
   },
   "devDependencies": {
-    "vite": "8.3.4"
+    "vite": "8.3.5"
   },
   "peerDependencies": {
     "vite": ">=8 <9",

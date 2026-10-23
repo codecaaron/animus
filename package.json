@@ -68,8 +68,11 @@
     "@babel/core": "7.29.7",
     "browserslist": "4.29.3",
     "fast-uri": "3.1.8",
-    "postcss": "8.5.29",
-    "vite": "8.3.4"
+    "postcss": "8.5.31",
+    "satori": {
+      "fflate": "0.7.5"
+    },
+    "vite": "8.3.5"
   },
   "packageManager": "bun@1.4.3"
 }

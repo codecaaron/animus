@@ -28,6 +28,6 @@
     "@animus-ui/assertions": "workspace:*",
     "@cloudflare/vite-plugin": "1.63.1",
     "@vitejs/plugin-react": "^6.1.2",
-    "vite": "^8.3.4"
+    "vite": "^8.3.5"
   }
 }
