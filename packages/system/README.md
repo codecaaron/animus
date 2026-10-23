@@ -557,7 +557,7 @@ work.
 | `@animus-ui/system`                      | Full API — builder, theme, runtime, types                                                                                                                        |
 | `@animus-ui/system/groups`               | Pre-built prop groups: `space`, `color`, `typography`, `layout`, `flex`, `grid`, `border`, `shadows`, `background`, `positioning`, `transitions`, `mode`, `vars` |
 | `@animus-ui/system/compose`              | `compose` — slot families with shared variant propagation                                                                                                        |
-| `@animus-ui/system/compose-with-context` | `composeWithContext` — slot families whose shared props travel by React context                                                                                  |
+| `@animus-ui/system/compose-with-context` | `composeWithContext` — slot families whose shared props travel by React context; with `requireRoot: true`, a member outside its Root throws in development       |
 | `@animus-ui/system/runtime`              | `createComponent` and the composed-family runtime                                                                                                                |
 | `@animus-ui/system/class-resolver`       | `createClassResolver` — class resolution without the React runtime, for non-React consumers                                                                      |
 | `@animus-ui/system/bootstrap`            | `createAppearanceBootstrap` — build-time only, never imported by application code                                                                                |

@@ -1880,10 +1880,13 @@ impl ExtractEngine {
         );
 
         let has_any_compose = !file_facts.compose.is_empty();
-        let has_compose_replacements = file_facts.compose.iter().any(|f| !f.context);
-        let has_compose_context_replacements = file_facts.compose.iter().any(|f| f.context);
+        // A family whose options only the runtime can read keeps its
+        // authored call.
+        let replaced = || file_facts.compose.iter().filter(|f| !f.authored);
+        let has_compose_replacements = replaced().any(|f| !f.context);
+        let has_compose_context_replacements = replaced().any(|f| f.context);
         let import_needs = replacement_import_needs(file_facts, &file_payloads);
-        for family in &file_facts.compose {
+        for family in replaced() {
             let slots_entries: Vec<String> = family
                 .slots
                 .iter()
@@ -1898,12 +1901,20 @@ impl ExtractEngine {
                     .collect();
                 // Never marked: the factory reads Root's variantDefaults, and
                 // a user's Root (a Proxy, a getter) can make that read run code.
+                let require_root = match family.require_root {
+                    Some(crate::jsx_scan::RequireRoot::On) => ", requireRoot: true".to_string(),
+                    Some(crate::jsx_scan::RequireRoot::Written(start, end)) => {
+                        format!(", requireRoot: {}", &source[start as usize..end as usize])
+                    }
+                    None => String::new(),
+                };
                 format!(
-                    "{}({}, {{ name: \"{}\", sharedKeys: [{}] }})",
+                    "{}({}, {{ name: \"{}\", sharedKeys: [{}]{} }})",
                     names.create_composed_family_with_context,
                     slots_obj,
-                    family.name,
-                    shared_keys_str.join(", ")
+                    family.runtime_name,
+                    shared_keys_str.join(", "),
+                    require_root
                 )
             } else {
                 // Pure as a component factory is, under an official runtime:
@@ -1915,7 +1926,7 @@ impl ExtractEngine {
                     mark,
                     names.create_composed_family,
                     slots_obj,
-                    family.name
+                    family.runtime_name
                 )
             };
             replacements.push((family.span.0, family.span.1, text));
@@ -2907,6 +2918,77 @@ mod tests {
             ),
             "got {code}"
         );
+    }
+
+    /// Contract: the extracted context family keeps `composeWithContext`'s
+    /// `requireRoot`, so a member outside its Root throws in development in
+    /// extracted code as in authored code: `true` is written, `false`
+    /// leaves it out, and any other data value is read where it was
+    /// written. Options whose `requireRoot` only the runtime can read (a
+    /// binding, any spread, a `__proto__` key, a getter) keep the authored
+    /// call.
+    #[test]
+    fn an_extracted_context_family_keeps_require_root() {
+        let family = |options: &str| {
+            transform_source(&format!(
+                "import {{ composeWithContext }} from '@animus-ui/system/compose-with-context';\n\
+                 const strict = true;\n\
+                 const options = {{ name: 'Tabs', shared: {{}}, requireRoot: true }};\n\
+                 const Root = ds.styles({{ display: 'flex' }}).asElement('div');\n\
+                 const Body = ds.styles({{ display: 'grid' }}).asElement('div');\n\
+                 export const Tabs = composeWithContext({{ Root, Body }}, {options});\n\
+                 export const App = () => <Tabs.Root><Tabs.Body /></Tabs.Root>;\n"
+            ))
+        };
+        let option = |option: &str| family(&format!("{{ name: 'Tabs', shared: {{}}{option} }}"));
+        let call = |code: &str| code.split("export const Tabs = ").nth(1).and_then(|rest| rest.split(";\n").next()).unwrap_or("").to_string();
+        let on = option(", requireRoot: true");
+        assert_eq!(call(&on), "createComposedFamilyWithContext({ Root: Root, Body: Body }, { name: \"Tabs\", sharedKeys: [], requireRoot: true })", "{on}");
+        assert_eq!(call(&option(", requireRoot: false")), call(&option("")));
+        assert!(!call(&option("")).contains("requireRoot"));
+        let written = option(", requireRoot: strict && !globalThis.loose");
+        assert!(call(&written).ends_with("sharedKeys: [], requireRoot: strict && !globalThis.loose })"), "{written}");
+        for authored in [
+            "options".to_string(),
+            "{ name: 'Tabs', shared: {}, requireRoot: true, ...{ requireRoot: false } }".to_string(),
+            // A spread runs code (a getter that sets `strict`) even where later
+            // keys decide every option.
+            "{ ...extra, name: 'Tabs', shared: {}, requireRoot: strict }".to_string(),
+            "{ __proto__: { name: 'Tabs', requireRoot: true }, shared: {} }".to_string(),
+            "{ '__proto__': { requireRoot: true }, name: 'Tabs', shared: {} }".to_string(),
+            "{ name: 'Tabs', shared: {}, get requireRoot() { return true } }".to_string(),
+            "{ name: 'Tabs', shared: {}, requireRoot() {} }".to_string(),
+            "{ name: 'Tabs', shared: {}, [strict]: true }".to_string(),
+        ] {
+            let code = family(&authored);
+            assert_eq!(call(&code), format!("composeWithContext({{ Root, Body }}, {authored})"), "{code}");
+            assert!(code.contains("import { composeWithContext }"), "{code}");
+        }
+    }
+
+    /// Contract: an extracted family's call names it as the runtime does,
+    /// `options.name ?? 'Composed'`, so a member's error and `displayName`
+    /// match authored code; a name the scan cannot read keeps the authored
+    /// call.
+    #[test]
+    fn an_extracted_family_is_named_as_the_runtime_names_it() {
+        let family = |factory: &str, options: &str| {
+            let module = if factory == "compose" { "compose" } else { "compose-with-context" };
+            let code = transform_source(&format!(
+                "import {{ {factory} }} from '@animus-ui/system/{module}';\n\
+                 const label = 'Tabs';\n\
+                 const Root = ds.styles({{ display: 'flex' }}).asElement('div');\n\
+                 const Body = ds.styles({{ display: 'grid' }}).asElement('div');\n\
+                 export const Tabs = {factory}({{ Root, Body }}, {options});\n\
+                 export const App = () => <Tabs.Root><Tabs.Body /></Tabs.Root>;\n"
+            ));
+            code.split("export const Tabs = ").nth(1).and_then(|rest| rest.split(";\n").next()).unwrap_or("").to_string()
+        };
+        assert!(family("composeWithContext", "{ shared: {} }").contains("{ name: \"Composed\", sharedKeys: [] }"));
+        assert!(family("compose", "{}").contains("{ name: \"Composed\" }"));
+        assert!(family("compose", "{ name: 'Tabs' }").contains("{ name: \"Tabs\" }"));
+        assert_eq!(family("compose", "{ name: label }"), "compose({ Root, Body }, { name: label })");
+        assert_eq!(family("compose", "{ __proto__: { name: 'Tabs' } }"), "compose({ Root, Body }, { __proto__: { name: 'Tabs' } })");
     }
 
     /// Contract (with assemble's): an emitted composed-family call carries

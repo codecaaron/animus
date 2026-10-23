@@ -451,4 +451,59 @@ describe('createComposedFamilyWithContext()', () => {
       )
     ).toThrow(/No "Root" slot found/);
   });
+
+  // Contract: with `requireRoot`, a member rendered outside its Root throws
+  // in development, naming the member and the Root, in the authored and the
+  // extracted form alike; one inside renders, a portalled one included; a
+  // family without it keeps standalone members valid.
+  it('requireRoot: a member outside its Root throws, one inside or portalled renders, in both forms', () => {
+    const forms = [
+      composeWithContext(
+        { Root, Control },
+        { name: 'Tabs', shared: { size: true }, requireRoot: true }
+      ),
+      createComposedFamilyWithContext(
+        { Root, Control },
+        { name: 'Tabs', sharedKeys: ['size'], requireRoot: true }
+      ),
+    ];
+    for (const Family of forms) {
+      expect(() => renderToString(createElement(Family.Control))).toThrow(
+        '<Tabs.Control> must be inside <Tabs.Root>'
+      );
+      const inside = renderToString(
+        createElement(
+          Family.Root,
+          { size: 'lg' },
+          createElement(Family.Control)
+        )
+      );
+      expect(tagHasClass(inside, 'input', '--size-lg')).toBe(true);
+
+      const container = document.createElement('div');
+      const portalTarget = document.createElement('div');
+      document.body.append(container, portalTarget);
+      const root = createRoot(container);
+      flushSync(() => {
+        root.render(
+          createElement(
+            Family.Root,
+            { size: 'sm' },
+            createPortal(createElement(Family.Control), portalTarget)
+          )
+        );
+      });
+      expect(portalTarget.querySelector('input')?.className).toContain(
+        '--size-sm'
+      );
+      flushSync(() => root.unmount());
+      container.remove();
+      portalTarget.remove();
+    }
+    const optional = createComposedFamilyWithContext(
+      { Root, Control },
+      { name: 'Tabs', sharedKeys: ['size'] }
+    );
+    expect(() => renderToString(createElement(optional.Control))).not.toThrow();
+  });
 });

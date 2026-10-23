@@ -2,7 +2,8 @@
 //! keys, context flag) read from top-level statements.
 
 use oxc::ast::ast::{
-    Argument, BindingPattern, Declaration, Expression, ObjectPropertyKind, Program, Statement,
+    Argument, BindingPattern, Declaration, Expression, ObjectPropertyKind, Program, PropertyKind,
+    Statement,
 };
 
 use super::value_eval::eval_property_key;
@@ -30,6 +31,10 @@ pub struct ComposeFamilyInfo {
     pub shared_keys: Vec<String>,
     /// Shared variants propagate through React context across portals.
     pub context: bool,
+    /// `composeWithContext`'s `requireRoot` option, where it may be on: a
+    /// member outside its Root throws in development.
+    #[serde(skip)]
+    pub require_root: Option<RequireRoot>,
     /// Byte range of the `compose()` call expression.
     pub span: (u32, u32),
     /// Built through `Object.assign`, which a module may rewrite.
@@ -41,6 +46,26 @@ pub struct ComposeFamilyInfo {
     #[serde(skip)]
     pub extras: Vec<(String, String)>,
     pub name: String,
+    /// The name the runtime gives the family, `options.name ?? 'Composed'`:
+    /// the extracted call passes it, so a member's error and `displayName`
+    /// match authored code.
+    #[serde(skip)]
+    pub runtime_name: String,
+    /// The options set `name` or `requireRoot` in a way this scan cannot
+    /// read (a binding, a spread, a `__proto__` key, a getter): the
+    /// extracted code keeps the authored call, so the runtime reads them.
+    #[serde(skip)]
+    pub authored: bool,
+}
+
+/// How a family's options write `requireRoot`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequireRoot {
+    /// `requireRoot: true`.
+    On,
+    /// Any value but a boolean literal, by its byte range: the extracted
+    /// call reads it where it is written.
+    Written(u32, u32),
 }
 
 impl ComposeFamilyInfo {
@@ -355,21 +380,26 @@ fn extract_compose_family(
         return;
     }
 
-    let (shared_keys, context_from_opts, name_opt) = call
-        .arguments
-        .get(1)
-        .and_then(|arg| match arg {
-            Argument::ObjectExpression(opts) => Some((
-                extract_shared_keys(opts).unwrap_or_default(),
-                extract_context_flag(opts),
-                extract_name_option(opts),
-            )),
-            _ => None,
-        })
+    let options = call.arguments.get(1).map(|arg| match arg.as_expression().map(crate::chain_walk::unwrap_type_assertions) {
+        Some(Expression::ObjectExpression(opts)) => Some(&**opts),
+        _ => None,
+    });
+    let (shared_keys, context_from_opts) = options
+        .flatten()
+        .map(|opts| (extract_shared_keys(opts).unwrap_or_default(), extract_context_flag(opts)))
         .unwrap_or_default();
+    let (name_opt, require_root, authored) = match options {
+        None => (None, None, false),
+        Some(None) => (None, None, true),
+        Some(Some(opts)) => match (plain_options(opts), extract_name_option(opts), extract_require_root(opts)) {
+            (true, Some(name), Some(require_root)) => (name, require_root, false),
+            _ => (None, None, true),
+        },
+    };
 
     let context = force_context || context_from_opts;
 
+    let runtime_name = name_opt.clone().unwrap_or_else(|| "Composed".to_string());
     let name = name_opt
         .or_else(|| family_binding.clone())
         .unwrap_or_else(|| "Composed".to_string());
@@ -383,10 +413,13 @@ fn extract_compose_family(
         open,
         shared_keys,
         context,
+        require_root,
         span: (call.span.start, call.span.end),
         assigned: false,
         extras: Vec::new(),
         name,
+        runtime_name,
+        authored,
     });
 }
 
@@ -428,18 +461,48 @@ fn extract_context_flag(opts: &oxc::ast::ast::ObjectExpression) -> bool {
     false
 }
 
-fn extract_name_option(opts: &oxc::ast::ast::ObjectExpression) -> Option<String> {
+/// Whether the runtime reads only the options' own properties as written:
+/// a spread can run code or supply a key, and a `__proto__` key can let one
+/// be inherited.
+fn plain_options(opts: &oxc::ast::ast::ObjectExpression) -> bool {
+    opts.properties.iter().all(|prop| match prop {
+        ObjectPropertyKind::SpreadProperty(_) => false,
+        ObjectPropertyKind::ObjectProperty(prop) => eval_property_key(&prop.key).as_deref() != Some("__proto__"),
+    })
+}
+
+/// The value the options' `key` reads: `Ok(None)` where nothing writes it,
+/// `Err(())` where the last write is a spread, a key this scan cannot read,
+/// or an accessor or method, which only the runtime can read.
+fn data_property<'a>(opts: &'a oxc::ast::ast::ObjectExpression<'a>, key: &str) -> Result<Option<&'a Expression<'a>>, ()> {
+    let mut value = Ok(None);
     for prop in &opts.properties {
-        if let ObjectPropertyKind::ObjectProperty(prop) = prop {
-            if let Some(key) = eval_property_key(&prop.key) {
-                if key == "name" {
-                    if let Expression::StringLiteral(s) = &prop.value {
-                        return crate::eval::literal_string(s).map(str::to_string);
-                    }
-                    return None;
-                }
-            }
-        }
+        value = match prop {
+            ObjectPropertyKind::SpreadProperty(_) => Err(()),
+            ObjectPropertyKind::ObjectProperty(prop) => match eval_property_key(&prop.key) {
+                Some(name) if name != key => continue,
+                Some(_) if prop.kind == PropertyKind::Init && !prop.method => Ok(Some(&prop.value)),
+                _ => Err(()),
+            },
+        };
     }
-    None
+    value
+}
+
+/// `requireRoot` as the options write it, `None` where it cannot be read.
+fn extract_require_root(opts: &oxc::ast::ast::ObjectExpression) -> Option<Option<RequireRoot>> {
+    use oxc::span::GetSpan;
+    Some(data_property(opts, "requireRoot").ok()?.and_then(|value| match value {
+        Expression::BooleanLiteral(b) => b.value.then_some(RequireRoot::On),
+        value => Some(RequireRoot::Written(value.span().start, value.span().end)),
+    }))
+}
+
+/// `name` as the options write it, `None` where it is not a string literal.
+fn extract_name_option(opts: &oxc::ast::ast::ObjectExpression) -> Option<Option<String>> {
+    match data_property(opts, "name").ok()? {
+        None => Some(None),
+        Some(Expression::StringLiteral(s)) => crate::eval::literal_string(s).map(|name| Some(name.to_string())),
+        Some(_) => None,
+    }
 }
