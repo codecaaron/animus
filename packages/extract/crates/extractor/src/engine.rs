@@ -2817,6 +2817,146 @@ mod tests {
         assert_eq!(members(8), serde_json::json!({ "readable": {}, "unreadable": ["__proto__", "onClick"] }));
     }
 
+    /// Contract: a value read from React context, through React's own
+    /// `useContext`, names what it reads: a context member alone is a
+    /// `context` origin, one read beside the component's props is listed
+    /// in its `derived` origin's `contexts`, and a destructured member or
+    /// a `const` of one reads the same. A `useContext` that is not React's
+    /// names nothing.
+    #[test]
+    fn a_value_read_from_react_context_names_it() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let source = "import { createContext, useContext } from 'react';\n\
+                      const SegmentContext = createContext(null);\n\
+                      const TabsContext = createContext({});\n\
+                      export function Seg({ size }) { const segment = useContext(SegmentContext); return <Box tone={segment.treatment ?? 'ink'} size={size ?? segment.size ?? 'md'} />; }\n\
+                      export function Tab() { const { orientation } = useContext(TabsContext); return <Box o={orientation ?? 'horizontal'} />; }\n\
+                      export function Held() { const tabs = useContext(TabsContext); const fit = tabs.fit; return <Box fit={fit} />; }\n";
+        let other = "import { useContext } from './hooks';\n\
+                     export function Own() { const segment = useContext(Thing); return <Box tone={segment.treatment} />; }\n";
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze_full(
+                    serde_json::json!([{ "path": "a.tsx", "source": source }, { "path": "b.tsx", "source": other }]).to_string(),
+                    None,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let attr = |file: &str, element: usize, at: usize| manifest["fileFacts"][file]["proven"][element]["element"]["attrs"][at].clone();
+        assert_eq!(attr("a.tsx", 0, 0)["context"], serde_json::json!({ "reads": ["SegmentContext.treatment"], "through": "??" }));
+        assert_eq!(
+            attr("a.tsx", 0, 1)["derived"],
+            serde_json::json!({ "component": "Seg", "props": ["size"], "contexts": ["SegmentContext.size"], "through": "??" })
+        );
+        assert_eq!(attr("a.tsx", 1, 0)["context"], serde_json::json!({ "reads": ["TabsContext.orientation"], "through": "??" }));
+        assert_eq!(attr("a.tsx", 2, 0)["context"], serde_json::json!({ "reads": ["TabsContext.fit"] }));
+        assert_eq!(attr("b.tsx", 0, 0).get("context"), None, "a useContext that is not React's names nothing");
+    }
+
+    /// Contract: an origin is named only where every operand of the value
+    /// is a prop, a React context read or a literal. Local code beside them
+    /// (state, an imported `let`, a call, a local `let`, a conditional on
+    /// another value, a function the component defines) decides the value
+    /// too; a context binding the component may write into (a member
+    /// written, `Object.assign`, a member of a destructured one written, a
+    /// member path handed on and written below, the binding stored,
+    /// returned or handed to a child) reads what the component wrote; and
+    /// no local object carries an origin, written or not, from context or
+    /// from props: none of these is named. A literal destructuring
+    /// default of a context member is carried as it is read; any other
+    /// default is local code, so its binding names nothing. A member's
+    /// value handed to a call writes nothing into the context, and a member
+    /// under a literal key reads as a member does.
+    #[test]
+    fn a_value_local_code_also_decides_names_no_origin() {
+        let cases = [
+            ("state", "const seg = useContext(Seg); const [picked] = useState('lg'); return <Box size={seg.size ?? picked} />;"),
+            ("import-let", "const seg = useContext(Seg); return <Box size={seg.size ?? DEFAULT} />;"),
+            ("call", "const seg = useContext(Seg); return <Box size={seg.size || computeSize()} />;"),
+            ("local-let", "let local = 'lg'; const seg = useContext(Seg); return <Box size={seg.size ?? local} />;"),
+            ("conditional", "const seg = useContext(Seg); const wide = window.innerWidth > 9; return <Box size={wide ? 'lg' : seg.size} />;"),
+            ("const-of-state", "const seg = useContext(Seg); const [picked] = useState('lg'); const s = seg.size ?? picked; return <Box size={s} />;"),
+            ("prop-and-state", "const seg = useContext(Seg); const [picked] = useState('lg'); return <Box size={size ?? seg.size ?? picked} />;"),
+            ("prop-and-state-alone", "const [picked] = useState('lg'); return <Box size={size ?? picked} />;"),
+            ("member-written", "const seg = useContext(Seg); seg.size = 'lg'; return <Box size={seg.size} />;"),
+            ("object-assign", "const seg = useContext(Seg); Object.assign(seg, { size: 'lg' }); return <Box size={seg.size} />;"),
+            ("spread-copy", "const seg = useContext(Seg); const s = { ...seg, size: 'lg' }; return <Box size={s.size} />;"),
+            ("destructured-written", "const { opts } = useContext(Seg); opts.size = 'lg'; return <Box size={opts.size} />;"),
+            ("default-unread", "const { size: s = computeSize() } = useContext(Seg); return <Box size={s} />;"),
+            // A member path handed on, then written below it.
+            ("member-handed", "const seg = useContext(Seg); Object.assign(seg.opts, { size: 'lg' }); return <Box size={seg.opts.size} />;"),
+            ("member-aliased", "const seg = useContext(Seg); const opts = seg.opts; opts.size = 'lg'; return <Box size={seg.opts.size} />;"),
+            // The binding stored, returned or handed to a child.
+            ("in-array", "const seg = useContext(Seg); const [s] = [seg]; s.size = 'lg'; return <Box size={seg.size} />;"),
+            ("in-object", "const seg = useContext(Seg); const box = { seg }; box.seg.size = 'lg'; return <Box size={seg.size} />;"),
+            ("returned", "const seg = useContext(Seg); const get = () => seg; get().size = 'lg'; return <Box size={seg.size} />;"),
+            ("to-child", "const seg = useContext(Seg); return <><Box size={seg.size} /><Writer ctx={seg} /></>;"),
+            // The binding coerced, which runs its own code.
+            ("coerced", "const seg = useContext(Seg); const label = `${seg}`; return <Box size={seg.size} />;"),
+            ("member-in-array", "const { opts } = useContext(Seg); const [o] = [opts]; o.size = 'lg'; return <Box size={opts.size} />;"),
+            // No local object carries an origin, written or not, from
+            // context or from props.
+            ("local-written", "const seg = useContext(Seg); const s = { size: seg.size }; if (window.innerWidth < 9) s.size = 'sm'; return <Box size={s.size} />;"),
+            ("local-assigned", "const seg = useContext(Seg); const s = { size: seg.size }; Object.assign(s, { size: 'lg' }); return <Box size={s.size} />;"),
+            ("local-untouched", "const seg = useContext(Seg); const s = { size: seg.size }; return <Box size={s.size} />;"),
+            ("local-of-prop", "const s = { size }; if (window.innerWidth < 9) s.size = 'sm'; return <Box size={s.size} />;"),
+            // A call of a function the component defines.
+            ("closure", "const seg = useContext(Seg); const [picked] = useState('lg'); const pick = (v) => v ?? picked; return <Box size={pick(seg.size)} />;"),
+        ];
+        let files: Vec<serde_json::Value> = cases
+            .iter()
+            .map(|(name, body)| {
+                serde_json::json!({
+                    "path": format!("{name}.tsx"),
+                    "source": format!(
+                        "import {{ useContext, useState }} from 'react';\n\
+                         import {{ Seg, DEFAULT, computeSize }} from './seg';\n\
+                         export function C({{ size }}) {{ {body} }}\n"
+                    ),
+                })
+            })
+            .chain([
+                serde_json::json!({ "path": "seg.ts", "source": "import { createContext } from 'react';\nexport const Seg = createContext({ size: 'sm' });\nexport let DEFAULT = 'lg';\nexport const computeSize = () => 'lg';\n" }),
+                serde_json::json!({ "path": "default.tsx", "source": "import { useContext } from 'react';\nimport { Seg } from './seg';\nexport function C() { const { size = 'lg' } = useContext(Seg); return <Box size={size} />; }\n" }),
+                serde_json::json!({ "path": "through-call.tsx", "source": "import { useContext } from 'react';\nimport { Seg } from './seg';\nexport function C() { const seg = useContext(Seg); return <Box size={gutterFor(seg.size)} />; }\n" }),
+                serde_json::json!({ "path": "literal-key.tsx", "source": "export function C({ settings }) { return <Box size={settings['Field.Input'].size} />; }\n" }),
+                serde_json::json!({ "path": "sibling-handed.tsx", "source": "import { useContext } from 'react';\nimport { Seg } from './seg';\nexport function C() { const seg = useContext(Seg); seg.opts?.items.push(1); return <Box size={seg['size']} />; }\n" }),
+                serde_json::json!({ "path": "const-member.tsx", "source": "import { useContext } from 'react';\nimport { Seg } from './seg';\nexport function C() { const seg = useContext(Seg); const opts = seg.opts; return <Box size={opts.size} />; }\n" }),
+                serde_json::json!({ "path": "scalar.tsx", "source": "import { useContext } from 'react';\nimport { Seg } from './seg';\nexport function C() { const size = useContext(Seg); return <Box size={size ?? 'md'} />; }\n" }),
+                serde_json::json!({ "path": "const-of-read.tsx", "source": "import { useContext } from 'react';\nimport { Seg } from './seg';\nexport function C() { const seg = useContext(Seg); const s = seg.size ?? 'md'; return <Box size={s} />; }\n" }),
+                serde_json::json!({ "path": "tested.tsx", "source": "import { useContext } from 'react';\nimport { Seg } from './seg';\nexport function C() { const seg = useContext(Seg); if (!seg) throw new Error('outside'); return <Box size={seg.size} />; }\n" }),
+            ])
+            .collect();
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&engine.analyze_full(serde_json::Value::Array(files).to_string(), None).unwrap()).unwrap();
+        let attr = |file: &str| manifest["fileFacts"][file]["proven"][0]["element"]["attrs"][0].clone();
+        for (name, _) in cases {
+            let attr = attr(&format!("{name}.tsx"));
+            assert_eq!(attr["name"], "size", "{name}: {attr}");
+            for origin in ["context", "derived", "forwarded"] {
+                assert_eq!(attr.get(origin), None, "{name} names an origin: {attr}");
+            }
+        }
+        assert_eq!(attr("default.tsx")["context"], serde_json::json!({ "reads": ["Seg.size"], "defaults": { "Seg.size": "lg" } }));
+        // A member's value handed to a call writes nothing into the context,
+        // and a member under a literal key is read as a member.
+        assert_eq!(attr("through-call.tsx")["context"], serde_json::json!({ "reads": ["Seg.size"], "through": "gutterFor" }));
+        assert_eq!(attr("literal-key.tsx")["derived"], serde_json::json!({ "component": "C", "props": ["settings"] }));
+        // A member path handed on leaves reads beside it, and a literal key
+        // names its member; a member of a `const` of one member read is a
+        // read of the context.
+        assert_eq!(attr("sibling-handed.tsx")["context"], serde_json::json!({ "reads": ["Seg.size"] }));
+        assert_eq!(attr("const-member.tsx")["context"], serde_json::json!({ "reads": ["Seg.opts.size"] }));
+        // A context of one value, read whole as the attribute's value.
+        assert_eq!(attr("scalar.tsx")["context"], serde_json::json!({ "reads": ["Seg"], "through": "??" }));
+        // A `const` whose own value is a traced read keeps that read.
+        assert_eq!(attr("const-of-read.tsx")["context"], serde_json::json!({ "reads": ["Seg.size"], "through": "??" }));
+        // Testing a whole binding (`!seg`) leaves it as provided.
+        assert_eq!(attr("tested.tsx")["context"], serde_json::json!({ "reads": ["Seg.size"] }));
+    }
+
     #[test]
     fn malformed_input_is_a_loud_error() {
         let mut engine = ExtractEngine::new(None).unwrap();

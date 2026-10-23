@@ -162,6 +162,24 @@ pub enum ValueOrigin {
     Derived(DerivedProp),
     /// The state slot of a React state hook the component calls.
     RuntimeState(RuntimeState),
+    /// Read of React context (`useContext`), and of no prop.
+    Context(ContextRead),
+}
+
+/// What a value reads of React context the component takes with React's
+/// own `useContext`: each `Context.member` it reads, or the `Context` it
+/// reads whole, and what computes it from them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextRead {
+    pub reads: Vec<String>,
+    /// The literal a destructuring defaults a read member to
+    /// (`const { size = 'lg' } = useContext(Seg)`), which the value takes
+    /// where the context leaves the member out.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub defaults: BTreeMap<String, Value>,
+    /// What computes the value, as written: a call's callee, or an operator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub through: Option<String>,
 }
 
 /// A component's own prop an attribute passes on: one of the component's
@@ -212,6 +230,12 @@ impl ForwardedProp {
 pub struct DerivedProp {
     pub component: String,
     pub props: Vec<String>,
+    /// The React context it also reads, as `ContextRead::reads` names it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contexts: Vec<String>,
+    /// The defaults of those reads, as `ContextRead::defaults` holds them.
+    #[serde(rename = "contextDefaults", skip_serializing_if = "BTreeMap::is_empty")]
+    pub context_defaults: BTreeMap<String, Value>,
     /// What computes the value, as written: a call's callee, or an operator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub through: Option<String>,
@@ -445,6 +469,8 @@ pub(crate) fn serialize_proven<S: serde::Serializer>(
         #[serde(skip_serializing_if = "Option::is_none")]
         runtime_state: Option<&'u RuntimeState>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        context: Option<&'u ContextRead>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         members: Option<&'u ObjectMembers>,
     }
     let facts = usage.iter().flatten().filter_map(|fact| match fact {
@@ -453,11 +479,12 @@ pub(crate) fn serialize_proven<S: serde::Serializer>(
             attrs: attrs
                 .iter()
                 .map(|attr| {
-                    let (forwarded, derived, runtime_state) = match &attr.value_origin {
-                        ValueOrigin::Forwarded(forwarded) => (Some(forwarded), None, None),
-                        ValueOrigin::Derived(derived) => (None, Some(derived), None),
-                        ValueOrigin::RuntimeState(state) => (None, None, Some(state)),
-                        ValueOrigin::Unknown => (None, None, None),
+                    let (forwarded, derived, runtime_state, context) = match &attr.value_origin {
+                        ValueOrigin::Forwarded(forwarded) => (Some(forwarded), None, None, None),
+                        ValueOrigin::Derived(derived) => (None, Some(derived), None, None),
+                        ValueOrigin::RuntimeState(state) => (None, None, Some(state), None),
+                        ValueOrigin::Context(read) => (None, None, None, Some(read)),
+                        ValueOrigin::Unknown => (None, None, None, None),
                     };
                     ProvenAttr {
                     name: &attr.name,
@@ -470,6 +497,7 @@ pub(crate) fn serialize_proven<S: serde::Serializer>(
                     forwarded,
                     derived,
                     runtime_state,
+                    context,
                     members: attr.members.as_deref(),
                     }
                 })
@@ -7497,7 +7525,7 @@ impl FactCollector<'_, '_> {
         if let Some(state) = self.runtime_state(expression) {
             return ValueOrigin::RuntimeState(state);
         }
-        self.derived_from(expression).map_or(ValueOrigin::Unknown, ValueOrigin::Derived)
+        self.derived_from(expression)
     }
 
     /// The prop of the enclosing component `expression` passes on as written:
@@ -7558,14 +7586,18 @@ impl FactCollector<'_, '_> {
         self.params.states.get(&symbol_of(self.origins?, ident)?).cloned()
     }
 
-    /// The enclosing component's props `expression` reads, where it reads
-    /// any: the props it is computed from, and what computes it.
-    fn derived_from(&self, expression: &Expression<'_>) -> Option<DerivedProp> {
+    /// What `expression` is computed from, where it reads the enclosing
+    /// component's props or React context: the props, the context it also
+    /// reads, and what computes it; or, reading context and no prop, the
+    /// context alone.
+    fn derived_from(&self, expression: &Expression<'_>) -> ValueOrigin {
         struct Reads<'p, 's> {
             scoping: &'s Scoping,
             params: &'p ComponentParams,
             locals: &'p FxHashMap<SymbolId, ValueOrigin>,
             found: Vec<(String, String)>,
+            contexts: Vec<String>,
+            defaults: BTreeMap<String, Value>,
         }
         impl<'a> Visit<'a> for Reads<'_, '_> {
             fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
@@ -7573,38 +7605,79 @@ impl FactCollector<'_, '_> {
                 if let Some(forwarded) = self.params.props.get(&symbol) {
                     self.found.push((forwarded.component.clone(), forwarded.prop.clone()));
                 }
-                // A `const` computed from the props reads what it reads.
+                if let Some(binding) = self.params.contexts.get(&symbol) {
+                    self.contexts.push(binding.read(&[]));
+                    if let Some(default) = &binding.default {
+                        self.defaults.insert(binding.read(&[]), default.clone());
+                    }
+                }
+                // A `const` whose value is traced reads what it reads.
                 match self.locals.get(&symbol) {
                     Some(ValueOrigin::Forwarded(forwarded)) => self.found.push((forwarded.component.clone(), forwarded.prop.clone())),
                     Some(ValueOrigin::Derived(derived)) => {
                         self.found.extend(derived.props.iter().map(|prop| (derived.component.clone(), prop.clone())));
+                        self.contexts.extend(derived.contexts.iter().cloned());
+                        self.defaults.extend(derived.context_defaults.clone());
+                    }
+                    Some(ValueOrigin::Context(read)) => {
+                        self.contexts.extend(read.reads.iter().cloned());
+                        self.defaults.extend(read.defaults.clone());
                     }
                     _ => {}
                 }
             }
-            fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
-                if let Expression::Identifier(object) = &member.object {
-                    if let Some(component) = symbol_of(self.scoping, object).and_then(|symbol| self.params.objects.get(&symbol)) {
-                        self.found.push((component.clone(), member.property.name.to_string()));
-                        return;
+            // A member of the props object is that prop; a member of a
+            // context binding is that member, however deep.
+            fn visit_expression(&mut self, expression: &Expression<'a>) {
+                if let Some((root, path)) = member_path(expression).filter(|(_, path)| !path.is_empty()) {
+                    if let Some(symbol) = symbol_of(self.scoping, root) {
+                        if let Some(component) = self.params.objects.get(&symbol) {
+                            self.found.push((component.clone(), path[0].clone()));
+                            return;
+                        }
+                        if let Some(binding) = self.params.contexts.get(&symbol) {
+                            self.contexts.push(binding.read(&path));
+                            return;
+                        }
                     }
                 }
-                oxc::ast_visit::walk::walk_static_member_expression(self, member);
+                oxc::ast_visit::walk::walk_expression(self, expression);
             }
         }
-        let mut reads = Reads { scoping: self.origins?, params: &self.params, locals: &self.local_origins, found: Vec::new() };
+        let Some(scoping) = self.origins else { return ValueOrigin::Unknown };
+        if !self.traced(expression, true) {
+            return ValueOrigin::Unknown;
+        }
+        let mut reads = Reads {
+            scoping,
+            params: &self.params,
+            locals: &self.local_origins,
+            found: Vec::new(),
+            contexts: Vec::new(),
+            defaults: BTreeMap::new(),
+        };
         reads.visit_expression(expression);
-        let (component, _) = reads.found.first()?.clone();
+        let mut contexts: Vec<String> = Vec::new();
+        for read in reads.contexts {
+            if !contexts.contains(&read) {
+                contexts.push(read);
+            }
+        }
+        let component = reads.found.first().map(|(component, _)| component.clone());
+        if component.is_none() && contexts.is_empty() {
+            return ValueOrigin::Unknown;
+        }
         let mut props: Vec<String> = Vec::new();
         for (owner, prop) in reads.found {
-            if owner == component && !props.contains(&prop) {
+            if Some(&owner) == component.as_ref() && !props.contains(&prop) {
                 props.push(prop);
             }
         }
         let through = match crate::chain_walk::unwrap_type_assertions(expression) {
-            // A `const` computed from the props, by what computes it.
-            Expression::Identifier(ident) => match symbol_of(self.origins?, ident).and_then(|symbol| self.local_origins.get(&symbol)) {
+            // A traced `const`, by what computes it.
+            Expression::Identifier(ident) => match symbol_of(scoping, ident).and_then(|symbol| self.local_origins.get(&symbol)) {
                 Some(ValueOrigin::Derived(derived)) => derived.through.clone(),
+                Some(ValueOrigin::Context(read)) => read.through.clone(),
                 _ => None,
             },
             Expression::CallExpression(call) => {
@@ -7616,7 +7689,85 @@ impl FactCollector<'_, '_> {
             Expression::ConditionalExpression(_) => Some("a conditional".to_string()),
             _ => None,
         };
-        Some(DerivedProp { component, props, through })
+        let defaults = reads.defaults;
+        match component {
+            Some(component) => {
+                ValueOrigin::Derived(DerivedProp { component, props, contexts, context_defaults: defaults, through })
+            }
+            None => ValueOrigin::Context(ContextRead { reads: contexts, defaults, through }),
+        }
+    }
+
+    /// Whether every operand `expression` computes its value from is one an
+    /// origin names directly: a prop or a member of the props, a read of
+    /// React context (a member of a context binding, a destructured member,
+    /// or a `const` of one member read, none of it written), a literal (or
+    /// a `const` of literals), or a `const` whose own value is traced, under
+    /// operators and conditionals; and, as the outermost computation only, a call of a
+    /// function declared outside the component (at module scope, an
+    /// import, or a global) with such arguments, which `through` names. No object or
+    /// array literal, and no member of a local object, carries an origin,
+    /// nor does a call of a function the component defines: local code may
+    /// decide such values.
+    fn traced(&self, expression: &Expression<'_>, outermost: bool) -> bool {
+        let Some(scoping) = self.origins else { return false };
+        let expression = expression.get_inner_expression();
+        if self.finite_set(expression).is_some() {
+            return true;
+        }
+        if let Some((root, path)) = member_path(expression) {
+            let Some(symbol) = symbol_of(scoping, root) else { return false };
+            if let Some(binding) = self.params.contexts.get(&symbol) {
+                return binding.reads_unhanded(&path);
+            }
+            return match path.is_empty() {
+                // A `const` is traced where its value is: it holds no
+                // container, which no origin names.
+                true => {
+                    self.params.props.contains_key(&symbol)
+                        || matches!(
+                            self.local_origins.get(&symbol),
+                            Some(ValueOrigin::Forwarded(_) | ValueOrigin::Derived(_) | ValueOrigin::Context(_))
+                        )
+                }
+                false => self.params.objects.contains_key(&symbol) || self.params.props.contains_key(&symbol),
+            };
+        }
+        match expression {
+            // A member under a key the walk cannot read: the props', or the
+            // context's where nothing below it may be written.
+            Expression::ComputedMemberExpression(member) => {
+                self.traced(&member.expression, false)
+                    && member_path(&member.object).is_some_and(|(root, path)| {
+                        symbol_of(scoping, root).is_some_and(|symbol| match self.params.contexts.get(&symbol) {
+                            Some(binding) => binding.handed.is_empty(),
+                            None => path.is_empty() && (self.params.objects.contains_key(&symbol) || self.params.props.contains_key(&symbol)),
+                        })
+                    })
+            }
+            Expression::LogicalExpression(logical) => self.traced(&logical.left, false) && self.traced(&logical.right, false),
+            Expression::BinaryExpression(binary) => self.traced(&binary.left, false) && self.traced(&binary.right, false),
+            Expression::ConditionalExpression(conditional) => {
+                self.traced(&conditional.test, false)
+                    && self.traced(&conditional.consequent, false)
+                    && self.traced(&conditional.alternate, false)
+            }
+            Expression::UnaryExpression(unary) => {
+                unary.operator != oxc::syntax::operator::UnaryOperator::Delete && self.traced(&unary.argument, false)
+            }
+            Expression::TemplateLiteral(template) => template.expressions.iter().all(|part| self.traced(part, false)),
+            Expression::CallExpression(call) => {
+                outermost
+                    && member_path(&call.callee).is_some_and(|(root, _)| {
+                        // Declared at module scope or imported, or a global.
+                        let reference = root.reference_id.get();
+                        fixed_callee(scoping, reference)
+                            || reference.is_some_and(|reference| scoping.get_reference(reference).symbol_id().is_none())
+                    })
+                    && call.arguments.iter().all(|argument| argument.as_expression().is_some_and(|argument| self.traced(argument, false)))
+            }
+            _ => false,
+        }
     }
 
     /// Where a spread's argument passes on the enclosing component's own
@@ -7735,6 +7886,71 @@ struct ComponentParams {
     empty_defaults: FxHashSet<SymbolId>,
     rests: FxHashMap<SymbolId, SpreadForward>,
     states: FxHashMap<SymbolId, RuntimeState>,
+    /// Each binding React's own `useContext` initialises nothing writes:
+    /// the context value, or one member of it destructured.
+    contexts: FxHashMap<SymbolId, ContextBinding>,
+}
+
+/// A binding of React context: the context `useContext` reads, by its
+/// argument as written, and the member it holds: one a destructuring takes
+/// of it, or one a `const` reads off the whole context (`const s =
+/// seg.size`).
+#[derive(Debug, Clone)]
+struct ContextBinding {
+    context: String,
+    member: Option<String>,
+    /// The literal the destructuring defaults the member to.
+    default: Option<Value>,
+    /// For a `const` of one member, the whole binding and the member path.
+    parent: Option<(SymbolId, Vec<String>)>,
+    /// The member paths below the binding something may write into: handed
+    /// to a call, bound to another name, stored or called as a method on.
+    handed: Vec<Vec<String>>,
+}
+
+impl ContextBinding {
+    /// The read `path` below it names: `Context.member.path`.
+    fn read(&self, path: &[String]) -> String {
+        let mut name = self.context.clone();
+        for part in self.member.iter().chain(path) {
+            name.push('.');
+            name.push_str(part);
+        }
+        name
+    }
+
+    /// Whether a read of `path` below it is one nothing may have written
+    /// into: no handed member path lies above it.
+    fn reads_unhanded(&self, path: &[String]) -> bool {
+        !self.handed.iter().any(|handed| handed.len() < path.len() && path.starts_with(handed))
+    }
+}
+
+/// A member chain's root binding and its member names, outermost last:
+/// `seg.opts.size` is (`seg`, [opts, size]); a literal key is a name
+/// (`settings['Field.Input']`). `None` for any other key or root.
+fn member_path<'e, 'a>(expression: &'e Expression<'a>) -> Option<(&'e IdentifierReference<'a>, Vec<String>)> {
+    let mut path = Vec::new();
+    let mut expression = expression.get_inner_expression();
+    loop {
+        let member = match expression {
+            Expression::Identifier(ident) => {
+                path.reverse();
+                return Some((ident, path));
+            }
+            Expression::ChainExpression(chain) => chain.expression.as_member_expression()?,
+            expression => expression.as_member_expression()?,
+        };
+        match member {
+            oxc::ast::ast::MemberExpression::StaticMemberExpression(member) => path.push(member.property.name.to_string()),
+            oxc::ast::ast::MemberExpression::ComputedMemberExpression(member) => path.push(match literal_value(&member.expression)? {
+                Value::String(key) => key,
+                key => key.to_string(),
+            }),
+            _ => return None,
+        }
+        expression = member.object().get_inner_expression();
+    }
 }
 
 /// A destructured prop's default the walk reads: a string, number or
@@ -7744,6 +7960,7 @@ fn default_value(expression: &Expression<'_>) -> Option<Value> {
 }
 
 const HOOK_FUNCTIONS: [&str; 2] = ["useState", "useReducer"];
+const CONTEXT_HOOKS: [&str; 1] = ["useContext"];
 
 fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentParams {
     use oxc::ast::ast::{BindingIdentifier, BindingPattern, Declaration, ExportDefaultDeclarationKind};
@@ -7753,6 +7970,7 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
         return params;
     }
     params.states = state_slots(program, scoping);
+    params.contexts = context_bindings(program, scoping);
     let mut component = |id: &BindingIdentifier<'_>, function: Option<ComponentFunction<'_, '_>>| {
         let Some((first, body)) = function.and_then(|function| function.props.map(|first| (first, function.body))) else {
             return;
@@ -8013,6 +8231,385 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
         }
     }
     params
+}
+
+/// Each binding React's own `useContext` initialises, where nothing writes
+/// it: `const ctx = useContext(Ctx)`, the context whole, each binding of
+/// `const { size, tone: t = 'a' } = useContext(Ctx)`, one member, with its
+/// default where that is a literal (another default leaves the binding
+/// out), and a `const` of one member read off a whole one (`const s =
+/// ctx.size`). The context is named by `useContext`'s argument as written.
+/// A whole binding is kept only where every use of it is one that cannot
+/// write it (`context_uses`), and a binding something may write into is
+/// left out (`context_writes`), with the member paths handed on recorded.
+fn context_bindings(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<SymbolId, ContextBinding> {
+    use oxc::ast::ast::{BindingPattern, PropertyKey};
+    use oxc::span::GetSpan;
+    if !program.source_text.contains("useContext") {
+        return FxHashMap::default();
+    }
+    let hooks = ReactNames::importing(program, scoping, &CONTEXT_HOOKS, &[], false);
+    if hooks.is_empty() {
+        return FxHashMap::default();
+    }
+    struct Scan<'s> {
+        scoping: &'s Scoping,
+        source: &'s str,
+        hooks: ReactNames,
+        contexts: FxHashMap<SymbolId, ContextBinding>,
+    }
+    impl<'a> Visit<'a> for Scan<'_> {
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            let call = match declarator.init.as_ref().map(|init| init.get_inner_expression()) {
+                Some(Expression::CallExpression(call)) if self.hooks.export(&call.callee).is_some() => Some(call),
+                _ => None,
+            };
+            if let Some(argument) = call.and_then(|call| call.arguments.first()).and_then(|argument| argument.as_expression()) {
+                let written = argument.span().source_text(self.source);
+                let context = if written.len() <= 40 { written.to_string() } else { "a context".to_string() };
+                match &declarator.id {
+                    BindingPattern::BindingIdentifier(id) => {
+                        if let Some(symbol) = unwritten(self.scoping, id) {
+                            self.contexts.insert(symbol, ContextBinding { context, member: None, default: None, parent: None, handed: Vec::new() });
+                        }
+                    }
+                    BindingPattern::ObjectPattern(object) => {
+                        for property in &object.properties {
+                            let key = match &property.key {
+                                PropertyKey::StaticIdentifier(key) if !property.computed => key.name.to_string(),
+                                _ => continue,
+                            };
+                            let (id, default) = match &property.value {
+                                BindingPattern::BindingIdentifier(id) => (id, None),
+                                BindingPattern::AssignmentPattern(assignment) => match (&assignment.left, default_value(&assignment.right)) {
+                                    (BindingPattern::BindingIdentifier(id), Some(default)) => (id, Some(default)),
+                                    _ => continue,
+                                },
+                                _ => continue,
+                            };
+                            if let Some(symbol) = unwritten(self.scoping, id) {
+                                self.contexts.insert(
+                                    symbol,
+                                    ContextBinding { context: context.clone(), member: Some(key), default, parent: None, handed: Vec::new() },
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            } else if let (BindingPattern::BindingIdentifier(id), Some(init)) = (&declarator.id, &declarator.init) {
+                // A `const` of one member read off a whole binding.
+                let read = member_path(init).filter(|(_, path)| !path.is_empty()).and_then(|(root, path)| {
+                    let parent = symbol_of(self.scoping, root)?;
+                    let whole = self.contexts.get(&parent).filter(|binding| binding.member.is_none())?;
+                    Some((parent, whole.context.clone(), path))
+                });
+                if let (Some((parent, context, path)), Some(symbol)) = (read, unwritten(self.scoping, id)) {
+                    self.contexts.insert(
+                        symbol,
+                        ContextBinding { context, member: Some(path.join(".")), default: None, parent: Some((parent, path)), handed: Vec::new() },
+                    );
+                }
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+    }
+    let mut scan = Scan { scoping, source: program.source_text, hooks, contexts: FxHashMap::default() };
+    scan.visit_program(program);
+    let mut contexts = scan.contexts;
+    if contexts.is_empty() {
+        return contexts;
+    }
+    let unproven = context_uses(program, scoping, &contexts);
+    let (written, mut handed) = context_writes(program, scoping, &contexts);
+    contexts.retain(|symbol, _| !written.contains(symbol) && !unproven.contains(symbol));
+    for (symbol, binding) in &mut contexts {
+        binding.handed = handed.remove(symbol).unwrap_or_default();
+    }
+    // A `const` of a member holds what its whole binding holds: gone with
+    // it, or where a member path above it was handed on.
+    let parents: FxHashMap<SymbolId, ContextBinding> = contexts.clone();
+    contexts.retain(|_, binding| match &binding.parent {
+        Some((parent, path)) => parents.get(parent).is_some_and(|whole| whole.reads_unhanded(path)),
+        None => true,
+    });
+    contexts
+}
+
+/// The operands an attribute's value computes from through operators and
+/// conditionals: what reaches the element as the value, or decides it.
+fn value_operands<'e, 'a>(expression: &'e Expression<'a>, found: &mut dyn FnMut(&'e Expression<'a>)) {
+    match expression.get_inner_expression() {
+        Expression::LogicalExpression(logical) => {
+            value_operands(&logical.left, found);
+            value_operands(&logical.right, found);
+        }
+        Expression::ConditionalExpression(conditional) => {
+            value_operands(&conditional.test, found);
+            value_operands(&conditional.consequent, found);
+            value_operands(&conditional.alternate, found);
+        }
+        Expression::BinaryExpression(binary) => {
+            value_operands(&binary.left, found);
+            value_operands(&binary.right, found);
+        }
+        Expression::UnaryExpression(unary) => value_operands(&unary.argument, found),
+        Expression::TemplateLiteral(template) => template.expressions.iter().for_each(|part| value_operands(part, found)),
+        expression => found(expression),
+    }
+}
+
+/// The whole context bindings some use of which may write them or hand
+/// them on: every value reference to one must read a member, destructure
+/// it, spread it, test it (`!ctx`, `ctx === null`, `if (ctx)`, `ctx ? … :
+/// …`), or be a JSX attribute's value, under operators (`size={ctx ??
+/// 'md'}`), as a context of one value is read. Anything else (`f(ctx)`,
+/// `[ctx]`, `{ ctx }`, `() => ctx`) is not proven to leave it as provided.
+fn context_uses(program: &Program<'_>, scoping: &Scoping, contexts: &FxHashMap<SymbolId, ContextBinding>) -> FxHashSet<SymbolId> {
+    use oxc::syntax::operator::{BinaryOperator, UnaryOperator};
+    struct Uses<'s, 'c> {
+        scoping: &'s Scoping,
+        contexts: &'c FxHashMap<SymbolId, ContextBinding>,
+        read: FxHashSet<oxc::semantic::ReferenceId>,
+    }
+    impl Uses<'_, '_> {
+        /// Records `expression` as a use that cannot write, where it names
+        /// a whole binding.
+        fn read(&mut self, expression: &Expression<'_>) {
+            if let Expression::Identifier(ident) = expression.get_inner_expression() {
+                let whole = symbol_of(self.scoping, ident)
+                    .and_then(|symbol| self.contexts.get(&symbol))
+                    .is_some_and(|binding| binding.member.is_none());
+                if let (true, Some(reference)) = (whole, ident.reference_id.get()) {
+                    self.read.insert(reference);
+                }
+            }
+        }
+    }
+    impl<'a> Visit<'a> for Uses<'_, '_> {
+        fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+            self.read(&member.object);
+            oxc::ast_visit::walk::walk_static_member_expression(self, member);
+        }
+        fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
+            self.read(&member.object);
+            oxc::ast_visit::walk::walk_computed_member_expression(self, member);
+        }
+        fn visit_spread_element(&mut self, spread: &oxc::ast::ast::SpreadElement<'a>) {
+            self.read(&spread.argument);
+            oxc::ast_visit::walk::walk_spread_element(self, spread);
+        }
+        fn visit_jsx_spread_attribute(&mut self, spread: &oxc::ast::ast::JSXSpreadAttribute<'a>) {
+            self.read(&spread.argument);
+            oxc::ast_visit::walk::walk_jsx_spread_attribute(self, spread);
+        }
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            if let (oxc::ast::ast::BindingPattern::ObjectPattern(_), Some(init)) = (&declarator.id, &declarator.init) {
+                self.read(init);
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+        fn visit_unary_expression(&mut self, unary: &oxc::ast::ast::UnaryExpression<'a>) {
+            if matches!(unary.operator, UnaryOperator::LogicalNot | UnaryOperator::Typeof | UnaryOperator::Void) {
+                self.read(&unary.argument);
+            }
+            oxc::ast_visit::walk::walk_unary_expression(self, unary);
+        }
+        fn visit_binary_expression(&mut self, binary: &oxc::ast::ast::BinaryExpression<'a>) {
+            if matches!(
+                binary.operator,
+                BinaryOperator::Equality | BinaryOperator::Inequality | BinaryOperator::StrictEquality | BinaryOperator::StrictInequality
+            ) {
+                self.read(&binary.left);
+                self.read(&binary.right);
+            }
+            oxc::ast_visit::walk::walk_binary_expression(self, binary);
+        }
+        fn visit_if_statement(&mut self, statement: &oxc::ast::ast::IfStatement<'a>) {
+            self.read(&statement.test);
+            oxc::ast_visit::walk::walk_if_statement(self, statement);
+        }
+        fn visit_conditional_expression(&mut self, conditional: &oxc::ast::ast::ConditionalExpression<'a>) {
+            self.read(&conditional.test);
+            oxc::ast_visit::walk::walk_conditional_expression(self, conditional);
+        }
+        fn visit_jsx_attribute(&mut self, attribute: &oxc::ast::ast::JSXAttribute<'a>) {
+            if let Some(oxc::ast::ast::JSXAttributeValue::ExpressionContainer(container)) = &attribute.value {
+                if let Some(expression) = container.expression.as_expression() {
+                    value_operands(expression, &mut |operand| self.read(operand));
+                }
+            }
+            oxc::ast_visit::walk::walk_jsx_attribute(self, attribute);
+        }
+    }
+    let mut uses = Uses { scoping, contexts, read: FxHashSet::default() };
+    uses.visit_program(program);
+    contexts
+        .iter()
+        .filter(|(_, binding)| binding.member.is_none())
+        .filter(|(symbol, _)| {
+            scoping.get_resolved_reference_ids(**symbol).iter().any(|reference| {
+                scoping.get_reference(*reference).is_value() && !uses.read.contains(reference)
+            })
+        })
+        .map(|(symbol, _)| *symbol)
+        .collect()
+}
+
+/// The context bindings something may write into, and the member paths
+/// below each something may write into. A member of one written or
+/// deleted (`seg.size = 'lg'`, `delete seg.size`, `seg.n++`) writes it.
+/// Handed on (to a call, bound to another name, stored in an array or
+/// object, returned, or called as a method on), the binding itself
+/// (`Object.assign(seg, …)`, `const s = seg`, `seg.pick()`) is written, and
+/// a member path of it (`Object.assign(seg.opts, …)`, `const o = seg.opts`,
+/// `seg.items.push(…)`) may be, with whatever lies below it; a member
+/// path a JSX attribute hands a child counts too.
+fn context_writes(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    contexts: &FxHashMap<SymbolId, ContextBinding>,
+) -> (FxHashSet<SymbolId>, FxHashMap<SymbolId, Vec<Vec<String>>>) {
+    struct Writes<'s, 'c> {
+        scoping: &'s Scoping,
+        contexts: &'c FxHashMap<SymbolId, ContextBinding>,
+        written: FxHashSet<SymbolId>,
+        handed: FxHashMap<SymbolId, Vec<Vec<String>>>,
+    }
+    impl Writes<'_, '_> {
+        /// The binding a member chain, or the binding itself, starts from,
+        /// and the path; a key the walk cannot read stops the path there.
+        fn rooted(&self, expression: &Expression<'_>) -> Option<(SymbolId, Vec<String>)> {
+            let mut expression = expression.get_inner_expression();
+            let mut unread = false;
+            let path = loop {
+                if let Some((root, path)) = member_path(expression) {
+                    let symbol = symbol_of(self.scoping, root).filter(|symbol| self.contexts.contains_key(symbol))?;
+                    break if unread { (symbol, Vec::new()) } else { (symbol, path) };
+                }
+                let member = match expression {
+                    Expression::ChainExpression(chain) => chain.expression.as_member_expression()?,
+                    expression => expression.as_member_expression()?,
+                };
+                unread = true;
+                expression = member.object().get_inner_expression();
+            };
+            Some(path)
+        }
+        fn write(&mut self, expression: &Expression<'_>) {
+            if let Some((symbol, _)) = self.rooted(expression) {
+                self.written.insert(symbol);
+            }
+        }
+        /// `expression` handed on: the binding written, or a path of it.
+        fn hand(&mut self, expression: &Expression<'_>) {
+            match self.rooted(expression) {
+                Some((symbol, path)) if path.is_empty() => {
+                    self.written.insert(symbol);
+                }
+                Some((symbol, path)) => self.handed.entry(symbol).or_default().push(path),
+                None => {}
+            }
+        }
+    }
+    impl<'a> Visit<'a> for Writes<'_, '_> {
+        fn visit_simple_assignment_target(&mut self, target: &oxc::ast::ast::SimpleAssignmentTarget<'a>) {
+            if let Some(member) = target.as_member_expression() {
+                self.write(member.object());
+            }
+            oxc::ast_visit::walk::walk_simple_assignment_target(self, target);
+        }
+        fn visit_unary_expression(&mut self, unary: &oxc::ast::ast::UnaryExpression<'a>) {
+            if unary.operator == oxc::syntax::operator::UnaryOperator::Delete {
+                if let Some(member) = unary.argument.get_inner_expression().as_member_expression() {
+                    self.write(member.object());
+                }
+            }
+            oxc::ast_visit::walk::walk_unary_expression(self, unary);
+        }
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            let callee = match call.callee.get_inner_expression() {
+                Expression::ChainExpression(chain) => chain.expression.as_member_expression().map(|member| member.object()),
+                callee => callee.as_member_expression().map(|member| member.object()),
+            };
+            if let Some(receiver) = callee {
+                self.hand(receiver);
+            }
+            for argument in &call.arguments {
+                match argument {
+                    oxc::ast::ast::Argument::SpreadElement(spread) => self.hand(&spread.argument),
+                    argument => {
+                        if let Some(argument) = argument.as_expression() {
+                            self.hand(argument);
+                        }
+                    }
+                }
+            }
+            oxc::ast_visit::walk::walk_call_expression(self, call);
+        }
+        fn visit_new_expression(&mut self, new: &oxc::ast::ast::NewExpression<'a>) {
+            for argument in new.arguments.iter().filter_map(|argument| argument.as_expression()) {
+                self.hand(argument);
+            }
+            oxc::ast_visit::walk::walk_new_expression(self, new);
+        }
+        fn visit_tagged_template_expression(&mut self, tagged: &oxc::ast::ast::TaggedTemplateExpression<'a>) {
+            if let Some(member) = tagged.tag.get_inner_expression().as_member_expression() {
+                self.hand(member.object());
+            }
+            for part in &tagged.quasi.expressions {
+                self.hand(part);
+            }
+            oxc::ast_visit::walk::walk_tagged_template_expression(self, tagged);
+        }
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            if let (oxc::ast::ast::BindingPattern::BindingIdentifier(_), Some(init)) = (&declarator.id, &declarator.init) {
+                self.hand(init);
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+        fn visit_assignment_expression(&mut self, assignment: &oxc::ast::ast::AssignmentExpression<'a>) {
+            self.hand(&assignment.right);
+            oxc::ast_visit::walk::walk_assignment_expression(self, assignment);
+        }
+        fn visit_array_expression_element(&mut self, element: &oxc::ast::ast::ArrayExpressionElement<'a>) {
+            if let Some(element) = element.as_expression() {
+                self.hand(element);
+            }
+            oxc::ast_visit::walk::walk_array_expression_element(self, element);
+        }
+        fn visit_object_property(&mut self, property: &oxc::ast::ast::ObjectProperty<'a>) {
+            self.hand(&property.value);
+            oxc::ast_visit::walk::walk_object_property(self, property);
+        }
+        fn visit_return_statement(&mut self, statement: &oxc::ast::ast::ReturnStatement<'a>) {
+            if let Some(argument) = &statement.argument {
+                self.hand(argument);
+            }
+            oxc::ast_visit::walk::walk_return_statement(self, statement);
+        }
+        fn visit_arrow_function_expression(&mut self, arrow: &oxc::ast::ast::ArrowFunctionExpression<'a>) {
+            if let Some(body) = arrow.get_expression() {
+                self.hand(body);
+            }
+            oxc::ast_visit::walk::walk_arrow_function_expression(self, arrow);
+        }
+        // A child given the binding, or a member path of it, may write
+        // below what it was given; what it was given still reads as given.
+        fn visit_jsx_expression_container(&mut self, container: &oxc::ast::ast::JSXExpressionContainer<'a>) {
+            if let Some(expression) = container.expression.as_expression() {
+                value_operands(expression, &mut |operand| {
+                    if let Some((symbol, path)) = self.rooted(operand) {
+                        self.handed.entry(symbol).or_default().push(path);
+                    }
+                });
+            }
+            oxc::ast_visit::walk::walk_jsx_expression_container(self, container);
+        }
+    }
+    let mut writes = Writes { scoping, contexts, written: FxHashSet::default(), handed: FxHashMap::default() };
+    writes.visit_program(program);
+    (writes.written, writes.handed)
 }
 
 /// Each state slot of a React state hook nothing writes: the first binding
