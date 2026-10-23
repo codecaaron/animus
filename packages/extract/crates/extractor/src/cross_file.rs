@@ -88,7 +88,7 @@ fn collect_stage_metadata(
 
     match stage.method.as_str() {
         "variant" => {
-            let prop = value["prop"].as_str().unwrap_or("variant").to_string();
+            let prop = crate::chain_merge::variant_prop(value).to_string();
             let options = value["variants"]
                 .as_object()
                 .into_iter()

@@ -33,7 +33,8 @@ pub fn deep_merge(parent: &Value, child: &Value) -> Value {
 /// Raw variant stage configs keyed by variant prop, in declaration order.
 pub type VariantConfigs = Vec<(String, Value)>;
 
-fn variant_prop(config: &Value) -> &str {
+/// A variant stage's prop; `variant` where none is written.
+pub(crate) fn variant_prop(config: &Value) -> &str {
     config["prop"].as_str().unwrap_or("variant")
 }
 

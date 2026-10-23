@@ -2137,8 +2137,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
                 }
                 if stage.method == "variant" {
                     let set_config = |facts: &mut StageFacts, cfg: eval::VariantStageConfig| {
+                        // The runtime reads `prop || 'variant'`: an empty name is none.
+                        let prop = if cfg.prop.is_empty() { "variant".to_string() } else { cfg.prop };
                         let mut value = StaticValue::Object(vec![
-                            ("prop".to_string(), StaticValue::String(cfg.prop)),
+                            ("prop".to_string(), StaticValue::String(prop)),
                             ("defaultVariant".to_string(), cfg.default_variant.map_or(StaticValue::Null, StaticValue::String)),
                             ("base".to_string(), cfg.base.unwrap_or(StaticValue::Null)),
                             ("variants".to_string(), cfg.variants),
@@ -2877,6 +2879,21 @@ mod tests {
         assert_eq!(stage.method, "variant");
         assert!(stage.captured.is_empty());
         assert_eq!(stage.value.as_ref().unwrap()["prop"], "size");
+    }
+
+    /// Contract: an empty variant prop name is `variant`, as the runtime
+    /// reads `prop || 'variant'`, written inline or through a const.
+    #[test]
+    fn an_empty_variant_prop_name_is_variant() {
+        let facts = facts_for(
+            r#"
+            const sized = { prop: '', variants: { lg: { padding: 8 } } };
+            export const Box = ds.variant({ prop: '', variants: { sm: { padding: 4 } } }).variant(sized).asElement('div');
+            "#,
+        );
+        let props: Vec<&serde_json::Value> =
+            facts.chains[0].stages.iter().filter_map(|stage| stage.value.as_ref()).map(|value| &value["prop"]).collect();
+        assert_eq!(props, ["variant", "variant"]);
     }
 
     #[test]

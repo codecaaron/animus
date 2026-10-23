@@ -135,7 +135,7 @@ fn process_stage(
 }
 
 fn resolve_variant_stage(value: &Value, ctx: &ResolveContext) -> VariantCss {
-    let variant_prop = value["prop"].as_str().unwrap_or("variant").to_string();
+    let variant_prop = crate::chain_merge::variant_prop(value).to_string();
     // Stamp the axis and option onto this resolution's misses and dropped
     // keys, so a child re-resolving an inherited option can tell whose
     // declaration missed.

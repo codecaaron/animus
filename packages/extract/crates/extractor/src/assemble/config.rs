@@ -189,7 +189,7 @@ pub(super) fn build_config(
         match stage.method.as_str() {
             "variant" => {
                 if let Some(v) = &stage.value {
-                    let prop = v["prop"].as_str().unwrap_or("variant").to_string();
+                    let prop = crate::chain_merge::variant_prop(v).to_string();
                     let mut entry = Map::new();
                     if variant_options {
                         let options: Vec<String> = v["variants"]
