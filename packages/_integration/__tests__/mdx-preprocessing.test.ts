@@ -143,6 +143,24 @@ describe('mdxUsageSource', () => {
     expect(esmRows(source).rows).toEqual(rows);
   });
 
+  // Contract: a line ends at LF, CRLF or a lone CR, as micromark ends it,
+  // and every line keeps its row.
+  test.each([
+    ['LF', '\n'],
+    ['CRLF', '\r\n'],
+    ['CR', '\r'],
+  ])('a line ends at %s', (_name, eol) => {
+    const result = mdxUsageSource(
+      `export const x = 1${eol}${eol}<X />`,
+      'eol.mdx'
+    );
+    if (result.kind !== 'ok') throw new Error(result.error);
+    const out = result.source.split('\n');
+    expect(out[0]!.trimEnd()).toBe('export const x = 1');
+    expect(out[1]).toContain('{ X } = _components');
+    expect(out[2]).toMatch(/^<X \/>/);
+  });
+
   test('a block inside an element is the module’s, below the content', () => {
     const element = "<Box>\nimport A from './a';\n\n<A />\n</Box>\n";
     const { rows, source } = esmRows(element);

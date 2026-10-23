@@ -488,7 +488,10 @@ export function mdxUsageSource(
   }
 }
 
-function mdxToTsx(source: string, filename: string) {
+function mdxToTsx(input: string, filename: string) {
+  // A carriage return alone ends a line, as in micromark: read as a line
+  // feed, which keeps every offset.
+  const source = input.replace(/\r(?!\n)/g, '\n');
   const lines = source.split('\n');
   const esm = lines.map(() => false);
   const inline = lines.map(() => false);
