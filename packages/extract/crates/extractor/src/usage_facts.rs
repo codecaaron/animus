@@ -8443,6 +8443,77 @@ fn held_bindings(
         aliases: FxHashMap<SymbolId, Alias>,
         functions: FxHashSet<SymbolId>,
         parameters: FxHashSet<SymbolId>,
+        /// The keys of the module's own contexts no other code can reach:
+        /// unexported, and used only as a hook's argument or a Provider
+        /// (`sealed`).
+        sealed: FxHashSet<String>,
+    }
+    /// The module's own contexts no code outside the module can reach, so no
+    /// hook of another module can read: a created one no `export`
+    /// declaration declares, each of whose uses is a hook's argument
+    /// (`useContext(Seg)`), its `.Provider` (in JSX or read as a member), or
+    /// its own tag (React 19's `<Seg value>`). Any other use, an export, a
+    /// value stored, handed on, returned or aliased, `.Consumer`, a member
+    /// written, may let it out.
+    fn sealed(program: &Program<'_>, scoping: &Scoping, hooks: &ReactNames, module: &ModuleContexts) -> FxHashSet<SymbolId> {
+        use oxc::ast::ast::{JSXElementName, JSXMemberExpressionObject};
+        struct Allowed<'h> {
+            hooks: &'h ReactNames,
+            references: FxHashSet<oxc::semantic::ReferenceId>,
+        }
+        impl Allowed<'_> {
+            fn allow(&mut self, ident: &IdentifierReference<'_>) {
+                self.references.extend(ident.reference_id.get());
+            }
+            fn tag(&mut self, name: &JSXElementName<'_>) {
+                match name {
+                    JSXElementName::IdentifierReference(ident) => self.allow(ident),
+                    JSXElementName::MemberExpression(member) => {
+                        if let (JSXMemberExpressionObject::IdentifierReference(ident), "Provider") = (&member.object, member.property.name.as_str()) {
+                            self.allow(ident);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        impl<'a> Visit<'a> for Allowed<'_> {
+            fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+                if matches!(self.hooks.export(&call.callee), Some("useContext" | "use")) {
+                    if let Some(Expression::Identifier(ident)) = call.arguments.first().and_then(Argument::as_expression).map(Expression::get_inner_expression) {
+                        self.allow(ident);
+                    }
+                }
+                oxc::ast_visit::walk::walk_call_expression(self, call);
+            }
+            fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+                if let (Expression::Identifier(ident), "Provider") = (&member.object, member.property.name.as_str()) {
+                    self.allow(ident);
+                }
+                oxc::ast_visit::walk::walk_static_member_expression(self, member);
+            }
+            fn visit_jsx_opening_element(&mut self, element: &oxc::ast::ast::JSXOpeningElement<'a>) {
+                self.tag(&element.name);
+                oxc::ast_visit::walk::walk_jsx_opening_element(self, element);
+            }
+            fn visit_jsx_closing_element(&mut self, element: &oxc::ast::ast::JSXClosingElement<'a>) {
+                self.tag(&element.name);
+                oxc::ast_visit::walk::walk_jsx_closing_element(self, element);
+            }
+        }
+        let mut allowed = Allowed { hooks, references: FxHashSet::default() };
+        allowed.visit_program(program);
+        module
+            .created
+            .iter()
+            .filter(|symbol| !module.exported.contains(symbol))
+            .filter(|symbol| {
+                scoping.get_resolved_reference_ids(**symbol).iter().all(|reference| {
+                    !scoping.get_reference(*reference).is_value() || allowed.references.contains(reference)
+                })
+            })
+            .copied()
+            .collect()
     }
     const UNKNOWN: &str = "\0unknown";
     const IMPORTED: &str = "\0imported";
@@ -8529,6 +8600,11 @@ fn held_bindings(
                 Some(Alias::Member(object)) => self.member(*object),
                 _ => UNKNOWN.to_string(),
             }
+        }
+
+        /// The context whose `.Consumer` `ident` names.
+        fn consumer(&self, ident: &IdentifierReference<'_>) -> String {
+            symbol_of(self.scoping, ident).map_or(UNKNOWN.to_string(), |symbol| self.binding(symbol, 0))
         }
 
         fn member(&self, object: SymbolId) -> String {
@@ -8714,6 +8790,13 @@ fn held_bindings(
         fn visit_expression(&mut self, expression: &Expression<'a>) {
             let slot = std::mem::replace(&mut self.slot, Slot::Other);
             if let Some(contexts) = self.contexts {
+                // A context's `.Consumer` hands its value to a render
+                // function, which may write it.
+                if let Expression::StaticMemberExpression(member) = expression.get_inner_expression() {
+                    if let (Expression::Identifier(ident), "Consumer") = (&member.object, member.property.name.as_str()) {
+                        self.call_escaped.insert(contexts.consumer(ident));
+                    }
+                }
                 // A hook named but not called may be called anywhere, with
                 // any context.
                 if contexts.hook(expression) {
@@ -8828,6 +8911,14 @@ fn held_bindings(
             self.visit_statement(&statement.body);
             self.visit_in(Slot::Test, &statement.test);
         }
+        fn visit_jsx_member_expression(&mut self, member: &oxc::ast::ast::JSXMemberExpression<'a>) {
+            if let (Some(contexts), oxc::ast::ast::JSXMemberExpressionObject::IdentifierReference(ident), "Consumer") =
+                (self.contexts, &member.object, member.property.name.as_str())
+            {
+                self.call_escaped.insert(contexts.consumer(ident));
+            }
+            oxc::ast_visit::walk::walk_jsx_member_expression(self, member);
+        }
         fn visit_jsx_expression_container(&mut self, container: &oxc::ast::ast::JSXExpressionContainer<'a>) {
             if let Some(expression) = container.expression.as_expression() {
                 self.visit_in(Slot::Value { outermost: true }, expression);
@@ -8852,6 +8943,9 @@ fn held_bindings(
         return (FxHashMap::default(), FxHashSet::default());
     }
     let contexts = hooks.as_ref().map(|hooks| {
+        let module = literal_contexts(program, hooks);
+        let escape_hooks = ReactNames::importing(program, scoping, &CONTEXT_HOOKS, &[], true);
+        let sealed = sealed(program, scoping, &escape_hooks, &module).into_iter().map(|symbol| format!("local\0{symbol:?}")).collect();
         let mut aliases = Aliases {
             scoping,
             kind: VariableDeclarationKind::Var,
@@ -8862,11 +8956,12 @@ fn held_bindings(
         aliases.visit_program(program);
         ContextKeys {
             scoping,
-            hooks: ReactNames::importing(program, scoping, &CONTEXT_HOOKS, &[], true),
-            module: literal_contexts(program, hooks),
+            hooks: escape_hooks,
+            module,
             aliases: aliases.found,
             functions: aliases.functions,
             parameters: aliases.parameters,
+            sealed,
         }
     });
     let mut join = Join {
@@ -8948,10 +9043,12 @@ fn held_bindings(
             escaped.insert(index);
         }
     }
-    // An unknown context that escapes may be any context.
+    // An unknown context that escapes may be any context another module's
+    // code can reach: all but the module's sealed own.
     if groups.get(UNKNOWN).is_some_and(|index| escaped.contains(index)) {
-        let contexts = (0..join.roots.len()).filter(|index| join.roots[*index].is_none()).map(|index| group[index]);
-        escaped.extend(contexts.collect::<Vec<_>>());
+        let sealed = |index: usize| join.keys.get(&index).is_some_and(|key| contexts.as_ref().is_some_and(|contexts| contexts.sealed.contains(key)));
+        let reachable = (0..join.roots.len()).filter(|index| join.roots[*index].is_none() && !sealed(*index)).map(|index| group[index]);
+        escaped.extend(reachable.collect::<Vec<_>>());
     }
     let holds = |index: usize| !escaped.contains(&group[index]);
     let contexts = join
@@ -8972,10 +9069,12 @@ fn held_bindings(
 /// context then holds (a default held under another name may be written
 /// through it); every module-scope `const` that `createContext` initialises;
 /// each import's imported name; each namespace import; and each import of
-/// a React runtime.
+/// a React runtime. `exported` holds the created ones an `export`
+/// declaration declares.
 struct ModuleContexts {
     literal: FxHashSet<SymbolId>,
     created: FxHashSet<SymbolId>,
+    exported: FxHashSet<SymbolId>,
     imports: FxHashMap<SymbolId, String>,
     namespaces: FxHashSet<SymbolId>,
     react: FxHashSet<SymbolId>,
@@ -8999,6 +9098,7 @@ fn literal_contexts(program: &Program<'_>, hooks: &ReactNames) -> ModuleContexts
     let mut found = ModuleContexts {
         literal: FxHashSet::default(),
         created: FxHashSet::default(),
+        exported: FxHashSet::default(),
         imports: FxHashMap::default(),
         namespaces: FxHashSet::default(),
         react: FxHashSet::default(),
@@ -9044,6 +9144,9 @@ fn literal_contexts(program: &Program<'_>, hooks: &ReactNames) -> ModuleContexts
                 continue;
             }
             found.created.extend(id.symbol_id.get());
+            if matches!(statement, Statement::ExportDeclaration(_)) {
+                found.exported.extend(id.symbol_id.get());
+            }
             let default = match call.arguments.first() {
                 None => true,
                 Some(argument) => argument.as_expression().is_some_and(literal),

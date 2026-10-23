@@ -3084,6 +3084,37 @@ mod tests {
         }
     }
 
+    /// Contract: an unknown escape does not reach an unexported module-local
+    /// context used only as a hook argument or Provider. No hook of another
+    /// module can read a context it cannot reach, so an imported hook's
+    /// result handed on leaves that context's reads named; the same context
+    /// exported may be read, and written, anywhere, and names nothing.
+    #[test]
+    fn an_unknown_escape_does_not_reach_a_sealed_module_context() {
+        let source = |declare: &str| {
+            format!(
+                "import {{ createContext, useContext }} from 'react';\n\
+                 import {{ useThing }} from './thing';\n\
+                 {declare} Seg = createContext({{ size: 'sm' }});\n\
+                 export function P({{ children }}) {{ return <Seg.Provider value={{{{ size: 'md' }}}}>{{children}}</Seg.Provider>; }}\n\
+                 export function C() {{ useThing().go(); const seg = useContext(Seg); return <Box size={{seg.size}} />; }}\n"
+            )
+        };
+        let files = serde_json::json!([
+            { "path": "sealed.tsx", "source": source("const") },
+            { "path": "exported.tsx", "source": source("export const") },
+            { "path": "thing.ts", "source": "export const useThing = () => ({ go() {} });\n" },
+        ]);
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&engine.analyze_full(files.to_string(), None).unwrap()).unwrap();
+        let attr = |file: &str| {
+            let proven = manifest["fileFacts"][file]["proven"].as_array().unwrap().clone();
+            proven.iter().rev().find_map(|fact| fact["element"]["attrs"].as_array()?.iter().find(|attr| attr["name"] == "size").cloned()).unwrap()
+        };
+        assert_eq!(attr("sealed.tsx")["context"], serde_json::json!({ "reads": ["Seg.size"] }));
+        assert_eq!(attr("exported.tsx").get("context"), None, "an exported context's reads stay unnamed");
+    }
+
     #[test]
     fn malformed_input_is_a_loud_error() {
         let mut engine = ExtractEngine::new(None).unwrap();
