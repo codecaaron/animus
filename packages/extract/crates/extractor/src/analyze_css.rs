@@ -1712,11 +1712,23 @@ fn probe_files_uncached<T>(base: &str, files: &BTreeMap<String, T>, inputs: &Css
         // Without the host's evidence nothing says what the base opens: a
         // script the analysis was not given may render what no analysed tag
         // shows, so the analysis is incomplete, as where the host opens one.
-        None if inputs.probe_evidence.is_none() && script_like(base) && !is_system_module(base, inputs) => {
+        None if inputs.probe_evidence.is_none() && script_like(base) && !names_system_module(base, policy, inputs) => {
             ProbeOutcome::Incomplete { candidate: base.to_string(), opened: base.to_string(), why: Opening::Unresolved }
         }
         None => ProbeOutcome::Absent,
     }
+}
+
+/// Whether `base` names one of the system's modules, as the base itself or
+/// under any candidate the extension policy probes (`./ds.js` for
+/// `ds.ts`).
+fn names_system_module(base: &str, policy: &animus_system_loader::resolution::ExtensionPolicy, inputs: &CssInputs) -> bool {
+    use animus_system_loader::resolution::{Probe, Seen};
+    is_system_module(base, inputs)
+        || matches!(
+            policy.probe(base, |candidate| if is_system_module(candidate, inputs) { Seen::File } else { Seen::Missing }),
+            Probe::Found(_)
+        )
 }
 
 /// Extensions a module import names only as an asset: a stylesheet, data,
@@ -1729,14 +1741,16 @@ const ASSET_EXTENSIONS: &[&str] = &[
     "csv", "pdf", "webmanifest",
 ];
 
-/// Whether a probe base may name a script: it carries no query (`?raw`,
-/// `?url` name an asset), and its last segment has no extension, or one
-/// that is no asset's.
+/// Whether a probe base may name a script: its query, if any, is neither
+/// `?raw` nor `?url`, which load any file as a string, and its last segment
+/// has no extension, or one that is no asset's, read before the query as
+/// the host reads it.
 fn script_like(base: &str) -> bool {
-    if base.contains('?') {
+    let (path, query) = base.split_once('?').unwrap_or((base, ""));
+    if query.split('&').any(|param| matches!(param.split('=').next(), Some("raw" | "url"))) {
         return false;
     }
-    let name = base.rsplit('/').next().unwrap_or(base);
+    let name = path.rsplit('/').next().unwrap_or(path);
     match name.rsplit_once('.') {
         Some((stem, extension)) if !stem.is_empty() => !ASSET_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()),
         _ => true,
@@ -23984,10 +23998,18 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let render = |import: &str| format!("import {{ createRoot }} from 'react-dom/client';\nimport {{ U }} from './u';\n{import}\ncreateRoot(document.body).render(<U />);\n");
         let unread = render("import { renderLegacy } from './legacy';\nrenderLegacy();");
         assert!(kept(&[("src/app.tsx", &unread)], &none));
-        // An asset, a system module, and an import the host's evidence answers.
+        // A query that keeps the file's own reading.
+        for import in ["import { renderLegacy } from './legacy.tsx?client';", "import { renderLegacy } from './legacy?v=2';"] {
+            assert!(kept(&[("src/app.tsx", &render(&format!("{import}\nrenderLegacy();")))], &none), "{import}");
+        }
+        // An asset, a file loaded as a string, a system module under any
+        // spelling the probe tries, and an import the host's evidence answers.
         assert!(!kept(&[("src/app.tsx", &render("import './legacy.css';"))], &none));
+        assert!(!kept(&[("src/app.tsx", &render("import legacy from './legacy.tsx?raw';\nvoid legacy;"))], &none));
         let system = |inputs: &mut CssInputs| inputs.analysis_context.system_modules = vec!["src/ds.ts".into()];
-        assert!(!kept(&[("src/app.tsx", &render("import { ds } from './ds';\nvoid ds;"))], &system));
+        for import in ["import { ds } from './ds';", "import { ds } from './ds.js';"] {
+            assert!(!kept(&[("src/app.tsx", &render(&format!("{import}\nvoid ds;")))], &system), "{import}");
+        }
         let answered = |inputs: &mut CssInputs| {
             inputs.probe_evidence =
                 Some(ProbeEvidence { generation: 1, identity: String::new(), expansions: Vec::new(), packages: Vec::new(), bases: Default::default() });
