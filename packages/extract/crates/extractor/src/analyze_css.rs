@@ -1331,9 +1331,75 @@ fn resolve_import_source_uncached<T>(
     }
 }
 
-/// Where the analysis leaves a source unseen: each skipped source, and each
-/// probe that ended Incomplete; empty when it sees every source. Either may
-/// render any option, so nothing is pruned. A bindingless import binds
+/// A computed load (a template `import()`, a context, a glob, any other
+/// expression) that may load a file the analysis does not read: one its
+/// host expansion lists (`unread`), or, where the host lists no closed
+/// expansion of it, any, since nothing says it matches only analysed files.
+struct UnreadLoad<'f> {
+    importer: &'f String,
+    load: &'f crate::loads::ModuleLoad,
+    unread: Option<&'f str>,
+}
+
+/// Each computed load outside the config-only modules that may load a file
+/// the analysis does not read. A load the configuration declares closed
+/// loads only analysed modules, an `import()` the host leaves unbundled
+/// loads none of the app's sources, and a prefix into a package is read as
+/// a bare import is.
+fn unread_loads<'f>(files: &'f BTreeMap<String, FileFacts>, inputs: &'f CssInputs) -> Vec<UnreadLoad<'f>> {
+    use crate::loads::LoadTarget;
+    note_build_chunks(files, inputs);
+    let config_only = config_only(files, inputs);
+    let mut unread = Vec::new();
+    for (importer, ff) in files.iter().filter(|(file, _)| !config_only.contains(*file)) {
+        for load in &ff.module_loads {
+            match &load.target {
+                LoadTarget::Specifier(_) => continue,
+                // A package's files are the package map's, as a bare import's
+                // are, never probed.
+                LoadTarget::Prefix(prefix)
+                    if !prefix.is_empty()
+                        && !prefix.starts_with(['.', '/'])
+                        && expand_alias(prefix, &inputs.path_aliases).is_none() =>
+                {
+                    continue
+                }
+                LoadTarget::Prefix(prefix) if !prefix.is_empty() => {}
+                LoadTarget::Context { .. } | LoadTarget::Glob(_) => {}
+                LoadTarget::Prefix(_) | LoadTarget::Unknown => {
+                    if load.dynamic_import && inputs.analysis_context.unbundled_computed_imports {
+                        continue;
+                    }
+                }
+            }
+            let expansion = inputs
+                .probe_evidence
+                .iter()
+                .flat_map(|evidence| &evidence.expansions)
+                .find(|expansion| expansion.importer == *importer && expansion.start == load.start && expansion.closed);
+            match expansion {
+                Some(expansion) => {
+                    let read = |expanded: &&ExpandedFile| match expanded.status {
+                        ExpandedStatus::Opaque => true,
+                        ExpandedStatus::Analysed => files.contains_key(&expanded.path),
+                        ExpandedStatus::Unanalysed => false,
+                    };
+                    if let Some(expanded) = expansion.files.iter().find(|expanded| !read(expanded)) {
+                        unread.push(UnreadLoad { importer, load, unread: Some(expanded.path.as_str()) });
+                    }
+                }
+                None if declared_reach(importer, load, files, inputs, usize::MAX).is_some() => {}
+                None => unread.push(UnreadLoad { importer, load, unread: None }),
+            }
+        }
+    }
+    unread
+}
+
+/// Where the analysis leaves a source unseen: each skipped source, each
+/// probe that ended Incomplete, and each computed load that may load a file
+/// it does not read (`unread_loads`); empty when it sees every source. Any
+/// may render any option, so nothing is pruned. A bindingless import binds
 /// nothing usage follows, but the host loads it for its effects, so it is
 /// probed here.
 ///
@@ -1362,6 +1428,13 @@ fn analysis_gaps(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs, all: b
         })),
         Err(_) => gaps.push(SlotOpening::rule("incomplete-probe")),
     }
+    if gaps.len() >= take {
+        return gaps;
+    }
+    gaps.extend(unread_loads(files, inputs).into_iter().take(take - gaps.len()).map(|unread| SlotOpening {
+        line: Some(unread.load.line),
+        ..SlotOpening::rule("unread-load").in_file(unread.importer).detail(unread.load.call.as_str())
+    }));
     gaps
 }
 
@@ -12286,6 +12359,30 @@ fn run_with_system_floor(
             )),
         }
     }
+    // A computed load that may load a file analysis does not read stops
+    // pruning as an unanalysed import does, reported once per load.
+    let unread_loads = unread_loads(files, inputs);
+    for &UnreadLoad { importer, load, unread } in &unread_loads {
+        let call = &load.call;
+        let message = match unread {
+            Some(path) => format!(
+                "{call} may load {path}, which analysis does not read, so nothing is pruned: every variant \
+                 and state option in the app ships — analyse {path}, or narrow the load to the files \
+                 analysis reads"
+            ),
+            None => format!(
+                "{call} may load a file analysis does not read, and {}, so nothing is pruned: every variant \
+                 and state option in the app ships — write the specifier literally{}",
+                if inputs.probe_evidence.is_some() {
+                    "the host lists no exact expansion of it"
+                } else {
+                    "no host evidence says what it loads"
+                },
+                if inputs.probe_evidence.is_some() { "" } else { ", or give the analysis the host's probe evidence" },
+            ),
+        };
+        diagnostics.push(diagnostic(importer, call, "warn", message, Some(RESOLVE_UNANALYSED_IMPORT)).on_line(load.line));
+    }
     // Each computed import() a declaration closes, recorded as the
     // assumption it is; a declaration that closes none is reported.
     note_build_chunks(files, inputs);
@@ -12348,9 +12445,10 @@ fn run_with_system_floor(
         ));
     }
 
-    // A skipped source, or a file a probe's host opens that analysis never
-    // reads, may render any option, so nothing is pruned. The pruned result
-    // still tells which options its errors come from.
+    // A skipped source, a file a probe's host opens that analysis never
+    // reads, or one a computed load may load, may render any option, so
+    // nothing is pruned. The pruned result still tells which options its
+    // errors come from.
     let skipped = &inputs.analysis_context.skipped_sources;
     let unseen = [
         (!skipped.is_empty()).then(|| format!("{} is skipped", skipped.join(", "))),
@@ -12360,6 +12458,15 @@ fn run_with_system_floor(
                 .map(|probe| format!("'{}' from {} opens {}", probe.specifier, probe.importer, probe.opened))
                 .collect();
             format!("{}, which analysis does not read", openings.join(", "))
+        }),
+        (!unread_loads.is_empty()).then(|| {
+            let loads: Vec<String> = unread_loads
+                .iter()
+                .map(|unread| {
+                    format!("{} in {} may load {}", unread.load.call, unread.importer, unread.unread.unwrap_or("any file"))
+                })
+                .collect();
+            format!("{}, which analysis does not read", loads.join(", "))
         }),
     ]
     .into_iter()
@@ -12878,6 +12985,36 @@ mod tests {
         let links = crate::link::ProjectLinks::link(&files, inputs);
         judge_object_handoffs(&mut files, inputs, &links);
         run_with_system_floor(&files, &order, inputs, "animus", total_system_floor).0
+    }
+
+    /// `inputs` with a host that lists each computed load in `entries`
+    /// closed over the analysed modules it matches, so no load may load an
+    /// unread file.
+    fn closing_loads(entries: &[(&str, &str)], mut inputs: CssInputs) -> CssInputs {
+        let counter = ParseCounter::new(0);
+        let files: BTreeMap<String, FileFacts> = entries
+            .iter()
+            .map(|(path, source)| {
+                let ast = OwnedAst::parse(path.to_string(), source.to_string(), &counter);
+                (path.to_string(), extract_file_facts_with_prefix(&ast, "animus"))
+            })
+            .collect();
+        let expansions = files
+            .iter()
+            .flat_map(|(path, ff)| ff.module_loads.iter().map(move |load| (path, load)))
+            .filter(|(_, load)| !matches!(load.target, crate::loads::LoadTarget::Specifier(_)))
+            .map(|(path, load)| HostExpansion {
+                importer: path.clone(),
+                start: load.start,
+                closed: true,
+                files: loaded_modules(path, load, &files, &inputs)
+                    .into_iter()
+                    .map(|module| ExpandedFile { path: module.clone(), status: ExpandedStatus::Analysed })
+                    .collect(),
+            })
+            .collect();
+        inputs.probe_evidence = Some(ProbeEvidence { generation: 1, expansions, ..Default::default() });
+        inputs
     }
 
     fn test_inputs() -> CssInputs {
@@ -19241,7 +19378,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
 
     /// The `size` options and states whose CSS survives pruning for `R`.
     fn kept_options(entries: &[(&str, &str)]) -> (Vec<&'static str>, Vec<&'static str>) {
-        let out = analyze(entries, &test_inputs());
+        kept_options_with(entries, &test_inputs())
+    }
+
+    fn kept_options_with(entries: &[(&str, &str)], inputs: &CssInputs) -> (Vec<&'static str>, Vec<&'static str>) {
+        let out = analyze(entries, inputs);
         let class = class_of(&out, "r.tsx::R");
         let sizes = ["sm", "md", "lg"]
             .into_iter()
@@ -19868,12 +20009,13 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let app = format!(
                 "import {{ R }} from './r';\n{setup}\nexport const App = () => <R size=\"sm\" active />;\n"
             );
-            kept_options(&[
+            let entries = [
                 ("r.tsx", RECIPE),
                 ("index.ts", "export * from './r';\n"),
                 ("other.ts", "export const other = 1;\n"),
                 ("app.tsx", app.as_str()),
-            ])
+            ];
+            kept_options_with(&entries, &closing_loads(&entries, test_inputs()))
         };
         for setup in [
             "import { lazy } from 'react';\n\
@@ -19929,17 +20071,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     #[test]
     fn unreadable_loads_reach_only_the_importers_directory() {
         let kept = |loader: (&str, &str)| {
-            let out = analyze(
-                &[
-                    ("src/r.tsx", RECIPE),
-                    (
-                        "src/app.tsx",
-                        "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n",
-                    ),
-                    loader,
-                ],
-                &test_inputs(),
-            );
+            let entries = [
+                ("src/r.tsx", RECIPE),
+                ("src/app.tsx", "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n"),
+                loader,
+            ];
+            let out = analyze(&entries, &closing_loads(&entries, test_inputs()));
             let class = class_of(&out, "src/r.tsx::R");
             ["sm", "md", "lg"]
                 .into_iter()
@@ -20472,16 +20609,15 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let render = "import { R } from './r';\nimport { Q } from './sub/q';\nimport { O } from './other';\n\
                       export const App = () => <><R size=\"sm\" /><Q size=\"sm\" /><O size=\"sm\" /></>;\n";
         let opened = |loader: &str| {
-            let out = analyze(
-                &[
-                    ("src/r.tsx", RECIPE),
-                    ("src/other.ts", sized("O").as_str()),
-                    ("src/sub/q.tsx", sized("Q").as_str()),
-                    ("src/app.tsx", render),
-                    ("src/main.tsx", loader),
-                ],
-                &test_inputs(),
-            );
+            let (o, q) = (sized("O"), sized("Q"));
+            let entries = [
+                ("src/r.tsx", RECIPE),
+                ("src/other.ts", o.as_str()),
+                ("src/sub/q.tsx", q.as_str()),
+                ("src/app.tsx", render),
+                ("src/main.tsx", loader),
+            ];
+            let out = analyze(&entries, &closing_loads(&entries, test_inputs()));
             ["src/r.tsx::R", "src/sub/q.tsx::Q", "src/other.ts::O"].map(|id| kept_sizes(&out, id).len() == 3)
         };
         assert_eq!(opened("const c = require.context('./', false, /\\.tsx$/);\n"), [true, false, false]);
@@ -20491,20 +20627,19 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let mut inputs = test_inputs();
         inputs.package_map.insert("@acme/ui".into(), "packages/ui/src/index.ts".into());
         inputs.analysis_context.package_dirs = vec!["packages/ui".into()];
-        let out = analyze(
-            &[
-                ("packages/ui/src/index.ts", "export * from './button';\n"),
-                ("packages/ui/src/button.tsx", sized("Button").as_str()),
-                ("src/r.tsx", RECIPE),
-                (
-                    "src/app.tsx",
-                    "import { R } from './r';\nimport { Button } from '@acme/ui';\n\
-                     export const App = () => <><R size=\"sm\" /><Button size=\"sm\" /></>;\n\
-                     export const load = (name) => import(`@acme/ui/${name}`);\n",
-                ),
-            ],
-            &inputs,
-        );
+        let button = sized("Button");
+        let entries = [
+            ("packages/ui/src/index.ts", "export * from './button';\n"),
+            ("packages/ui/src/button.tsx", button.as_str()),
+            ("src/r.tsx", RECIPE),
+            (
+                "src/app.tsx",
+                "import { R } from './r';\nimport { Button } from '@acme/ui';\n\
+                 export const App = () => <><R size=\"sm\" /><Button size=\"sm\" /></>;\n\
+                 export const load = (name) => import(`@acme/ui/${name}`);\n",
+            ),
+        ];
+        let out = analyze(&entries, &closing_loads(&entries, inputs));
         assert_eq!(
             (kept_sizes(&out, "packages/ui/src/button.tsx::Button").len(), kept_sizes(&out, "src/r.tsx::R").len()),
             (3, 1)
@@ -23755,6 +23890,62 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(run_expanded(&[], &extra, &paging, vec![expansion]), pruned);
         let open = format!("export const load = (name) => import(`./tools/${{name}}.ts`);\n{app}");
         assert_eq!(run(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], &open), everything);
+    }
+
+    #[test]
+    fn a_computed_load_that_may_load_an_unread_file_prunes_nothing() {
+        let q = ("src/q.tsx", "export const Q = ds.styles({ margin: '1px' }).asElement('span');\n");
+        let u = ("src/u.tsx", "export const U = ds.styles({ padding: '1px' }).asElement('div');\n");
+        let app = |load: &str| {
+            format!("import {{ createRoot }} from 'react-dom/client';\nimport {{ U }} from './u';\n{load}\ncreateRoot(document.body).render(<U />);\n")
+        };
+        // The host's closed expansion of the one load in src/app.tsx.
+        let expanded = |source: &str, at: &str, listed: &[(&str, ExpandedStatus)]| ProbeEvidence {
+            generation: 1,
+            identity: String::new(),
+            bases: Default::default(),
+            expansions: vec![HostExpansion {
+                importer: "src/app.tsx".into(),
+                start: source.find(at).unwrap() as u32,
+                closed: true,
+                files: listed.iter().map(|&(path, status)| ExpandedFile { path: path.into(), status }).collect(),
+            }],
+            packages: Vec::new(),
+        };
+        // Whether Q, which only src/parts/legacy.tsx (never given) renders, keeps its CSS.
+        let kept = |more: &[(&str, &str)], evidence: Option<ProbeEvidence>, unbundled: bool| {
+            let mut inputs = test_inputs();
+            inputs.probe_evidence = evidence;
+            inputs.analysis_context.unbundled_computed_imports = unbundled;
+            let files: Vec<(&str, &str)> = [q, u].into_iter().chain(more.iter().copied()).collect();
+            analyze(&files, &inputs).css.contains("margin")
+        };
+        let glob = app("const mods = import.meta.glob('./parts/*.tsx', { eager: true });\nObject.values(mods).forEach((m) => m.boot());");
+        // Without evidence, and with evidence that lists no expansion of it.
+        let empty = || Some(ProbeEvidence { generation: 1, ..Default::default() });
+        for load in [
+            "export const boot = (name) => import(`./parts/${name}`).then((m) => m.boot());",
+            "export const boot = (name) => import('./parts/' + name).then((m) => m.boot());",
+            "const mods = import.meta.glob('./parts/*.tsx', { eager: true });\nObject.values(mods).forEach((m) => m.boot());",
+            "const mods = import.meta.glob('./parts/*.tsx');\nObject.values(mods).forEach((m) => m().then((p) => p.boot()));",
+            "const ctx = require.context('./parts', false, /\\.tsx$/);\nctx.keys().forEach((k) => ctx(k).boot());",
+            "export const boot = (at) => require(at).boot();",
+        ] {
+            assert!(kept(&[("src/app.tsx", &app(load))], None, false), "{load}");
+            assert!(kept(&[("src/app.tsx", &app(load))], empty(), false), "{load}");
+        }
+        // With a closed expansion that lists the unread file.
+        let parts = ("src/parts/a.tsx", "export const boot = () => null;\n");
+        let unread = [("src/parts/a.tsx", ExpandedStatus::Analysed), ("src/parts/legacy.tsx", ExpandedStatus::Unanalysed)];
+        assert!(kept(&[parts, ("src/app.tsx", &glob)], Some(expanded(&glob, "import.meta", &unread)), false));
+        // One that lists only analysed and opaque files, an import() the host
+        // leaves unbundled, and a prefix into a package load nothing unread.
+        let read = [("src/parts/a.tsx", ExpandedStatus::Analysed), ("src/parts/b.svg", ExpandedStatus::Opaque)];
+        assert!(!kept(&[parts, ("src/app.tsx", &glob)], Some(expanded(&glob, "import.meta", &read)), false));
+        let opaque = app("export const boot = (at) => import(at).then((m) => m.boot());");
+        assert!(!kept(&[("src/app.tsx", &opaque)], None, true));
+        let locale = app("export const locale = (lang) => import(`dayjs/locale/${lang}`);");
+        assert!(!kept(&[("src/app.tsx", &locale)], None, false));
     }
 
     #[test]
