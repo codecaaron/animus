@@ -3,6 +3,11 @@
 //! (`require(…)`, `require.context(…)`, `import.meta.glob(…)`,
 //! `import.meta.webpackContext(…)`), each with what it names and how its
 //! specifier is written.
+//!
+//! Known limit: a loader reached under another name is not listed, so
+//! what it loads is never probed and stops no pruning: `require` held in a
+//! binding (`const req = require; req('./x')`), the function
+//! `createRequire(import.meta.url)` returns, and `System.import(…)`.
 
 use oxc::ast::ast::{
     Argument, CallExpression, ExportFromDeclaration, Expression, ImportDeclarationSpecifier, ImportExpression,
