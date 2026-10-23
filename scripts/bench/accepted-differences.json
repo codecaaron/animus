@@ -96,5 +96,12 @@
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
     "candidate": "aa69aef67a4aa6f9562b30e55ef916d87655a183697ba0283682b158727984fd",
     "reason": "Beside the differences above, only one rule's declaration order differs: an extension's styles now merge over its parent's before resolution, so ButtonDisplay (Button.extend().styles({ textTransform, letterSpacing, fontWeight })) lists its base declarations in the order the resolver gives the merged object, font-weight after font-family and text-transform and letter-spacing before cursor and outline, in the CSS, the base sheet and its component fragment. Its declarations are unchanged and no two of them share a property. Against this checkout's engine before the change (015fb28d), on the same captured input, only that rule moves: CSS (270,340 bytes), the 204 components and the 73 diagnostics are unchanged."
+  },
+  {
+    "row": "analysis:showcase",
+    "fixture": "showcase-analysis",
+    "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
+    "candidate": "a447e1649918414401cceed171e2ca0456175e1d83a4690a0ea7ee8e1782518a",
+    "reason": "The 0.1.86 landing branch, against main 015fb28d's engine on the same captured input: two changes, each from one commit. Five files' fileFacts proven records give each inline object attribute a members record, its literal members readable and the rest unreadable (577b0694, an inline object's literal members are read beside a function): style on BundleFill (BundleBar.tsx), ResolutionRow (ChainStep.tsx), four divs in ColorPalette.tsx and TooltipFamily.Content (Tooltip.tsx), and DrawerContext.Provider's value (Drawer.tsx). And ButtonDisplay's base rule reorders, as the previous entry describes (23943a33, an extension's partial redeclaration). The wc-impl commits and the identity-record stack change nothing here. CSS (270,340 bytes), the 204 components and the 73 diagnostics are unchanged."
   }
 ]
