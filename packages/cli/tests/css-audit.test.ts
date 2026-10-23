@@ -748,9 +748,10 @@ async function forwardAudit(
  *  component's sites are its target's callers, without what it keeps back
  *  (`forward: true` keeps nothing back), and with its forwarded default
  *  for a null as for a prop left out; a
- *  component also reached by a route the matching misses gives no options
- *  left out; and callers in the forwarding component's own module are
- *  named so. */
+ *  component also reached by a route the matching misses, or through an
+ *  `.asComponent()` component such a route reaches, gives no options left
+ *  out; and callers in the forwarding component's own module are named
+ *  so. */
 test("a forward's callers are read through what passes their values on", async () => {
   const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
   try {
@@ -1096,6 +1097,40 @@ test("a forward's callers are read through what passes their values on", async (
     expect(local.text).toContain(
       'also reached where the audit cannot match its callers'
     );
+
+    // A route to an `.asComponent()` component reaches its target, whose
+    // callers its sites are, through a chain of them too.
+    const passing = (routes: string[], targets: Record<string, string> = {}) =>
+      forwardAudit(
+        root,
+        wrap,
+        { 'src/app.tsx': [tag('Pass', [literal('size', 'sm')])] },
+        {
+          components: {
+            'src/ui.tsx::Pass': asComponent(
+              'Pass',
+              '"variants":{"size":{"options":["sm"],"default":"sm"}},"forward":true'
+            ),
+          },
+          tag_components: { 'src/app.tsx': { Pass: 'src/ui.tsx::Pass' } },
+          as_component_targets: {
+            'src/ui.tsx::Pass': 'src/wrap.tsx::Wrap',
+            ...targets,
+          },
+          unmatched_routes: routes,
+        }
+      );
+    const unrouted = await passing([]);
+    expect(unrouted.matchedCallers?.unmatchedRoute).toBe(false);
+    const routed = await passing(['src/ui.tsx::Pass']);
+    expect(routed.matchedCallers?.unmatchedRoute).toBe(true);
+    expect(routed.notPassedByMatchedCallers).toBeNull();
+    const opened = await passing(['src/ui.tsx::*']);
+    expect(opened.matchedCallers?.unmatchedRoute).toBe(true);
+    const throughOuter = await passing(['src/kit.tsx::Outer'], {
+      'src/kit.tsx::Outer': 'src/ui.tsx::Pass',
+    });
+    expect(throughOuter.matchedCallers?.unmatchedRoute).toBe(true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

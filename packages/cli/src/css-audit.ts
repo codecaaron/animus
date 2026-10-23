@@ -853,6 +853,26 @@ type AsComponentPass = (
   prop: string
 ) => 'kept' | 'unread' | { omitted: Literal | undefined } | undefined;
 
+/** The declarations a route the matching does not follow reaches
+ *  (`unmatched_routes`), with the target of each `.asComponent()` component
+ *  one reaches: its sites are read as its target's callers
+ *  (`componentSites`), so a route to it reaches the target's renders. */
+function unmatchedRoutes(manifest: FullProjectManifest): Set<string> {
+  const routes = new Set(manifest.unmatched_routes ?? []);
+  const targets = Object.entries(manifest.as_component_targets ?? {});
+  // A target may itself render through `.asComponent()`: until none is added.
+  for (let size = -1; size !== routes.size;) {
+    size = routes.size;
+    for (const [component, target] of targets) {
+      const file = component.slice(0, component.lastIndexOf('::'));
+      if (routes.has(component) || routes.has(`${file}::*`)) {
+        routes.add(target);
+      }
+    }
+  }
+  return routes;
+}
+
 /** Each component's JSX sites: by the engine's tag table where the manifest
  *  carries it, else by binding name. A `createElement` site has no attrs
  *  the audit can read. An `.asComponent()` component's sites are callers
@@ -1535,7 +1555,7 @@ function keptOptions(
   refused: Refusal[],
   blocked: boolean
 ): Candidate[] {
-  const routes = new Set(manifest.unmatched_routes ?? []);
+  const routes = unmatchedRoutes(manifest);
   const candidates: Candidate[] = [];
   const provenance = manifest.slot_provenance;
   const name = componentNames(manifest);
