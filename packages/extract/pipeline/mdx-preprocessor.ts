@@ -217,6 +217,32 @@ function flowLineEnd(
   return consumed ? rowAt(rowStarts, at, row) : undefined;
 }
 
+/** Whether a line continues the list items and quotes of `prefix`, the
+ *  containers a block opens in: each quote by its marker, each list item by
+ *  its content's indent, or blank. */
+function containedBy(prefix: string): (line: string) => boolean {
+  const containers = [
+    ...prefix.matchAll(/[ \t]*(?:(>)|[-*+]|\d{1,9}[.)])[ \t]+/g),
+  ].map(([text, quote]) => (quote ? undefined : text.length));
+  return (line) => {
+    let rest = line;
+    for (const indent of containers) {
+      if (indent === undefined) {
+        const marker = /^[ \t]{0,3}>[ \t]?/.exec(rest);
+        if (marker === null) return false;
+        rest = rest.slice(marker[0].length);
+      } else if (rest.trim() === '') {
+        return true;
+      } else if (rest.startsWith(' '.repeat(indent))) {
+        rest = rest.slice(indent);
+      } else {
+        return false;
+      }
+    }
+    return true;
+  };
+}
+
 /** The row holding offset `at`, from row `from` on. */
 function rowAt(rowStarts: readonly number[], at: number, from = 0): number {
   let row = from;
@@ -493,15 +519,23 @@ function mdxToTsx(source: string, filename: string) {
     const fence = FENCE.exec(current);
     if (fence) {
       const marker = fence[1]!;
-      // Closed at any indent, as one inside a list item or a quote is.
+      // Closed at any indent, as one inside a list item or a quote is, and
+      // ended with the list item or quote it is in.
       const close = new RegExp(
         `^(?:[ \\t]*>)*[ \\t]*${marker[0]}{${marker.length},}\\s*$`
       );
+      const inside = containedBy(CONTAINER_PREFIX.exec(current)![0]);
       // A fence renders `pre` and `code`, whichever marker opens it.
       markdown[line] = '```';
       line += 1;
-      while (line < lines.length && !close.test(lines[line]!)) line += 1;
-      line += 1;
+      while (
+        line < lines.length &&
+        inside(lines[line]!) &&
+        !close.test(lines[line]!)
+      ) {
+        line += 1;
+      }
+      if (line < lines.length && inside(lines[line]!)) line += 1;
       paragraph = false;
     } else if (!paragraph && ESM.test(current)) {
       const last = esmBlockEnd(lines, line, imported, filename);
