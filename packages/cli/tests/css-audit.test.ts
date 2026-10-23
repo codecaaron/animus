@@ -1288,7 +1288,9 @@ test("an inline object's literal members are read beside a function", async () =
  *  a value gets no literal remedy at them; no remedy promises that options
  *  prune;
  *  and where code may patch a built-in every render reads through, the
- *  report says once that pruning is off and blocks each remedy. */
+ *  report says once that pruning is off, lists every site under the rule
+ *  that makes it count, says the hold releases only when none is left, and
+ *  blocks each remedy. */
 test('a derived or runtime-state site gets no site remedy, and the hold blocks every remedy', async () => {
   const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
   try {
@@ -1373,7 +1375,24 @@ test('a derived or runtime-state site gets no site remedy, and the hold blocks e
       {
         slot_provenance: {
           usage: [
-            { rule: 'patches-intrinsics', file: 'src/patch.ts', line: 3 },
+            {
+              rule: 'patches-intrinsics',
+              file: 'src/patch.ts',
+              line: 3,
+              detail: 'prototype-use',
+            },
+            {
+              rule: 'patches-intrinsics',
+              file: 'src/patch.ts',
+              line: 9,
+              detail: 'prop-key-store',
+            },
+            {
+              rule: 'patches-intrinsics',
+              file: 'src/dom.ts',
+              line: 4,
+              detail: 'prototype-use',
+            },
           ],
           owners: {},
           props: {},
@@ -1382,11 +1401,26 @@ test('a derived or runtime-state site gets no site remedy, and the hold blocks e
       }
     );
     expect(held.hold).toEqual({
-      patchSites: 1,
-      firstSites: ['src/patch.ts:3'],
+      patchSites: 3,
+      files: 2,
+      firstSites: ['src/patch.ts:3', 'src/patch.ts:9', 'src/dom.ts:4'],
+      sites: [
+        { site: 'src/patch.ts:3', rule: 'prototype-use' },
+        { site: 'src/patch.ts:9', rule: 'prop-key-store' },
+        { site: 'src/dom.ts:4', rule: 'prototype-use' },
+      ],
     });
+    // Every site under the rule that makes it count, the count, and what
+    // releases the hold.
     expect(held.text).toContain(
-      'Variant and state pruning is off for this build: 1 site'
+      [
+        'Variant and state pruning is off for this build: 3 sites in 2 files may patch a built-in every render reads through (patches-intrinsics), so every component keeps every option. The hold releases only when no site is left: each listed below must be resolved, and no site change below can prune an option until then. The analysis records the first such site of each kind in a file, so resolving one can uncover the next in the same file.',
+        '  prototype-use, 2 sites: a computed read (`x[key]`) the analysis cannot bound may read a prototype (`__proto__`, `constructor`) off the object, and what it reads may be written through or handed on',
+        '    src/patch.ts:3',
+        '    src/dom.ts:4',
+        "  prop-key-store, 1 site: a store, under a key a render reads (a prop's, a variant's or a state's name, `children`, `ref`), into an object that may be the prototype every props object inherits",
+        '    src/patch.ts:9',
+      ].join('\n')
     );
     expect(held.suggestion).toMatch(/^Blocked:/);
   } finally {

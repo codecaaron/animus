@@ -250,9 +250,17 @@ export interface CssAuditReport {
     /** Where code may patch a built-in every render reads through (the
      *  manifest's `patches-intrinsics` usage gaps), the engine keeps every
      *  variant and state option of every component: how many such sites,
-     *  and the first few, `file:line`. `null` where there is none, or
-     *  the manifest carries no slot provenance. */
-    pruningHold: { patchSites: number; firstSites: string[] } | null;
+     *  in how many files, the first few, `file:line`, and every site with
+     *  the rule that makes it count (`prototype-use`, `unowned-write`, …;
+     *  `null` where the manifest names none). The engine records the first
+     *  site of each kind in a file, so the count is a floor. `null` where
+     *  there is none, or the manifest carries no slot provenance. */
+    pruningHold: {
+      patchSites: number;
+      files: number;
+      firstSites: string[];
+      sites: Array<{ site: string; rule: string | null }>;
+    } | null;
   };
 }
 
@@ -2779,19 +2787,51 @@ function pruningHold(
     ({ rule }) => rule === 'patches-intrinsics'
   );
   if (patches.length === 0) return null;
-  const firstSites = patches.slice(0, SITES_SHOWN).map(({ file, at, line }) => {
-    if (file === undefined) return '(unnamed file)';
-    if (line !== undefined) return `${file}:${line}`;
-    if (at === undefined || root === undefined) return file;
+  const sites = patches.map(({ file, at, line, detail }) => {
+    const rule = detail ?? null;
+    if (file === undefined) return { site: '(unnamed file)', rule };
+    if (line !== undefined) return { site: `${file}:${line}`, rule };
+    if (at === undefined || root === undefined) return { site: file, rule };
     try {
       const found = lineAtByte(readFileSync(resolve(root, file)), at);
-      return found === null ? `${file}@${at}` : `${file}:${found}`;
+      return {
+        site: found === null ? `${file}@${at}` : `${file}:${found}`,
+        rule,
+      };
     } catch {
-      return `${file}@${at}`;
+      return { site: `${file}@${at}`, rule };
     }
   });
-  return { patchSites: patches.length, firstSites };
+  return {
+    patchSites: patches.length,
+    files: new Set(patches.map(({ file }) => file)).size,
+    firstSites: sites.slice(0, SITES_SHOWN).map(({ site }) => site),
+    sites,
+  };
 }
+
+/** Why each rule of the patches-intrinsics hold counts a site
+ *  (usage_facts/forwarding.rs and analyze_css.rs's patch gaps). */
+const PATCH_RULES = {
+  'prototype-use':
+    'a computed read (`x[key]`) the analysis cannot bound may read a prototype (`__proto__`, `constructor`) off the object, and what it reads may be written through or handed on',
+  'unowned-write':
+    "a write into an object the module does not own (a parameter, an import, a ref's `current`, a DOM node), which may be a built-in or a prototype",
+  'prop-key-store':
+    "a store, under a key a render reads (a prop's, a variant's or a state's name, `children`, `ref`), into an object that may be the prototype every props object inherits",
+  'prototype-let-go':
+    'a prototype, or a descriptor taken off one, handed to code the walk does not follow',
+  'trusted-let-go':
+    'a trusted global (`window`, `globalThis`) handed to an import that reads code',
+  'string-code':
+    '`eval`, `Function` or a `constructor` called, which runs a string',
+  'writer-let-go':
+    'a writer (`Object.assign`, `Reflect.set`, …) handed on as a value, which writes into targets the walk cannot see',
+  'unread-key-store': 'a store into a global by a key the walk cannot read',
+  'spread-target': 'a spread or assign into a target the walk cannot name',
+  'prototype-name-write':
+    "a write of a built-in method's name into `this`, which a caller may bind to the global object",
+} satisfies Record<string, string>;
 
 // -------------------------------------------------------------- report
 
@@ -2946,8 +2986,26 @@ function holdLines(
   hold: CssAuditReport['restructures']['pruningHold']
 ): string[] {
   if (hold === null) return [];
+  const reason = (rule: string | null) => {
+    const why = rule === null ? undefined : ownEntry(PATCH_RULES, rule);
+    return why === undefined ? '' : `: ${why}`;
+  };
+  const plural = (n: number, one: string, many: string) =>
+    `${n} ${n === 1 ? one : many}`;
+  const byRule = new Map<string | null, string[]>();
+  for (const { site, rule } of hold.sites) {
+    byRule.set(rule, [...(byRule.get(rule) ?? []), site]);
+  }
+  const groups = [...byRule].sort(
+    ([a, left], [b, right]) =>
+      right.length - left.length || String(a).localeCompare(String(b))
+  );
   return [
-    `Variant and state pruning is off for this build: ${hold.patchSites} ${hold.patchSites === 1 ? 'site' : 'sites'} that may patch a built-in every render reads through (patches-intrinsics) keep every option of every component, project-wide (first ${hold.firstSites.length === 1 ? 'site' : 'sites'}: ${hold.firstSites.join(', ')}). No site change below can prune an option until these close.`,
+    `Variant and state pruning is off for this build: ${plural(hold.patchSites, 'site', 'sites')} in ${plural(hold.files, 'file', 'files')} may patch a built-in every render reads through (patches-intrinsics), so every component keeps every option. The hold releases only when no site is left: each listed below must be resolved, and no site change below can prune an option until then. The analysis records the first such site of each kind in a file, so resolving one can uncover the next in the same file.`,
+    ...groups.flatMap(([rule, sites]) => [
+      `  ${rule ?? 'rule not recorded'}, ${plural(sites.length, 'site', 'sites')}${reason(rule)}`,
+      ...sites.map((site) => `    ${site}`),
+    ]),
   ];
 }
 
