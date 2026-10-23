@@ -3010,6 +3010,66 @@ mod tests {
         assert_eq!(attr("tested.tsx")["context"], serde_json::json!({ "reads": ["Seg.size"] }));
     }
 
+    /// Contract: every write or escape of a context's value, through any
+    /// spelling or a direct call, invalidates that context's named reads. A
+    /// context is one identity however the module spells it (a `const`
+    /// alias, an import under another specifier or a namespace, React's hook
+    /// through a namespace, React 19's `use`); a call's result written or
+    /// handed on without a binding is a root like a bound one; and a context
+    /// the walk cannot resolve, or a hook used other than called, may be any
+    /// context. Reads alone, and a write to another known context, keep it.
+    #[test]
+    fn a_context_written_through_any_spelling_or_a_direct_call_names_no_origin() {
+        let read = "const seg = useContext(Seg);";
+        let writers = [
+            ("alias", "const Alias = Seg;\n", "", "useContext(Alias).size = 'lg';"),
+            ("alias-chain", "const A = Seg;\nconst B = A;\n", "", "const w = useContext(B); w.size = 'lg';"),
+            ("import-path", "import { Seg as Again } from './seg.ts';\n", "", "useContext(Again).size = 'lg';"),
+            ("namespace", "import * as segs from './seg';\n", "", "useContext(segs.Seg).size = 'lg';"),
+            ("react-namespace", "import * as React from 'react';\n", "", "React.useContext(Seg).size = 'lg';"),
+            ("use", "import { use } from 'react';\n", "", "const w = use(Seg); w.size = 'lg';"),
+            ("hook-aliased", "", "", "const read = useContext; read(Seg).size = 'lg';"),
+            ("unknown-context", "", "{ ctx }", "useContext(ctx).size = 'lg';"),
+            ("direct-write", "", "", "useContext(Seg).size = 'lg';"),
+            ("direct-assign", "", "", "Object.assign(useContext(Seg), { size: 'lg' });"),
+            ("direct-argument", "", "", "touch(useContext(Seg));"),
+        ];
+        let controls = [
+            ("direct-read", "", "", "const label = useContext(Seg).size;"),
+            ("alias-read", "const Alias = Seg;\n", "", "const w = useContext(Alias); const label = w.size;"),
+            ("unknown-read", "", "{ ctx }", "const label = useContext(ctx).size;"),
+            ("other-written", "const Other = createContext({ size: 'md' });\n", "", "useContext(Other).size = 'lg';"),
+        ];
+        let source = |prelude: &str, params: &str, body: &str| {
+            format!(
+                "import {{ createContext, useContext }} from 'react';\n\
+                 import {{ Seg, touch }} from './seg';\n\
+                 {prelude}export function C({params}) {{ {read} {body} return <Box size={{seg.size}} />; }}\n"
+            )
+        };
+        let files: Vec<serde_json::Value> = writers
+            .iter()
+            .chain(&controls)
+            .map(|(name, prelude, params, body)| serde_json::json!({ "path": format!("{name}.tsx"), "source": source(prelude, params, body) }))
+            .chain([serde_json::json!({
+                "path": "seg.ts",
+                "source": "import { createContext } from 'react';\nexport const Seg = createContext({ size: 'sm' });\nexport const touch = (o) => { o.size = 'lg'; };\n",
+            })])
+            .collect();
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&engine.analyze_full(serde_json::Value::Array(files).to_string(), None).unwrap()).unwrap();
+        let attr = |name: &str| manifest["fileFacts"][format!("{name}.tsx")]["proven"][0]["element"]["attrs"][0].clone();
+        for (name, ..) in &writers {
+            let attr = attr(name);
+            assert_eq!(attr["name"], "size", "{name}: {attr}");
+            assert_eq!(attr.get("context"), None, "{name} names an origin: {attr}");
+        }
+        for (name, ..) in &controls {
+            assert_eq!(attr(name)["context"], serde_json::json!({ "reads": ["Seg.size"] }), "{name}");
+        }
+    }
+
     #[test]
     fn malformed_input_is_a_loud_error() {
         let mut engine = ExtractEngine::new(None).unwrap();

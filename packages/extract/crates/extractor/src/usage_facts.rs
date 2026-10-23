@@ -7926,16 +7926,28 @@ impl ContextBinding {
 /// `seg.opts.size` is (`seg`, [opts, size]); a literal key is a name
 /// (`settings['Field.Input']`). `None` for any other key or root.
 fn member_path<'e, 'a>(expression: &'e Expression<'a>) -> Option<(&'e IdentifierReference<'a>, Vec<String>)> {
+    match member_base(expression)? {
+        (Expression::Identifier(ident), path) => Some((ident, path)),
+        _ => None,
+    }
+}
+
+/// A member chain's base, any expression but a member, and its member
+/// names, outermost last: `useContext(Seg).opts.size` is (the call,
+/// [opts, size]). `None` for a key `member_path` does not read.
+fn member_base<'e, 'a>(expression: &'e Expression<'a>) -> Option<(&'e Expression<'a>, Vec<String>)> {
     let mut path = Vec::new();
     let mut expression = expression.get_inner_expression();
     loop {
         let member = match expression {
-            Expression::Identifier(ident) => {
-                path.reverse();
-                return Some((ident, path));
-            }
-            Expression::ChainExpression(chain) => chain.expression.as_member_expression()?,
-            expression => expression.as_member_expression()?,
+            Expression::ChainExpression(chain) => match chain.expression.as_member_expression() {
+                Some(member) => member,
+                None => break,
+            },
+            expression => match expression.as_member_expression() {
+                Some(member) => member,
+                None => break,
+            },
         };
         match member {
             oxc::ast::ast::MemberExpression::StaticMemberExpression(member) => path.push(member.property.name.to_string()),
@@ -7947,6 +7959,8 @@ fn member_path<'e, 'a>(expression: &'e Expression<'a>) -> Option<(&'e Identifier
         }
         expression = member.object().get_inner_expression();
     }
+    path.reverse();
+    Some((expression, path))
 }
 
 /// A destructured prop's default the walk reads: a string, number or
@@ -7957,6 +7971,8 @@ fn default_value(expression: &Expression<'_>) -> Option<Value> {
 
 const HOOK_FUNCTIONS: [&str; 2] = ["useState", "useReducer"];
 const CONTEXT_FUNCTIONS: [&str; 2] = ["useContext", "createContext"];
+/// The hooks that read a context's value: React 19's `use` reads one too.
+const CONTEXT_HOOKS: [&str; 2] = ["useContext", "use"];
 
 fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentParams {
     use oxc::ast::ast::{BindingIdentifier, BindingPattern, Declaration, ExportDefaultDeclarationKind};
@@ -8255,8 +8271,13 @@ fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentPa
 /// Every root of one context holds the value its provider supplies, so
 /// what drops one drops every root of that context in the module: a second
 /// `useContext` of it written, a module hook that reads it, a child handed
-/// another root. The origin still assumes no code in another module
-/// mutates the provided value, as React treats context values. Returns each context binding that names a read, with
+/// another root. Every call of `useContext` or React 19's `use` is a root,
+/// bound or not (`useContext(Seg).size = 'lg'`), of the context its
+/// argument names, under any spelling (`ContextKeys`); one it cannot
+/// resolve, or a hook used other than called, may be any context, and
+/// escaping drops every context root. The origin still assumes no code in
+/// another module mutates the provided value, as React treats context
+/// values. Returns each context binding that names a read, with
 /// the member path it holds (a `const` of a member chain off one holds that
 /// chain), and the props that hold.
 fn held_bindings(
@@ -8321,6 +8342,109 @@ fn held_bindings(
         }
         Some(())
     }
+    /// What a module `const` holds, where it holds another binding or a
+    /// namespace member (`const Alias = Seg`, `const S = segs.Seg`).
+    enum Alias {
+        Binding(SymbolId),
+        Member(SymbolId, String),
+    }
+    struct Aliases<'s> {
+        scoping: &'s Scoping,
+        kind: VariableDeclarationKind,
+        found: FxHashMap<SymbolId, Alias>,
+    }
+    impl<'a> Visit<'a> for Aliases<'_> {
+        fn visit_variable_declaration(&mut self, declaration: &oxc::ast::ast::VariableDeclaration<'a>) {
+            let outer = std::mem::replace(&mut self.kind, declaration.kind);
+            oxc::ast_visit::walk::walk_variable_declaration(self, declaration);
+            self.kind = outer;
+        }
+        fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+            if let (VariableDeclarationKind::Const, BindingPattern::BindingIdentifier(id), Some(init)) =
+                (self.kind, &declarator.id, &declarator.init)
+            {
+                let alias = match init.get_inner_expression() {
+                    Expression::Identifier(held) => symbol_of(self.scoping, held).map(Alias::Binding),
+                    Expression::StaticMemberExpression(member) => match &member.object {
+                        Expression::Identifier(object) => {
+                            symbol_of(self.scoping, object).map(|object| Alias::Member(object, member.property.name.to_string()))
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let (Some(symbol), Some(alias)) = (id.symbol_id.get(), alias) {
+                    self.found.insert(symbol, alias);
+                }
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+    }
+    /// The context each `useContext` or `use` call reads, by an identity
+    /// that joins two spellings of one context rather than split them: a
+    /// module `const` that `createContext` initialises, followed through
+    /// `const` aliases; an import, or a namespace import's member, by its
+    /// imported name, whatever its source. Any other argument is an
+    /// unknown context (`UNKNOWN`), which may be any of them.
+    struct ContextKeys<'s> {
+        scoping: &'s Scoping,
+        /// The hooks as imported, through a default or namespace import,
+        /// or unbound.
+        hooks: ReactNames,
+        module: ModuleContexts,
+        aliases: FxHashMap<SymbolId, Alias>,
+    }
+    const UNKNOWN: &str = "\0unknown";
+    impl ContextKeys<'_> {
+        /// Whether `expression` names `useContext` or `use`.
+        fn hook(&self, expression: &Expression<'_>) -> bool {
+            matches!(self.hooks.export(expression), Some("useContext" | "use"))
+        }
+
+        /// The context a call of `useContext` or `use` reads.
+        fn call(&self, call: &CallExpression<'_>) -> Option<String> {
+            self.hook(&call.callee).then(|| match call.arguments.first().and_then(Argument::as_expression) {
+                Some(context) => match context.get_inner_expression() {
+                    Expression::Identifier(ident) => symbol_of(self.scoping, ident).map_or(UNKNOWN.to_string(), |symbol| self.binding(symbol, 0)),
+                    Expression::StaticMemberExpression(member) => match &member.object {
+                        Expression::Identifier(object) => symbol_of(self.scoping, object)
+                            .map_or(UNKNOWN.to_string(), |object| self.member(object, &member.property.name)),
+                        _ => UNKNOWN.to_string(),
+                    },
+                    _ => UNKNOWN.to_string(),
+                },
+                None => UNKNOWN.to_string(),
+            })
+        }
+
+        /// The call of `useContext` or `use` a member chain reads, and the
+        /// chain's path below it.
+        fn chain(&self, expression: &Expression<'_>) -> Option<(String, Vec<String>)> {
+            let (Expression::CallExpression(call), path) = member_base(expression)? else { return None };
+            Some((self.call(call)?, path))
+        }
+
+        fn binding(&self, symbol: SymbolId, depth: usize) -> String {
+            if let Some(imported) = self.module.imports.get(&symbol) {
+                return format!("import\0{imported}");
+            }
+            if self.module.created.contains(&symbol) {
+                return format!("local\0{symbol:?}");
+            }
+            match self.aliases.get(&symbol) {
+                Some(Alias::Binding(held)) if depth < 8 => self.binding(*held, depth + 1),
+                Some(Alias::Member(object, name)) => self.member(*object, name),
+                _ => UNKNOWN.to_string(),
+            }
+        }
+
+        fn member(&self, object: SymbolId, name: &str) -> String {
+            match self.module.namespaces.contains(&object) {
+                true => format!("import\0{name}"),
+                false => UNKNOWN.to_string(),
+            }
+        }
+    }
     /// The roots and the bindings they reach, to a fixed point: a `const`
     /// may compute from one declared later.
     struct Join<'s, 'h> {
@@ -8329,13 +8453,10 @@ fn held_bindings(
         members: FxHashMap<SymbolId, Member>,
         /// Each root: the prop it is, or `None` for a context.
         roots: Vec<Option<SymbolId>>,
-        /// The context each context root reads, by its identity: an
-        /// import's source and name, or a module `const`'s binding.
+        /// The context each context root reads, by its identity
+        /// (`ContextKeys`).
         keys: FxHashMap<usize, String>,
-        /// The module's own contexts whose default nothing but the context
-        /// holds (`literal_contexts`), and each import's identity.
-        literal_contexts: FxHashSet<SymbolId>,
-        imports: FxHashMap<SymbolId, String>,
+        contexts: Option<&'h ContextKeys<'s>>,
         joined: FxHashSet<u32>,
         kind: VariableDeclarationKind,
         changed: bool,
@@ -8346,19 +8467,23 @@ fn held_bindings(
             Some((self.members.get(&symbol_of(self.scoping, root)?)?, path))
         }
 
-        /// The context React's own `useContext` reads in `init`, by its
-        /// name and identity: an import, or a module-scope `const` of a
-        /// literal default (`literal_contexts`), that nothing writes.
-        fn context(&self, init: &Expression<'_>) -> Option<(String, String)> {
-            let Expression::CallExpression(call) = init.get_inner_expression() else { return None };
-            (self.hooks?.export(&call.callee)? == "useContext").then_some(())?;
-            let Expression::Identifier(context) = call.arguments.first()?.as_expression()?.get_inner_expression() else { return None };
-            let symbol = symbol_of(self.scoping, context).filter(|_| module_binding(self.scoping, context, false))?;
-            let key = match self.imports.get(&symbol) {
-                Some(key) => key.clone(),
-                None => self.literal_contexts.contains(&symbol).then(|| format!("{symbol:?}"))?,
-            };
-            Some((context.name.to_string(), key))
+        /// The context a call of `useContext` or `use` reads in `init`, or
+        /// in a member chain off one there, by its identity
+        /// (`ContextKeys`), with the chain's path; and, for the call alone,
+        /// its name where a read may name it: React's own `useContext` of an
+        /// import, or of a module-scope `const` of a literal default
+        /// (`literal_contexts`), that nothing writes.
+        fn context(&self, init: &Expression<'_>) -> Option<(Option<String>, String, Vec<String>)> {
+            let contexts = self.contexts?;
+            let (key, path) = contexts.chain(init)?;
+            let Some((Expression::CallExpression(call), _)) = member_base(init) else { return None };
+            let name = path.is_empty().then(|| {
+                (self.hooks?.export(&call.callee)? == "useContext").then_some(())?;
+                let Expression::Identifier(context) = call.arguments.first()?.as_expression()?.get_inner_expression() else { return None };
+                let symbol = symbol_of(self.scoping, context).filter(|_| module_binding(self.scoping, context, false))?;
+                (contexts.module.imports.contains_key(&symbol) || contexts.module.literal.contains(&symbol)).then(|| context.name.to_string())
+            });
+            Some((name.flatten(), key, path))
         }
     }
     impl<'a> Visit<'a> for Join<'_, '_> {
@@ -8370,9 +8495,9 @@ fn held_bindings(
         fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
             if let Some(init) = declarator.init.as_ref().filter(|_| !self.joined.contains(&declarator.span.start)) {
                 let mut bound = Vec::new();
-                let joined = if let Some((context, key)) = self.context(init) {
-                    let read = ContextBinding { context, path: Vec::new(), default: None };
-                    let joined = bind(self.scoping, &declarator.id, &[(self.roots.len(), Vec::new())], Some(&read), &mut bound).is_some();
+                let joined = if let Some((context, key, path)) = self.context(init) {
+                    let read = context.map(|context| ContextBinding { context, path: Vec::new(), default: None });
+                    let joined = bind(self.scoping, &declarator.id, &[(self.roots.len(), path)], read.as_ref(), &mut bound).is_some();
                     if joined {
                         self.keys.insert(self.roots.len(), key);
                         self.roots.push(None);
@@ -8441,11 +8566,18 @@ fn held_bindings(
         scoping: &'s Scoping,
         members: &'m FxHashMap<SymbolId, Member>,
         joined: &'m FxHashSet<u32>,
+        contexts: Option<&'m ContextKeys<'s>>,
         slot: Slot,
         read: FxHashSet<oxc::semantic::ReferenceId>,
         escaped: FxHashSet<usize>,
         reads: FxHashMap<usize, Vec<Vec<String>>>,
         handed: Vec<(usize, Vec<String>)>,
+        /// The uses of a call of `useContext` or `use` itself, by the
+        /// context it reads, as `escaped`, `reads` and `handed` hold a
+        /// root's.
+        call_escaped: FxHashSet<String>,
+        call_reads: Vec<(String, Vec<String>)>,
+        call_handed: Vec<(String, Vec<String>)>,
     }
     impl Uses<'_, '_> {
         fn visit_in(&mut self, slot: Slot, expression: &Expression<'_>) {
@@ -8456,6 +8588,35 @@ fn held_bindings(
     impl<'a> Visit<'a> for Uses<'_, '_> {
         fn visit_expression(&mut self, expression: &Expression<'a>) {
             let slot = std::mem::replace(&mut self.slot, Slot::Other);
+            if let Some(contexts) = self.contexts {
+                // A hook named but not called may be called anywhere, with
+                // any context.
+                if contexts.hook(expression) {
+                    self.call_escaped.insert(UNKNOWN.to_string());
+                    return;
+                }
+                // A call's result is a root of its context, used where the
+                // call, or a member chain off it, stands.
+                if let Some((key, path)) = contexts.chain(expression) {
+                    match slot {
+                        Slot::Other => {
+                            self.call_escaped.insert(key);
+                        }
+                        Slot::Value { .. } => {
+                            self.call_handed.push((key.clone(), path.clone()));
+                            self.call_reads.push((key, path));
+                        }
+                        Slot::Test | Slot::Init { .. } => self.call_reads.push((key, path)),
+                    }
+                    if let Some((Expression::CallExpression(call), _)) = member_base(expression) {
+                        for argument in &call.arguments {
+                            self.slot = Slot::Other;
+                            self.visit_argument(argument);
+                        }
+                    }
+                    return;
+                }
+            }
             if let Some((root, path)) = member_path(expression) {
                 let members = self.members;
                 if let Some(member) = symbol_of(self.scoping, root).and_then(|symbol| members.get(&symbol)) {
@@ -8564,18 +8725,23 @@ fn held_bindings(
     if hooks.is_none() && props.is_empty() {
         return (FxHashMap::default(), FxHashSet::default());
     }
-    let (literal_contexts, imports) = match &hooks {
-        Some(hooks) => literal_contexts(program, hooks),
-        None => (FxHashSet::default(), FxHashMap::default()),
-    };
+    let contexts = hooks.as_ref().map(|hooks| {
+        let mut aliases = Aliases { scoping, kind: VariableDeclarationKind::Var, found: FxHashMap::default() };
+        aliases.visit_program(program);
+        ContextKeys {
+            scoping,
+            hooks: ReactNames::importing(program, scoping, &CONTEXT_HOOKS, &[], true),
+            module: literal_contexts(program, hooks),
+            aliases: aliases.found,
+        }
+    });
     let mut join = Join {
         scoping,
         hooks: hooks.as_ref(),
         members: FxHashMap::default(),
         roots: Vec::new(),
         keys: FxHashMap::default(),
-        literal_contexts,
-        imports,
+        contexts: contexts.as_ref(),
         joined: FxHashSet::default(),
         kind: VariableDeclarationKind::Var,
         changed: true,
@@ -8591,20 +8757,40 @@ fn held_bindings(
         scoping,
         members: &join.members,
         joined: &join.joined,
+        contexts: contexts.as_ref(),
         slot: Slot::Other,
         read: FxHashSet::default(),
         escaped: FxHashSet::default(),
         reads: FxHashMap::default(),
         handed: Vec::new(),
+        call_escaped: FxHashSet::default(),
+        call_reads: Vec::new(),
+        call_handed: Vec::new(),
     };
     uses.visit_program(program);
     // Every root of one context holds the value its provider supplies, so
-    // each answers for all: roots are judged by group.
-    let mut first: FxHashMap<&String, usize> = FxHashMap::default();
+    // each answers for all: roots, and calls used without a binding, are
+    // judged by group.
+    let mut groups: FxHashMap<String, usize> = FxHashMap::default();
     let group: Vec<usize> = (0..join.roots.len())
-        .map(|index| join.keys.get(&index).map_or(index, |key| *first.entry(key).or_insert(index)))
+        .map(|index| join.keys.get(&index).map_or(index, |key| *groups.entry(key.clone()).or_insert(index)))
         .collect();
-    let mut escaped: FxHashSet<usize> = uses.escaped.iter().map(|index| group[*index]).collect();
+    let mut next = join.roots.len();
+    let mut group_of = |key: &String| {
+        *groups.entry(key.clone()).or_insert_with(|| {
+            next += 1;
+            next - 1
+        })
+    };
+    let call_escaped: Vec<usize> = uses.call_escaped.iter().map(&mut group_of).collect();
+    let call_reads: Vec<(usize, &Vec<String>)> = uses.call_reads.iter().map(|(key, path)| (group_of(key), path)).collect();
+    let handed: Vec<(usize, &Vec<String>)> = uses
+        .handed
+        .iter()
+        .map(|(index, path)| (group[*index], path))
+        .chain(uses.call_handed.iter().map(|(key, path)| (group_of(key), path)))
+        .collect();
+    let mut escaped: FxHashSet<usize> = uses.escaped.iter().map(|index| group[*index]).chain(call_escaped).collect();
     // A use the walk did not read (a write, a JSX tag) escapes too.
     for (symbol, member) in &join.members {
         let unread = scoping
@@ -8619,11 +8805,19 @@ fn held_bindings(
     for (index, paths) in &uses.reads {
         reads.entry(group[*index]).or_default().extend(paths);
     }
-    for (index, handed) in &uses.handed {
-        let below = reads.get(&group[*index]).is_some_and(|reads| reads.iter().any(|read| read.len() > handed.len() && read.starts_with(handed)));
+    for (index, path) in call_reads {
+        reads.entry(index).or_default().push(path);
+    }
+    for (index, handed) in handed {
+        let below = reads.get(&index).is_some_and(|reads| reads.iter().any(|read| read.len() > handed.len() && read.starts_with(handed)));
         if below {
-            escaped.insert(group[*index]);
+            escaped.insert(index);
         }
+    }
+    // An unknown context that escapes may be any context.
+    if groups.get(UNKNOWN).is_some_and(|index| escaped.contains(index)) {
+        let contexts = (0..join.roots.len()).filter(|index| join.roots[*index].is_none()).map(|index| group[index]);
+        escaped.extend(contexts.collect::<Vec<_>>());
     }
     let holds = |index: usize| !escaped.contains(&group[index]);
     let contexts = join
@@ -8638,12 +8832,20 @@ fn held_bindings(
     (contexts, held)
 }
 
-/// The module's own contexts a context origin may name, and each import's
-/// identity (its source and imported name): a module-scope `const` that
-/// React's own `createContext` initialises with a literal, an inline object
-/// of literals, or nothing, which no code but the context then holds. A
-/// default held under another name may be written through it.
-fn literal_contexts(program: &Program<'_>, hooks: &ReactNames) -> (FxHashSet<SymbolId>, FxHashMap<SymbolId, String>) {
+/// The contexts a module names: its own that a context origin may name, a
+/// module-scope `const` that React's own `createContext` initialises with a
+/// literal, an inline object of literals, or nothing, which no code but the
+/// context then holds (a default held under another name may be written
+/// through it); every module-scope `const` that `createContext` initialises;
+/// each import's imported name; and each namespace import.
+struct ModuleContexts {
+    literal: FxHashSet<SymbolId>,
+    created: FxHashSet<SymbolId>,
+    imports: FxHashMap<SymbolId, String>,
+    namespaces: FxHashSet<SymbolId>,
+}
+
+fn literal_contexts(program: &Program<'_>, hooks: &ReactNames) -> ModuleContexts {
     use oxc::ast::ast::{BindingPattern, Declaration, ImportDeclarationSpecifier, ObjectPropertyKind, PropertyKind};
     fn literal(expression: &Expression<'_>) -> bool {
         match expression.get_inner_expression() {
@@ -8658,20 +8860,26 @@ fn literal_contexts(program: &Program<'_>, hooks: &ReactNames) -> (FxHashSet<Sym
             expression => default_value(expression).is_some(),
         }
     }
-    let mut contexts = FxHashSet::default();
-    let mut imports = FxHashMap::default();
+    let mut found = ModuleContexts {
+        literal: FxHashSet::default(),
+        created: FxHashSet::default(),
+        imports: FxHashMap::default(),
+        namespaces: FxHashSet::default(),
+    };
     for statement in &program.body {
         let declaration = match statement {
             Statement::ImportDeclaration(import) => {
-                let Some(source) = import.source.value.as_str() else { continue };
                 for specifier in import.specifiers.iter().flatten() {
                     let (local, imported) = match specifier {
                         ImportDeclarationSpecifier::ImportSpecifier(named) => (&named.local, named.imported.name().to_string()),
                         ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => (&default.local, "default".to_string()),
-                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => continue,
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                            found.namespaces.extend(namespace.local.symbol_id.get());
+                            continue;
+                        }
                     };
                     if let Some(symbol) = local.symbol_id.get() {
-                        imports.insert(symbol, format!("{source}\0{imported}"));
+                        found.imports.insert(symbol, imported);
                     }
                 }
                 continue;
@@ -8689,16 +8897,20 @@ fn literal_contexts(program: &Program<'_>, hooks: &ReactNames) -> (FxHashSet<Sym
             else {
                 continue;
             };
+            if hooks.export(&call.callee) != Some("createContext") {
+                continue;
+            }
+            found.created.extend(id.symbol_id.get());
             let default = match call.arguments.first() {
                 None => true,
                 Some(argument) => argument.as_expression().is_some_and(literal),
             };
-            if default && call.arguments.len() <= 1 && hooks.export(&call.callee) == Some("createContext") {
-                contexts.extend(id.symbol_id.get());
+            if default && call.arguments.len() <= 1 {
+                found.literal.extend(id.symbol_id.get());
             }
         }
     }
-    (contexts, imports)
+    found
 }
 
 /// Whether `ident` names a module-scope binding nothing writes
