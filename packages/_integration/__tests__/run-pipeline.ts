@@ -2,6 +2,7 @@ import {
   applyUnitFallback,
   createEngineApi,
 } from '@animus-ui/extract/pipeline';
+import { posix } from 'path';
 
 import { config, theme } from '../fixtures/setup';
 
@@ -74,6 +75,46 @@ function fixtureInputs(filesJson: string): AnalyzeProjectInputs {
   };
 }
 
+/**
+ * The fixture system (`setup`, or the canary's `test-system`) as the files
+ * import it, by each import's own path. A host declares its system modules,
+ * which no case supplies; the engine given no host evidence reads an
+ * unsupplied import of anything else as a module it was not given.
+ */
+function systemModulesOf(filesJson: string): string[] {
+  // SAFETY: the case's own files JSON, an array of `{ path, source }`.
+  const files = JSON.parse(filesJson) as { path: string; source: string }[];
+  const modules = new Set<string>();
+  for (const file of files) {
+    for (const [, specifier] of file.source.matchAll(
+      /from ['"](\.{1,2}\/[^'"]*(?:setup|test-system))['"]/g
+    )) {
+      const base = posix.normalize(
+        posix.join(posix.dirname(file.path), specifier!)
+      );
+      modules.add(`${base}.ts`);
+    }
+  }
+  return [...modules];
+}
+
+/** A case's analysis context with the fixture system declared in it. */
+function withSystemModules(
+  filesJson: string,
+  analysisContextJson: string | undefined
+): string | undefined {
+  const declared = systemModulesOf(filesJson);
+  if (declared.length === 0) return analysisContextJson;
+  // SAFETY: a case's own analysis-context JSON object.
+  const context = (
+    analysisContextJson ? JSON.parse(analysisContextJson) : {}
+  ) as { systemModules?: string[] };
+  context.systemModules = [
+    ...new Set([...(context.systemModules ?? []), ...declared]),
+  ];
+  return JSON.stringify(context);
+}
+
 /** Analyzes with the shared fixture inputs; returns the manifest JSON. */
 export function analyzeProject(
   filesJson: string,
@@ -82,6 +123,10 @@ export function analyzeProject(
   return engineApi().analyzeProject({
     ...fixtureInputs(filesJson),
     ...overrides,
+    analysisContextJson: withSystemModules(
+      filesJson,
+      overrides.analysisContextJson
+    ),
   });
 }
 

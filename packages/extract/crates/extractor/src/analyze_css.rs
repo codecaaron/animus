@@ -1162,6 +1162,9 @@ pub enum Opening {
     /// The host opens a file the analysis never reads; `later` is the
     /// analysed candidate a fall-through would have chosen, if any.
     Skipped { later: Option<String> },
+    /// No host evidence was given, and the base names no analysed file, yet
+    /// may name a script the analysis was not given (`script_like`).
+    Unresolved,
 }
 
 /// A probe that ended Incomplete: its importer, specifier, the candidate,
@@ -1706,7 +1709,37 @@ fn probe_files_uncached<T>(base: &str, files: &BTreeMap<String, T>, inputs: &Css
     }
     match in_set() {
         Some(module) => ProbeOutcome::Found(module),
+        // Without the host's evidence nothing says what the base opens: a
+        // script the analysis was not given may render what no analysed tag
+        // shows, so the analysis is incomplete, as where the host opens one.
+        None if inputs.probe_evidence.is_none() && script_like(base) && !is_system_module(base, inputs) => {
+            ProbeOutcome::Incomplete { candidate: base.to_string(), opened: base.to_string(), why: Opening::Unresolved }
+        }
         None => ProbeOutcome::Absent,
+    }
+}
+
+/// Extensions a module import names only as an asset: a stylesheet, data,
+/// an image, a font, media, text, a binary. An import of one renders no
+/// component.
+const ASSET_EXTENSIONS: &[&str] = &[
+    "css", "scss", "sass", "less", "styl", "pcss", "json", "json5", "svg", "png", "jpg", "jpeg", "gif", "webp",
+    "avif", "ico", "bmp", "tif", "tiff", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "ogg", "mp3", "wav",
+    "flac", "aac", "m4a", "mov", "txt", "html", "htm", "xml", "yaml", "yml", "toml", "wasm", "glsl", "vert", "frag",
+    "csv", "pdf", "webmanifest",
+];
+
+/// Whether a probe base may name a script: it carries no query (`?raw`,
+/// `?url` name an asset), and its last segment has no extension, or one
+/// that is no asset's.
+fn script_like(base: &str) -> bool {
+    if base.contains('?') {
+        return false;
+    }
+    let name = base.rsplit('/').next().unwrap_or(base);
+    match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => !ASSET_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()),
+        _ => true,
     }
 }
 
@@ -12357,6 +12390,19 @@ fn run_with_system_floor(
                     } else {
                         ""
                     },
+                    outside_app_remedy(importer, files, inputs).map_or(String::new(), |remedy| format!("; {remedy}")),
+                ),
+                Some(RESOLVE_UNANALYSED_IMPORT),
+            )),
+            Opening::Unresolved if !unanalysed_reported.insert((importer, specifier)) => {}
+            Opening::Unresolved => diagnostics.push(diagnostic(
+                importer,
+                specifier,
+                "warn",
+                format!(
+                    "'{specifier}' names no analysed file, and no host evidence says what it opens, so nothing is \
+                     pruned: every variant and state option in the app ships — give the analysis {candidate}, or \
+                     the host's probe evidence{}",
                     outside_app_remedy(importer, files, inputs).map_or(String::new(), |remedy| format!("; {remedy}")),
                 ),
                 Some(RESOLVE_UNANALYSED_IMPORT),
@@ -23901,6 +23947,54 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(run(&[], &[("vite.config.ts", outside)], &open), everything);
     }
 
+    /// Contract: with no host evidence, a relative or aliased import that
+    /// names no analysed file and may name a script ends its probe
+    /// Incomplete: a module the analysis was not given may render what no
+    /// analysed tag shows, so nothing is pruned and whole-component removal
+    /// stays off, wherever in the app the import sits. An import of an
+    /// asset, of a system module, or one the host's evidence answers changes
+    /// nothing.
+    #[test]
+    fn an_unread_script_import_without_host_evidence_prunes_nothing() {
+        let q = ("src/q.tsx", "export const Q = ds.styles({ margin: '1px' }).asElement('span');\n");
+        let u = ("src/u.tsx", "export const U = ds.styles({ padding: '1px' }).asElement('div');\n");
+        let settled = ("src/app.tsx", "import { Card } from './card';\nexport function App() { return <Card title=\"t\">text</Card>; }\nexport const root = <App />;\n");
+        // Whether Q, which only src/legacy.tsx (never given) renders, keeps its CSS.
+        let kept = |more: &[(&str, &str)], prepare: &dyn Fn(&mut CssInputs)| {
+            let mut inputs = test_inputs();
+            prepare(&mut inputs);
+            let files: Vec<(&str, &str)> = [q, u].into_iter().chain(more.iter().copied()).collect();
+            analyze(&files, &inputs).css.contains("margin")
+        };
+        let none = |_: &mut CssInputs| {};
+        for card in [
+            "import { renderLegacy } from './legacy';\nexport function Card() { return <div>{renderLegacy()}</div>; }\n",
+            "import { legacyHeader } from './legacy';\nexport function Card() { return <div>{legacyHeader}</div>; }\n",
+            "import { Legacy } from './legacy';\nexport function Card(props) { return Legacy(props); }\n",
+            "import { LegacyBase } from './legacy';\nexport class Card extends LegacyBase {}\n",
+            "import { useLegacy } from './legacy';\nexport function Card() { const el = useLegacy(); return <div>{el}</div>; }\n",
+        ] {
+            assert!(kept(&[("src/card.tsx", card), settled], &none), "{card}");
+        }
+        // Two analysed modules away from the component that renders it.
+        let helper = ("src/helper.ts", "import { renderLegacy } from './legacy';\nexport const header = () => renderLegacy();\n");
+        let card = ("src/card.tsx", "import { header } from './helper';\nexport function Card() { return <div>{header()}</div>; }\n");
+        assert!(kept(&[helper, card, settled], &none));
+        // In a module that renders no ordinary component.
+        let render = |import: &str| format!("import {{ createRoot }} from 'react-dom/client';\nimport {{ U }} from './u';\n{import}\ncreateRoot(document.body).render(<U />);\n");
+        let unread = render("import { renderLegacy } from './legacy';\nrenderLegacy();");
+        assert!(kept(&[("src/app.tsx", &unread)], &none));
+        // An asset, a system module, and an import the host's evidence answers.
+        assert!(!kept(&[("src/app.tsx", &render("import './legacy.css';"))], &none));
+        let system = |inputs: &mut CssInputs| inputs.analysis_context.system_modules = vec!["src/ds.ts".into()];
+        assert!(!kept(&[("src/app.tsx", &render("import { ds } from './ds';\nvoid ds;"))], &system));
+        let answered = |inputs: &mut CssInputs| {
+            inputs.probe_evidence =
+                Some(ProbeEvidence { generation: 1, identity: String::new(), expansions: Vec::new(), packages: Vec::new(), bases: Default::default() });
+        };
+        assert!(!kept(&[("src/app.tsx", &unread)], &answered));
+    }
+
     #[test]
     fn a_computed_load_that_may_load_an_unread_file_prunes_nothing() {
         let q = ("src/q.tsx", "export const Q = ds.styles({ margin: '1px' }).asElement('span');\n");
@@ -24003,7 +24097,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         for reading in [HostReading::Asset, HostReading::Adapted] {
             let out = run(Some(reading), false);
             assert_eq!((skipped(&out), unanalysed(&out)), (0, 0));
-            assert_eq!(kept_sizes(&out, "r.tsx::R"), kept_sizes(&run(None, false), "r.tsx::R"), "{reading:?}");
+            assert_eq!(kept_sizes(&out, "r.tsx::R"), kept_sizes(&run(None, true), "r.tsx::R"), "{reading:?}");
         }
     }
 
@@ -24745,6 +24839,8 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
         usage.sort();
         let mut inputs = test_inputs();
         inputs.theme.insert("space.8".into(), "0.5rem".into());
+        // The kit imports the system module, as a host declares it.
+        inputs.analysis_context.system_modules = vec!["ds.ts".into()];
         let out = analyze(&[("kit.tsx", source)], &inputs);
         let mut diagnostics: Vec<String> = out.diagnostics.iter().map(|d| format!("{:?} {}", d.code, d.kind)).collect();
         diagnostics.sort();

@@ -4879,14 +4879,13 @@ export const App = () => <Box tone="red" />;
             )
             .to_string();
             let prepared: serde_json::Value = serde_json::from_str(&engine.prepare(files.clone()).unwrap()).unwrap();
-            let evidence = unanalysed.map(|base| {
-                serde_json::json!({
-                    "generation": 1,
-                    "identity": prepared["identity"],
-                    "bases": { base: { "candidate": base, "reading": "unanalysed" } },
-                })
-                .to_string()
-            });
+            // A host always answers the probes, naming the file it opens
+            // where it opens one analysis does not read.
+            let bases = match unanalysed {
+                Some(base) => serde_json::json!({ base: { "candidate": base, "reading": "unanalysed" } }),
+                None => serde_json::json!({}),
+            };
+            let evidence = Some(serde_json::json!({ "generation": 1, "identity": prepared["identity"], "bases": bases }).to_string());
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files, evidence).unwrap()).unwrap();
             out["diagnostics"]
                 .as_array()

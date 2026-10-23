@@ -185,6 +185,10 @@ function runExtractor(c: Case): SeamCaseResult {
     transformSourcesJson: c.transformSources
       ? JSON.stringify(c.transformSources)
       : undefined,
+    // Every case imports the test system, as a host declares it.
+    analysisContextJson: JSON.stringify({
+      systemModules: ['../test-system.ts'],
+    }),
   });
   engine.prepare(JSON.stringify(c.files));
   const m = JSON.parse(engine.analyzePrepared());

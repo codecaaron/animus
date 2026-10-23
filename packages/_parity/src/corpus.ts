@@ -71,6 +71,24 @@ async function loadEntry(
   return { path: file, source: raw };
 }
 
+/** `entry` and each sibling fixture it imports, transitively (`./x`
+ *  naming `x.tsx` or `x.ts` in `dir`): a unit holds the modules its entry
+ *  imports, as a host's file set does. The system module is declared, not
+ *  held (`systemModulesOf`). */
+function withSiblings(dir: string, entry: string): string[] {
+  const held = [entry];
+  for (let at = 0; at < held.length; at++) {
+    const source = readFileSync(join(dir, held[at]!), 'utf8');
+    for (const [, name] of source.matchAll(/from '\.\/([^'/]+)'/g)) {
+      const file = ['.tsx', '.ts']
+        .map((extension) => `${name}${extension}`)
+        .find((candidate) => existsSync(join(dir, candidate)));
+      if (file !== undefined && !held.includes(file)) held.push(file);
+    }
+  }
+  return held;
+}
+
 export async function enumerateUnits(): Promise<CorpusUnit[]> {
   assertCorpusDirectories();
   const units: CorpusUnit[] = [];
@@ -79,7 +97,11 @@ export async function enumerateUnits(): Promise<CorpusUnit[]> {
   for (const f of extractFiles) {
     units.push({
       id: `extract/${f}`,
-      files: [await loadEntry(EXTRACT_FIXTURES, f)],
+      files: await Promise.all(
+        withSiblings(EXTRACT_FIXTURES, f).map((g) =>
+          loadEntry(EXTRACT_FIXTURES, g)
+        )
+      ),
       configSource: 'test-system',
     });
   }
@@ -112,7 +134,11 @@ export async function enumerateUnits(): Promise<CorpusUnit[]> {
     } else if (entry.endsWith('.tsx')) {
       units.push({
         id: `integration/${entry}`,
-        files: [await loadEntry(INTEGRATION_FIXTURES, entry)],
+        files: await Promise.all(
+          withSiblings(INTEGRATION_FIXTURES, entry).map((g) =>
+            loadEntry(INTEGRATION_FIXTURES, g)
+          )
+        ),
         configSource: 'test-system',
       });
     }

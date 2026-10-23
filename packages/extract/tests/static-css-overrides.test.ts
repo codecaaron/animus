@@ -78,6 +78,10 @@ function analyze(staticCssJson: string | null) {
     conditionAliasesJson: null,
     externalDirsJson: null,
     transformSourcesJson: null,
+    // The fixture imports the test system, as a host declares it.
+    analysisContextJson: JSON.stringify({
+      systemModules: ['tests/test-system.ts'],
+    }),
   });
   // SAFETY: `manifestJson` is this call's own `analyzeProject` return, serde
   // output from the Rust `AnalyzeResult` that `manifest-schema.ts` mirrors.

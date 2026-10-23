@@ -8,7 +8,7 @@ import {
 } from '@animus-ui/assertions';
 import { createEngineApi } from '@animus-ui/extract/pipeline';
 import { createRequire } from 'module';
-import { join } from 'path';
+import { join, posix } from 'path';
 
 import { classifyCliFailure } from './cli-messages';
 import { canonicalJson } from './content-hash';
@@ -265,6 +265,9 @@ async function main() {
         // Without transform sources the oracle records package-shipped
         // transforms as unresolvable, blessing a fallback consumers lack.
         transformSourcesJson: config.transformSources ?? null,
+        analysisContextJson: JSON.stringify({
+          systemModules: systemModulesOf(unit.files),
+        }),
       });
       // Parity reads every section, as the engine kept them.
       const manifestJson: string = api.fullManifestJson?.() ?? hostManifestJson;
@@ -321,3 +324,23 @@ main().catch((error: Error) => {
   process.stderr.write(failure.stderr);
   process.exit(failure.exitCode);
 });
+
+/** The test system (`test-system`, or the integration fixtures' `setup`)
+ *  as the unit's files import it, by each import's own path: a host
+ *  declares its system modules, which no unit supplies. */
+function systemModulesOf(
+  files: readonly { path: string; source: string }[]
+): string[] {
+  const modules = new Set<string>();
+  for (const file of files) {
+    for (const [, specifier] of file.source.matchAll(
+      /from '(\.{1,2}\/[^']*(?:test-system|setup))'/g
+    )) {
+      const base = posix.normalize(
+        posix.join(posix.dirname(file.path), specifier!)
+      );
+      modules.add(`${base}.ts`);
+    }
+  }
+  return [...modules];
+}
