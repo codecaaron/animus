@@ -8943,13 +8943,14 @@ fn resolve_deferred_component_errors(
                 .is_some_and(|variant| variant.options.iter().any(|(name, _)| name == option))
         })
     }
-    let mut reported_once: FxHashSet<ReportKey> = FxHashSet::default();
+    // An entry reported once is skipped where the same diagnostic already
+    // reported, its own declaration's included.
+    let mut reported: FxHashSet<ReportKey> = FxHashSet::default();
     for mut entry in deferred.drain(..) {
         if !survives(reconciled, &entry) {
             continue;
         }
-        let diagnostic = &entry.diagnostic;
-        if entry.once && !reported_once.insert(report_key(diagnostic)) {
+        if !reported.insert(report_key(&entry.diagnostic)) && entry.once {
             continue;
         }
         if let Some((pruned, unseen)) = skip_pruned {
@@ -9628,6 +9629,23 @@ fn run_with_system_floor(
             });
             dropped_keys.borrow_mut().extend(merged_in);
         }
+        // A failure in a parent option merged into this chain belongs to the
+        // declaration: one reported at once was reported there, and one
+        // deferred until pruning is that declaration's, once, wherever the
+        // option ships.
+        let inherited_failures: Vec<TransformFailure> = if merged_chain.is_some() {
+            let mut inherited = Vec::new();
+            transform_failures.borrow_mut().retain(|failure| match &failure.variant_origin {
+                Some((axis, option)) if !authors_variant_key(chain, axis, Some(option.as_str()), &failure.prop) => {
+                    inherited.push(failure.clone());
+                    false
+                }
+                _ => true,
+            });
+            inherited
+        } else {
+            Vec::new()
+        };
         // Drained before the match so failures recorded before a later bail
         // still report; topo order keeps emission deterministic.
         drain_transform_failures(
@@ -9638,6 +9656,24 @@ fn run_with_system_floor(
             &mut diagnostics,
             &mut deferred_errors,
         );
+        for failure in inherited_failures {
+            let (axis, option) = failure.variant_origin.clone().unwrap_or_default();
+            let declarer = std::iter::successors(parent_map.get(component_id), |id| parent_map.get(*id))
+                .take(parent_map.len())
+                .filter_map(|id| chain_lookup.get(id.as_str()))
+                .find(|(file, idx)| authors_variant_key(&files[*file].chains[*idx], &axis, Some(option.as_str()), &failure.prop));
+            let Some((declarer_file, declarer_idx)) = declarer else { continue };
+            let mut deferred = Vec::new();
+            drain_transform_failures(
+                &TransformFailureSink::new(vec![failure]),
+                declarer_file,
+                Some(&files[*declarer_file].chains[*declarer_idx].descriptor.binding),
+                Some(component_id.as_str()),
+                &mut Vec::new(),
+                &mut deferred,
+            );
+            deferred_errors.extend(deferred.into_iter().map(|entry| DeferredComponentError { once: true, ..entry }));
+        }
         if merged_chain.is_some() {
             // A parent option merged into this chain was reported at the
             // parent's declaration; only this chain's own declarations remain.
@@ -16551,6 +16587,10 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         rules
     }
 
+    fn owned(codes: &[&str]) -> Vec<String> {
+        codes.iter().map(|code| code.to_string()).collect()
+    }
+
     /// Contract: an extension's partial redeclaration keeps every parent
     /// declaration it doesn't override. Its styles, states and variants
     /// merge over its parent's before resolution, as the runtime builder's
@@ -16732,6 +16772,53 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         assert_eq!((inherited, child), (vec![crate::theme::KEYS_SHARE_PROPERTY.to_string()], vec![]));
         let (_, child) = reported("{ '&:hover': { p: 999 } }", "{ '&:focus': { p: 999 } }");
         assert_eq!(child, [STRICT_TOKEN_MISS.to_string()]);
+
+        // A parent option the extension leaves, or redeclares without the
+        // key, keeps its failure, miss and shared-property finding at the
+        // parent; an invalid result, reported where the option ships, is the
+        // parent's, once, wherever it ships.
+        let mut inputs = battle_transform_inputs(
+            "(v) => { if (v === 3) throw new Error('kaboom'); if (v === 5) return { w: v }; return `${v}px`; }",
+        );
+        inputs.config.get_mut("p").unwrap().strict = Some(true);
+        let variant_reported = |parent: &str, child: &str, parent_renders: &str| {
+            let source = format!(
+                "export const Parent = ds.variant({{ prop: 'size', {parent} }}).asElement('div');\n\
+                 export const Child = Parent.extend().variant({{ prop: 'size', variants: {child} }}).asElement('div');\n\
+                 export const App = () => <><Child size=\"sm\" /><Child size=\"lg\" /><Parent {parent_renders} /></>;\n"
+            );
+            let out = analyze(&[("app.tsx", &source)], &inputs);
+            let codes = |component: &str| {
+                let mut codes: Vec<String> =
+                    out.diagnostics.iter().filter(|d| d.component == component).filter_map(|d| d.code.clone()).collect();
+                codes.sort();
+                codes
+            };
+            (codes("Parent"), codes("Child"))
+        };
+        let sm = "size=\"sm\"";
+        let cases: [(&str, &str, &[&str], &[&str]); 6] = [
+            ("variants: { sm: { w: 3 }, lg: { opacity: 1 } }", "{ lg: { opacity: 0.5 } }", &[TRANSFORM_THREW], &[]),
+            ("variants: { sm: { w: 3, opacity: 1 } }", "{ sm: { opacity: 0.5 } }", &[TRANSFORM_THREW], &[]),
+            ("variants: { sm: { opacity: 1 } }", "{ lg: { w: 3 } }", &[], &[TRANSFORM_THREW]),
+            ("variants: { sm: { p: 999 }, lg: { opacity: 1 } }", "{ lg: { opacity: 0.5 } }", &[STRICT_TOKEN_MISS], &[]),
+            ("variants: { sm: { opacity: 1 } }", "{ lg: { p: 777 } }", &[], &[STRICT_TOKEN_MISS]),
+            (
+                "variants: { sm: { padding: '1px', p: 8 }, lg: { opacity: 1 } }",
+                "{ lg: { opacity: 0.5 } }",
+                &[crate::theme::KEYS_SHARE_PROPERTY],
+                &[],
+            ),
+        ];
+        for (parent, child, at_parent, at_child) in cases {
+            assert_eq!(variant_reported(parent, child, sm), (owned(at_parent), owned(at_child)), "{parent} {child}");
+        }
+        // Whether the parent renders the option itself or prunes it.
+        for parent_renders in [sm, ""] {
+            let parent = "defaultVariant: 'lg', variants: { sm: { w: 5 }, lg: { opacity: 1 } }";
+            let reported = variant_reported(parent, "{ lg: { opacity: 0.5 } }", parent_renders);
+            assert_eq!(reported, (owned(&[TRANSFORM_INVALID_RESULT]), vec![]), "{parent_renders}");
+        }
 
         // Not the merged config's order: a state or variant the extension
         // redeclares follows the ones it inherits unchanged, where `deepMerge`
