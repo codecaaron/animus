@@ -234,12 +234,22 @@ fn merge_responsive_base(
     *existing = merged;
 }
 
+/// Each state's styles; a key a state drops is located from the state's name.
 fn resolve_state_stage(value: &Value, ctx: &ResolveContext) -> Vec<(String, ResolvedStyles)> {
     value
         .as_object()
         .into_iter()
         .flat_map(|states| states.iter())
-        .map(|(name, styles)| (name.clone(), resolve_styles(styles, ctx, false)))
+        .map(|(name, styles)| {
+            let dropped_before = ctx.dropped_keys.map_or(0, |sink| sink.borrow().len());
+            let resolved = resolve_styles(styles, ctx, false);
+            if let Some(sink) = ctx.dropped_keys {
+                for dropped in sink.borrow_mut().iter_mut().skip(dropped_before) {
+                    dropped.path.insert(0, name.clone());
+                }
+            }
+            (name.clone(), resolved)
+        })
         .collect()
 }
 

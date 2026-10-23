@@ -83,7 +83,7 @@ fn entry_conditions<'a>(value: &'a Value, ctx: &ResolveContext) -> FxHashSet<&'a
 /// written before the shorthand that covers it, which plain CSS would let
 /// reset it. A shorthand followed by its longhand is the override idiom:
 /// both contribute as CSS order says, and nothing is reported.
-fn record_shared_properties(obj: &Map<String, Value>, ordered: &CascadeEntries<'_>, ctx: &ResolveContext) {
+fn record_shared_properties(obj: &Map<String, Value>, path: &[String], ordered: &CascadeEntries<'_>, ctx: &ResolveContext) {
     if ctx.dropped_keys.is_none() {
         return;
     }
@@ -135,8 +135,9 @@ fn record_shared_properties(obj: &Map<String, Value>, ordered: &CascadeEntries<'
             } else {
                 continue;
             };
-            record_dropped_key(
+            record_dropped_key_at(
                 ctx,
+                path,
                 DroppedStyleKey::SharedProperty {
                     overridden: earlier.to_string(),
                     winner: later.to_string(),
@@ -957,7 +958,7 @@ pub fn resolve_styles(
     };
 
     let ordered = cascade_order(obj, ctx.config);
-    record_shared_properties(obj, &ordered, ctx);
+    record_shared_properties(obj, &[], &ordered, ctx);
     let entries = ordered.entries;
     let slots = key_slots(obj);
     let slot = |key: &str| slots.get(key).copied().unwrap_or_default();
@@ -1055,7 +1056,7 @@ fn resolve_block_entries(
     raw_condition_index: &mut usize,
 ) {
     let ordered = cascade_order(obj, ctx.config);
-    record_shared_properties(obj, &ordered, ctx);
+    record_shared_properties(obj, &frame.keys, &ordered, ctx);
     let entries = ordered.entries;
     let slots = key_slots(obj);
     let slot = |key: &str| slots.get(key).copied().unwrap_or_default();

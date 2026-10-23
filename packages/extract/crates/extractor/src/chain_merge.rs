@@ -1,15 +1,14 @@
 //! Extension-chain topology: topological sort over the extension-provenance
 //! graph, and parent→child config merging.
 
-#[cfg(test)]
-use serde_json::Map;
-use serde_json::Value;
+use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::VecDeque;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::evaluator::js_string_literal;
-use crate::facts::ChainFacts;
+use crate::facts::{ChainFacts, StageFacts};
 use crate::theme::PropConfigMap;
 
 /// Deep merge matching the runtime builder's `deepMerge`: objects merge key
@@ -91,7 +90,7 @@ pub fn inherit_stages(chain: &ChainFacts, inherited: &InheritedConfigs) -> (Opti
         };
         let merged = match (stage.method.as_str(), inherited.raw(&stage.method)) {
             // The parent merges into the first declaration only.
-            (method, Some(Some(parent))) if merged_methods.insert(method) => deep_merge(parent, value),
+            (method, Some(Some(parent))) if merged_methods.insert(method) => deep_merge(parent, &authored(stage, value)),
             ("variant", _) => {
                 let prop = variant_prop(value);
                 // A later same-prop stage keeps its own-chain handling; the
@@ -150,30 +149,42 @@ pub fn authors_variant_key(chain: &ChainFacts, axis: &str, option: Option<&str>,
         .any(|styles| writes_key(styles, key))
 }
 
-/// The style objects the chain's own `styles`, `states` and compound stages
-/// write, rather than ones merged in from a parent.
-fn own_style_objects(chain: &ChainFacts) -> impl Iterator<Item = &Value> {
-    chain.stages.iter().flat_map(|stage| {
-        let (styles, states) = match stage.method.as_str() {
-            "styles" => (stage.value.as_ref(), None),
-            "states" => (None, stage.value.as_ref().and_then(Value::as_object)),
-            "compound" => (stage.second_value.as_ref(), None),
-            _ => (None, None),
-        };
-        styles.into_iter().chain(states.into_iter().flat_map(|states| states.values()))
-    })
+/// Whether the chain's own `styles` or `states` stage writes `key` in the
+/// object `path` leads to: a `styles` path from its root, a `states` path
+/// from the state's name.
+pub fn authors_key_at(chain: &ChainFacts, path: &[String], key: &str) -> bool {
+    chain
+        .stages
+        .iter()
+        .filter(|stage| matches!(stage.method.as_str(), "styles" | "states"))
+        .filter_map(|stage| path.iter().try_fold(stage.value.as_ref()?, |object, segment| object.get(segment)))
+        .any(|object| object.get(key).is_some_and(|value| !value.is_null()))
 }
 
-/// Whether the chain's own `styles`, `states` or compound stages author
-/// `entry` for `prop` (at `breakpoint`), rather than inheriting it.
-pub fn authors_entry(chain: &ChainFacts, prop: &str, breakpoint: Option<&str>, entry: &Value) -> bool {
-    own_style_objects(chain).any(|styles| declares(styles, prop, breakpoint, entry))
+/// The stage's config with each key evaluation could not read written as
+/// absent, as the runtime's `deepMerge` writes that key's value over the
+/// inherited one.
+fn authored<'v>(stage: &StageFacts, value: &'v Value) -> Cow<'v, Value> {
+    if stage.skipped_at.is_empty() {
+        return Cow::Borrowed(value);
+    }
+    let mut authored = value.clone();
+    for path in &stage.skipped_at {
+        write_absent(&mut authored, path);
+    }
+    Cow::Owned(authored)
 }
 
-/// Whether the chain's own `styles`, `states` or compound stages write
-/// `key`, at any depth, rather than inheriting it.
-pub fn authors_key(chain: &ChainFacts, key: &str) -> bool {
-    own_style_objects(chain).any(|styles| writes_key(styles, key))
+fn write_absent(value: &mut Value, path: &[String]) {
+    let (Some((key, rest)), Some(entries)) = (path.split_first(), value.as_object_mut()) else {
+        return;
+    };
+    let held = entries.entry(key.clone());
+    if rest.is_empty() {
+        held.or_insert(Value::Null);
+    } else {
+        write_absent(held.or_insert_with(|| Value::Object(Map::new())), rest);
+    }
 }
 
 fn writes_key(styles: &Value, key: &str) -> bool {
@@ -208,7 +219,8 @@ pub fn effective_configs(chain: &ChainFacts, inherited: &InheritedConfigs) -> In
                 None => configs.variants.push((prop.to_string(), value.clone())),
             }
         } else if let Some(slot) = configs.raw_mut(&stage.method) {
-            *slot = Some(slot.as_ref().map_or_else(|| value.clone(), |parent| deep_merge(parent, value)));
+            let value = authored(stage, value);
+            *slot = Some(slot.as_ref().map_or_else(|| value.clone().into_owned(), |parent| deep_merge(parent, &value)));
         }
     }
     configs

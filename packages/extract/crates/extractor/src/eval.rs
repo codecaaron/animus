@@ -33,9 +33,10 @@ pub struct SkippedProperty {
     /// What evaluation could not settle there.
     pub kind: UnevaluatedKind,
     pub reason: String,
-    /// Key path of the nested object holding `key`, relative to the
-    /// evaluated object; `None` at its top level.
-    pub parent: Option<String>,
+    /// Keys of the nested objects holding `key`, outermost first, relative
+    /// to the evaluated object; empty at its top level. A selector key can
+    /// itself contain a dot, so the keys stay apart.
+    pub parent: Vec<String>,
     /// Source span of what was skipped: the value, or the key when the key
     /// itself is unsupported.
     pub span: Option<(u32, u32)>,
@@ -62,7 +63,7 @@ fn unsupported_selector_skip(key: &str, span: Span) -> SkippedProperty {
         reason: format!(
             "selector '{key}' has no substitutable '&' subject outside quoted text ({SELECTOR_UNSUPPORTED_SUBJECT})"
         ),
-        parent: None,
+        parent: Vec::new(),
         span: span_of(span),
     }
 }
@@ -148,10 +149,7 @@ fn eval_object_expr_scoped(
                     match eval_object_expr_scoped(inner_obj, static_values, eligible) {
                         Ok((value, inner_skips, inner_captured)) => {
                             skipped.extend(inner_skips.into_iter().map(|mut skip| {
-                                skip.parent = Some(match skip.parent {
-                                    Some(parent) => format!("{}.{}", key, parent),
-                                    None => key.clone(),
-                                });
+                                skip.parent.insert(0, key.clone());
                                 skip
                             }));
                             for mut cap in inner_captured {
@@ -166,7 +164,7 @@ fn eval_object_expr_scoped(
                                 key,
                                 kind: bail.kind,
                                 reason: bail.reason,
-                                parent: None,
+                                parent: Vec::new(),
                                 span: span_of(inner_obj.span),
                             });
                         }
@@ -189,7 +187,7 @@ fn eval_object_expr_scoped(
                             key,
                             kind: bail.kind,
                             reason: bail.reason,
-                            parent: None,
+                            parent: Vec::new(),
                             span: span_of(prop.value.span()),
                         });
                     }
@@ -210,7 +208,7 @@ fn eval_object_expr_scoped(
                         key,
                         kind: unevaluated.kind,
                         reason: unevaluated.clause,
-                        parent: (!path.is_empty()).then(|| path.join(".")),
+                        parent: path,
                         span: span_of(spread.span),
                     });
                 }
@@ -615,7 +613,7 @@ pub fn parse_variant_arg(
             Some(clause) => format!("{reason} — {clause}"),
             None => reason.to_string(),
         },
-        parent: None,
+        parent: Vec::new(),
         span: span_of(value.span()),
     };
 
@@ -905,34 +903,34 @@ fn mark_lost_values(
     skips: &[SkippedProperty],
     captures: &[CapturedTransform],
 ) {
-    let mut marks: Vec<(Option<&str>, &str, UnevaluatedKind, String)> = Vec::new();
+    let mut marks: Vec<(Vec<String>, &str, UnevaluatedKind, String)> = Vec::new();
     for capture in captures {
-        let parent = capture.key.strip_suffix(".transform");
+        let parent = capture.key.strip_suffix(".transform").map_or_else(Vec::new, |parent| parent.split('.').map(str::to_string).collect());
         marks.push((parent, "transform", UnevaluatedKind::CapturedTransform, format!("an inline function in const '{}'", source.name)));
     }
     for skip in skips {
         let absent = skip.key == "transform"
-            && transform_value_at(source.obj, skip.parent.as_deref())
+            && transform_value_at(source.obj, &skip.parent)
                 .is_some_and(|expr| is_absent_value(expr, source.undefined_bound));
         if !absent {
-            marks.push((skip.parent.as_deref(), &skip.key, skip.kind, format!("{} in const '{}'", skip.reason, source.name)));
+            marks.push((skip.parent.clone(), &skip.key, skip.kind, format!("{} in const '{}'", skip.reason, source.name)));
         }
     }
     // Each object's lost keys, in order: a const may hold thousands of keys
     // and lose many of them, and each object is indexed once for all of its
     // own. Objects apart commute: a lost value is never an object, so one
     // that replaces another's holder erases it whichever comes first.
-    let mut held: Vec<(Option<&str>, Vec<LostKey<'_>>)> = Vec::new();
-    let mut held_at: FxHashMap<Option<&str>, usize> = FxHashMap::default();
+    let mut held: Vec<(Vec<String>, Vec<LostKey<'_>>)> = Vec::new();
+    let mut held_at: FxHashMap<Vec<String>, usize> = FxHashMap::default();
     for (parent, key, kind, clause) in marks {
-        let at = *held_at.entry(parent).or_insert_with(|| {
+        let at = *held_at.entry(parent.clone()).or_insert_with(|| {
             held.push((parent, Vec::new()));
             held.len() - 1
         });
         held[at].1.push((key, kind, clause));
     }
     for (parent, keys) in held {
-        mark_lost_keys(value, parent, keys);
+        mark_lost_keys(value, &parent, keys);
     }
 }
 
@@ -941,9 +939,9 @@ type LostKey<'a> = (&'a str, UnevaluatedKind, String);
 
 /// As `insert` of each key into the object at `parent`, `get_mut` by
 /// `get_mut`: in place where it has the key, else last.
-fn mark_lost_keys(value: &mut StaticValue, parent: Option<&str>, keys: Vec<LostKey<'_>>) {
+fn mark_lost_keys(value: &mut StaticValue, parent: &[String], keys: Vec<LostKey<'_>>) {
     let mut current = value;
-    for segment in parent.into_iter().flat_map(|path| path.split('.')) {
+    for segment in parent {
         match current.get_mut(segment) {
             Some(next) => current = next,
             None => return,
@@ -1355,7 +1353,7 @@ pub(crate) fn take_unevaluated(value: &mut StaticValue) -> Vec<(String, String)>
 
 /// `take_unevaluated` with each path as its key segments, since a selector
 /// key can itself contain a dot.
-fn take_unevaluated_segments(value: &mut StaticValue) -> Vec<(Vec<String>, Unevaluated)> {
+pub(crate) fn take_unevaluated_segments(value: &mut StaticValue) -> Vec<(Vec<String>, Unevaluated)> {
     let mut lost = Vec::new();
     collect_unevaluated(value, &[], &mut lost);
     lost
@@ -1442,13 +1440,13 @@ pub(crate) fn is_absent_value(expr: &Expression<'_>, undefined_bound: bool) -> b
 }
 
 /// The `transform` value the evaluator read in the object at `parent`
-/// (a skip's key path), following its nested-object descent.
+/// (a skip's keys), following its nested-object descent.
 pub(crate) fn transform_value_at<'s, 'a>(
     obj: &'s ObjectExpression<'a>,
-    parent: Option<&str>,
+    parent: &[String],
 ) -> Option<&'s Expression<'a>> {
     let mut current = obj;
-    for segment in parent.into_iter().flat_map(|path| path.split('.')) {
+    for segment in parent {
         match crate::chain_walk::unwrap_type_assertions(last_property(current, segment)?) {
             Expression::ObjectExpression(inner) => current = inner,
             _ => return None,

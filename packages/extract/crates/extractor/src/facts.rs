@@ -74,6 +74,10 @@ pub struct StageFacts {
     /// resolver may drop, as written.
     #[serde(skip)]
     pub block_keys: Vec<KeySource>,
+    /// The keys leading to each key in `skipped`, outermost first, ending
+    /// with it: where `value` holds no static value for an authored one.
+    #[serde(skip)]
+    pub skipped_at: Vec<Vec<String>>,
 }
 
 /// A skipped value's start offset and source text, keyed by its skip.
@@ -226,7 +230,7 @@ impl StageFacts {
     }
 
     /// Records a skip, with its source when the evaluator located it.
-    fn record_skip(&mut self, skip: eval::SkippedProperty, source: &str) {
+    fn record_skip(&mut self, mut skip: eval::SkippedProperty, source: &str) {
         if let Some(text) = skip.span.and_then(|(start, end)| source.get(start as usize..end as usize)) {
             self.skipped_sources.push(SkippedSource {
                 key: skip.key.clone(),
@@ -235,7 +239,17 @@ impl StageFacts {
                 text: text.to_string(),
             });
         }
+        skip.parent.push(skip.key.clone());
+        self.skipped_at.push(skip.parent);
         self.skipped.push((skip.key, skip.reason));
+    }
+
+    /// Records each value evaluation left unsettled in `value`, taking it out.
+    fn record_unevaluated(&mut self, value: &mut StaticValue) {
+        for (path, unevaluated) in eval::take_unevaluated_segments(value) {
+            self.skipped.push((path.join("."), unevaluated.clause));
+            self.skipped_at.push(path);
+        }
     }
 }
 
@@ -2112,6 +2126,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     dropped_configs: Vec::new(),
                     skipped_sources: Vec::new(),
                     block_keys: Vec::new(),
+                    skipped_at: Vec::new(),
                 };
                 let key = &stage.arg_span;
                 if let Some(obj) = object_index.get(key) {
@@ -2227,14 +2242,14 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             }
                             for mut skip in skipped {
                                 if props {
-                                    match skip.parent.as_deref() {
-                                        None => facts
+                                    match skip.parent.as_slice() {
+                                        [] => facts
                                             .dropped_configs
                                             .push((skip.key.clone(), skip.reason.clone())),
-                                        Some(prop) if skip.key == "transform" && !prop.contains('.') => {
+                                        [prop] if skip.key == "transform" => {
                                             let transform = object_index
                                                 .get(key)
-                                                .and_then(|obj| eval::transform_value_at(obj, Some(prop)));
+                                                .and_then(|obj| eval::transform_value_at(obj, std::slice::from_ref(prop)));
                                             // An explicitly absent transform is no skip and no loss.
                                             if transform.is_some_and(|expr| eval::is_absent_value(expr, undefined_bound)) {
                                                 continue;
@@ -2275,7 +2290,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                     facts.dropped_configs.extend(lost.configs);
                                     facts.skipped.extend(lost.skipped);
                                 } else {
-                                    facts.skipped.extend(eval::take_unevaluated(&mut value));
+                                    facts.record_unevaluated(&mut value);
                                 }
                                 facts.value = Some(eval::plain(&value));
                             }

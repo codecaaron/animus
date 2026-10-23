@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 
 use crate::chain_merge::{
-    authors_entry, authors_key, authors_variant_entry, authors_variant_key, effective_configs,
+    authors_key_at, authors_variant_entry, authors_variant_key, effective_configs,
     inherit_custom_configs, inherit_stages, topological_sort, InheritedConfigs, ProvenanceNode,
     TopoResult,
 };
@@ -9342,8 +9342,6 @@ fn run_with_system_floor(
         dropped_keys: None,
         ..resolve_ctx
     };
-    // Resolves for the resolved-CSS checks alone, reporting nothing else.
-    let checks_ctx = ResolveContext { transform_failures: None, token_misses: None, dropped_keys: None, ..resolve_ctx };
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
     let mut unresolvable_extensions: FxHashSet<String> = FxHashSet::default();
@@ -9586,14 +9584,28 @@ fn run_with_system_floor(
             .get(component_id)
             .and_then(|parent_id| inherited_configs.get(parent_id))
             .unwrap_or(&no_configs);
-        // Base and state declarations merged in from the parent were reported
-        // at the parent's declaration; only this chain's own remain.
         let (merged_chain, inherits_styles) = inherit_stages(chain, parent_configs);
+        // What a parent declares was reported at the parent. An extension that
+        // merged in its parent's styles is reported as resolved without them
+        // (its inherited variants still merged), and the merged resolution,
+        // which ships, records only where two keys meet on one property.
+        let merged_shared = crate::theme::DroppedStyleKeySink::default();
+        let merged_ctx =
+            ResolveContext { transform_failures: None, token_misses: None, dropped_keys: Some(&merged_shared), ..resolve_ctx };
+        let own_css = if inherits_styles {
+            let variants_only = InheritedConfigs { variants: parent_configs.variants.clone(), ..Default::default() };
+            let (own_chain, _) = inherit_stages(chain, &variants_only);
+            process_chain_facts(own_chain.as_ref().unwrap_or(chain), &resolve_ctx, &inputs.group_registry)
+                .ok()
+                .map(|out| out.component_css)
+        } else {
+            None
+        };
         // A component's own declaration props bind under its name scope; an
         // inherited one keeps the scope of the component that declared it.
         let result = process_chain_facts(
             merged_chain.as_ref().unwrap_or(chain),
-            &resolve_ctx,
+            if inherits_styles { &merged_ctx } else { &resolve_ctx },
             &inputs.group_registry,
         )
         .and_then(|mut out| {
@@ -9605,9 +9617,16 @@ fn run_with_system_floor(
             Ok(out)
         });
         if inherits_styles {
-            transform_failures
-                .borrow_mut()
-                .retain(|failure| failure.variant_origin.is_some() || authors_key(chain, &failure.prop));
+            // Of two keys on one property, the one without effect is the
+            // extension's concern where the extension wrote it.
+            let own = dropped_keys.borrow().clone();
+            let merged_in = merged_shared.into_inner().into_iter().filter(|dropped| match &dropped.dropped {
+                crate::theme::DroppedStyleKey::SharedProperty { overridden, .. } => {
+                    dropped.variant_origin.is_none() && authors_key_at(chain, &dropped.path, overridden) && !own.contains(dropped)
+                }
+                _ => false,
+            });
+            dropped_keys.borrow_mut().extend(merged_in);
         }
         // Drained before the match so failures recorded before a later bail
         // still report; topo order keeps emission deterministic.
@@ -9623,15 +9642,18 @@ fn run_with_system_floor(
             // A parent option merged into this chain was reported at the
             // parent's declaration; only this chain's own declarations remain.
             token_misses.borrow_mut().retain_mut(|miss| {
-                let (prop, origin) = (&miss.prop, &miss.variant_origin);
-                if origin.is_none() && !inherits_styles {
+                let Some((axis, option)) = &miss.variant_origin else {
                     return true;
-                }
-                miss.rejected.retain(|(breakpoint, entry)| match origin {
-                    Some((axis, option)) => {
-                        authors_variant_entry(chain, axis, option.as_deref(), prop, breakpoint.as_deref(), entry)
-                    }
-                    None => authors_entry(chain, prop, breakpoint.as_deref(), entry),
+                };
+                miss.rejected.retain(|(breakpoint, entry)| {
+                    authors_variant_entry(
+                        chain,
+                        axis,
+                        option.as_deref(),
+                        &miss.prop,
+                        breakpoint.as_deref(),
+                        entry,
+                    )
                 });
                 !miss.rejected.is_empty()
             });
@@ -9648,15 +9670,10 @@ fn run_with_system_floor(
         if merged_chain.is_some() {
             // A parent option's dropped key was reported at the parent's
             // declaration, naming this chain among its inheritors.
-            dropped_keys.borrow_mut().retain(|dropped| match &dropped.variant_origin {
-                Some((axis, option)) => authors_variant_key(chain, axis, option.as_deref(), dropped.dropped.key()),
-                None if !inherits_styles => true,
-                // Of two keys on one property, the one without effect is the
-                // child's concern only when the child wrote it.
-                None => match &dropped.dropped {
-                    crate::theme::DroppedStyleKey::SharedProperty { overridden, .. } => authors_key(chain, overridden),
-                    other => authors_key(chain, other.key()),
-                },
+            dropped_keys.borrow_mut().retain(|dropped| {
+                dropped.variant_origin.as_ref().is_none_or(|(axis, option)| {
+                    authors_variant_key(chain, axis, option.as_deref(), dropped.dropped.key())
+                })
             });
         }
         let inheritors: Vec<&str> = if dropped_keys.borrow().iter().any(|d| d.variant_origin.is_some()) {
@@ -9799,18 +9816,7 @@ fn run_with_system_floor(
                     }
                 }
 
-                // The resolved-CSS checks report what this chain declares: an
-                // extension that merged in its parent's styles is checked as
-                // resolved without them, which its parent's checks covered.
-                let own_css = if inherits_styles {
-                    let variants_only = InheritedConfigs { variants: parent_configs.variants.clone(), ..Default::default() };
-                    let (own_chain, _) = inherit_stages(chain, &variants_only);
-                    process_chain_facts(own_chain.as_ref().unwrap_or(chain), &checks_ctx, &inputs.group_registry)
-                        .ok()
-                        .map(|out| out.component_css)
-                } else {
-                    None
-                };
+                // The resolved-CSS checks report what this chain declares (own_css).
                 if is_external_file(file_path, &inputs.external_dirs) {
                     record_external_token_candidates(
                         &CandidateWalk {
@@ -16509,7 +16515,7 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
     }
 
     /// Each rule naming `name`'s class, under the at-rules that hold it, with
-    /// the class written `.C`, sorted.
+    /// the class written `.C`, in emitted order.
     fn rules_of(css: &str, name: &str) -> Vec<String> {
         const CLASS_HASH_LEN: usize = 8;
         let class = format!(".animus-{name}-");
@@ -16537,6 +16543,10 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
                 declarations.push(line.to_string());
             }
         }
+        rules
+    }
+
+    fn sorted(mut rules: Vec<String>) -> Vec<String> {
         rules.sort();
         rules
     }
@@ -16544,8 +16554,9 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
     /// Contract: an extension's partial redeclaration keeps every parent
     /// declaration it doesn't override. Its styles, states and variants
     /// merge over its parent's before resolution, as the runtime builder's
-    /// `deepMerge` holds them, so the extension's rules are those of one
-    /// component declared with the merged config.
+    /// `deepMerge` holds them, so the extension's rules, as a set, are those
+    /// of one component declared with the merged config; a value extraction
+    /// cannot read replaces the parent's as `deepMerge` replaces it.
     #[test]
     fn an_extensions_partial_redeclaration_keeps_every_parent_declaration_it_does_not_override() {
         // (parent, the extension's stages, the merged config written out)
@@ -16602,48 +16613,90 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
                 ".styles({ margin: '8px' })",
                 "ds.styles({ margin: '8px', marginTop: '4px' })",
             ),
+            // A value the walk cannot read, a whole group of one, and
+            // `undefined` replace the parent's value, which ships nowhere.
+            (
+                "ds.styles({ color: 'red', '&:hover': { color: 'red', opacity: 0.5 } })",
+                ".styles({ color: live, '&:hover': { color: live } })",
+                "ds.styles({ '&:hover': { opacity: 0.5 } })",
+            ),
+            (
+                "ds.styles({ display: 'block', '&:hover': { color: 'red' } })",
+                ".styles({ '&:hover': liveHover })",
+                "ds.styles({ display: 'block' })",
+            ),
+            (
+                "ds.styles({ '&:hover': { color: 'red', opacity: 0.5 } })",
+                ".styles({ '&:hover': { color: undefined } })",
+                "ds.styles({ '&:hover': { opacity: 0.5 } })",
+            ),
+            (
+                "ds.styles({ display: 'block' }).states({ busy: { color: 'red', opacity: 0.5 } })",
+                ".states({ busy: { color: live } })",
+                "ds.styles({ display: 'block' }).states({ busy: { opacity: 0.5 } })",
+            ),
         ];
+        let vals = ("vals.tsx", "export let live = 'pink';\nexport let liveHover = { color: 'pink' };\n");
         for (parent, child, merged) in cases {
             let source = format!(
-                "export const Parent = {parent}.asElement('div');\n\
+                "import {{ live, liveHover }} from './vals';\n\
+                 export const Parent = {parent}.asElement('div');\n\
                  export const Child = Parent.extend(){child}.asElement('div');\n\
                  export const Merged = {merged}.asElement('div');\n\
                  export const App = () => <><Child busy idle fresh size=\"sm\" /><Child size=\"lg\" />\
                  <Merged busy idle fresh size=\"sm\" /><Merged size=\"lg\" /><Parent /></>;\n"
             );
-            let out = analyze(&[("app.tsx", &source)], &test_inputs());
+            let out = analyze(&[vals, ("app.tsx", &source)], &test_inputs());
             let rules = rules_of(&out.css, "Child");
             assert!(!rules.is_empty(), "{child}");
-            assert_eq!(rules, rules_of(&out.css, "Merged"), "{child}\n{}", out.css);
-            // What the parent declares was reported at the parent.
-            let child_diagnostics: Vec<_> = out.diagnostics.iter().filter(|d| d.component == "Child").collect();
+            assert_eq!(sorted(rules), sorted(rules_of(&out.css, "Merged")), "{child}\n{}", out.css);
+            // What the parent declares was reported at the parent; the
+            // extension reports only the values it cannot read.
+            let child_diagnostics: Vec<_> = out
+                .diagnostics
+                .iter()
+                .filter(|d| d.component == "Child" && d.code.as_deref() != Some(SKIPPED_VALUE))
+                .collect();
             assert!(child_diagnostics.is_empty(), "{child}: {child_diagnostics:?}");
         }
 
         // An alias the extension writes still loses to the parent's raw CSS
-        // property, as in one config, and the extension hears of it.
-        let source = "export const Parent = ds.styles({ padding: '1px' }).asElement('div');\n\
-                      export const Child = Parent.extend().styles({ p: 8 }).asElement('div');\n\
-                      export const Merged = ds.styles({ padding: '1px', p: 8 }).asElement('div');\n\
-                      export const App = () => <><Child /><Merged /></>;\n";
-        let out = analyze(&[("app.tsx", source)], &test_inputs());
-        assert_eq!(rules_of(&out.css, "Child"), rules_of(&out.css, "Merged"));
-        let shared = |component: &str| {
-            out.diagnostics
-                .iter()
-                .filter(|d| d.component == component && d.code.as_deref() == Some(crate::theme::KEYS_SHARE_PROPERTY))
-                .count()
-        };
-        assert_eq!((shared("Child"), shared("Merged")), (1, 1));
+        // property, as in one config, and the extension hears of it, at the
+        // top level, in a selector and in a state.
+        for (parent, child, merged) in [
+            ("styles({ padding: '1px' })", "styles({ p: 8 })", "styles({ padding: '1px', p: 8 })"),
+            (
+                "styles({ '&:hover': { padding: '1px' } })",
+                "styles({ '&:hover': { p: 8 } })",
+                "styles({ '&:hover': { padding: '1px', p: 8 } })",
+            ),
+            ("states({ busy: { padding: '1px' } })", "states({ busy: { p: 8 } })", "states({ busy: { padding: '1px', p: 8 } })"),
+        ] {
+            let source = format!(
+                "export const Parent = ds.{parent}.asElement('div');\n\
+                 export const Child = Parent.extend().{child}.asElement('div');\n\
+                 export const Merged = ds.{merged}.asElement('div');\n\
+                 export const App = () => <><Child busy /><Merged busy /></>;\n"
+            );
+            let out = analyze(&[("app.tsx", &source)], &test_inputs());
+            assert_eq!(sorted(rules_of(&out.css, "Child")), sorted(rules_of(&out.css, "Merged")), "{child}");
+            let shared = |component: &str| {
+                out.diagnostics
+                    .iter()
+                    .filter(|d| d.component == component && d.code.as_deref() == Some(crate::theme::KEYS_SHARE_PROPERTY))
+                    .count()
+            };
+            assert_eq!((shared("Child"), shared("Merged")), (1, 1), "{child}");
+        }
 
         // What an extension merges in was reported at the parent; what it
-        // writes itself is reported at the extension.
-        let mut inputs = battle_transform_inputs("(v) => { throw new Error('kaboom') }");
+        // writes itself is reported at the extension, where it wrote it.
+        let mut inputs = battle_transform_inputs("(v) => { if (v === 3) throw new Error('kaboom'); return `${v}px`; }");
         inputs.config.get_mut("p").unwrap().strict = Some(true);
-        let reported = |own: &str| {
+        let reported = |parent: &str, own: &str| {
             let source = format!(
-                "export const Parent = ds.styles({{ '&:hover': {{ color: 'red', p: 999, w: 3, span: {{ color: 'blue' }}, outlineColor: '{{colors.missing}}' }} }}).asElement('div');\n\
-                 export const Child = Parent.extend().styles({{ '&:hover': {{ {own} }} }}).asElement('div');\n\
+                "export const Parent = ds.styles({parent}).asElement('div');\n\
+                 export const Child = Parent.extend().styles({own}).asElement('div');\n\
                  export const App = () => <><Parent /><Child /></>;\n"
             );
             let out = analyze(&[("app.tsx", &source)], &inputs);
@@ -16655,11 +16708,40 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             };
             (codes("Parent"), codes("Child"))
         };
-        let (parent, child) = reported("opacity: 1");
-        assert_eq!(parent.len(), 4, "{parent:?}");
+        let parent = "{ '&:hover': { color: 'red', p: 999, w: 3, span: { color: 'blue' }, outlineColor: '{colors.missing}' } }";
+        let (inherited, child) = reported(parent, "{ '&:hover': { opacity: 1 } }");
+        assert_eq!(inherited.len(), 4, "{inherited:?}");
         assert!(child.is_empty(), "{child:?}");
-        let (_, child) = reported("p: 777, w: 4");
+        let (_, child) = reported(parent, "{ '&:hover': { p: 777, w: 3 } }");
         assert_eq!(child, [STRICT_TOKEN_MISS.to_string(), TRANSFORM_THREW.to_string()]);
+        // The same key, or the same value, written elsewhere is not the
+        // parent's declaration.
+        let (_, child) = reported("{ '&:hover': { w: 3 } }", "{ '&:focus': { w: 4 } }");
+        assert!(child.is_empty(), "{child:?}");
+        let (inherited, child) = reported("{ padding: '1px', p: 8 }", "{ '&:hover': { p: 8 } }");
+        assert_eq!((inherited, child), (vec![crate::theme::KEYS_SHARE_PROPERTY.to_string()], vec![]));
+        let (_, child) = reported("{ '&:hover': { p: 999 } }", "{ '&:focus': { p: 999 } }");
+        assert_eq!(child, [STRICT_TOKEN_MISS.to_string()]);
+
+        // Not the merged config's order: a state or variant the extension
+        // redeclares follows the ones it inherits unchanged, where `deepMerge`
+        // keeps its place. The order is the owner's to choose; pinned here
+        // so a change shows.
+        let source = "export const Parent = ds.styles({ display: 'block' })\n  \
+                      .variant({ prop: 'tone', variants: { x: { color: 'red' } } })\n  \
+                      .variant({ prop: 'size', variants: { sm: { color: 'blue' } } })\n  \
+                      .states({ a: { color: 'red' }, b: { color: 'blue' } })\n  .asElement('div');\n\
+                      export const Child = Parent.extend()\n  \
+                      .variant({ prop: 'tone', variants: { x: { color: 'green' } } })\n  \
+                      .states({ a: { color: 'green' } })\n  .asElement('div');\n\
+                      export const App = () => <Child tone=\"x\" size=\"sm\" a b />;\n";
+        let out = analyze(&[("app.tsx", source)], &test_inputs());
+        let selectors: Vec<String> = rules_of(&out.css, "Child")
+            .iter()
+            .filter_map(|rule| rule.split(" .C").nth(1)?.split(' ').next().map(str::to_string))
+            .filter(|selector| !selector.is_empty())
+            .collect();
+        assert_eq!(selectors, ["--size-sm", "--tone-x", "--b", "--a"], "{}", out.css);
 
         // Each level merges over everything above it; a parent in another
         // module keeps its own module's values and the callbacks it delivers.
