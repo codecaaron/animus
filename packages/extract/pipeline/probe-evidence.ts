@@ -193,7 +193,8 @@ export function gatherProbeEvidence(
             rootDir,
             analysed,
             readings.expander,
-            readings.isAsset
+            readings.isAsset,
+            readings.adapted
           );
     if (readings.skipped !== undefined) {
       // A load the host lists no exact expansion of may load any file.

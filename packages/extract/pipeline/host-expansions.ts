@@ -152,7 +152,9 @@ export interface HostExpansion {
 /**
  * The host's expansion of each listed load the expander reproduces, with
  * each file read as the analysis and the host read it: a module the
- * analysis holds, loaded as code without a query; a file the host loads as
+ * analysis holds, loaded as code without a query; an adapted original
+ * (`.mdx`, `.svelte`) loaded without one, as the analysis children it
+ * holds (`adapted`, as `hostCandidate` reads one); a file the host loads as
  * an opaque value (spec §2.2 A8); otherwise a file the analysis does not
  * read. A query can select other code than the module (a plugin's
  * transform), so a queried file that is not opaque is never the analysed
@@ -163,7 +165,8 @@ export function hostExpansions(
   rootDir: string,
   analysed: ReadonlySet<string>,
   expander: HostLoadExpander,
-  isAsset: ((file: string, query: string) => boolean) | undefined
+  isAsset: ((file: string, query: string) => boolean) | undefined,
+  adapted?: ReadonlyMap<string, readonly string[]>
 ): HostExpansion[] {
   const expansions: HostExpansion[] = [];
   // One gather's real paths: its loads glob the same directories, and
@@ -174,6 +177,16 @@ export function hostExpansions(
     if (expanded === undefined) continue;
     const files = new Map<string, HostExpansion['files'][number]>();
     for (const { path, query } of expanded) {
+      const children =
+        query === ''
+          ? (adapted?.get(path) ?? []).filter((child) => analysed.has(child))
+          : [];
+      if (children.length > 0) {
+        for (const child of children) {
+          files.set(child, { path: child, status: 'analysed' });
+        }
+        continue;
+      }
       const opaque = isAsset?.(join(rootDir, path), query) ?? false;
       const status =
         query === '' && analysed.has(path)

@@ -58,6 +58,41 @@ describe('hostExpansions', () => {
       { path: 'src/p.ts?raw', status: 'opaque' },
     ]);
   });
+
+  // Contract: an adapted original (`.mdx`, `.svelte`) a load expands to
+  // reads as the analysis children it holds, as a probe base does
+  // (`hostCandidate`): one with none analysed, or loaded with a query, is
+  // not the analysed module.
+  test('an adapted original reads as its analysed children', () => {
+    const load: ListedLoad = {
+      importer: 'src/docs.ts',
+      start: 0,
+      kind: 'glob',
+      args: null,
+    };
+    const [expansion] = hostExpansions(
+      [load],
+      '/root',
+      new Set(['src/a.mdx.tsx']),
+      {
+        expand: () => [
+          { path: 'src/a.mdx', query: '' },
+          { path: 'src/b.mdx', query: '' },
+          { path: 'src/a.mdx', query: '?raw' },
+        ],
+      },
+      builtInAssetClassification('noHost').isAsset,
+      new Map([
+        ['src/a.mdx', ['src/a.mdx.tsx']],
+        ['src/b.mdx', ['src/b.mdx.tsx']],
+      ])
+    );
+    expect(expansion?.files).toEqual([
+      { path: 'src/a.mdx.tsx', status: 'analysed' },
+      { path: 'src/b.mdx', status: 'unanalysed' },
+      { path: 'src/a.mdx?raw', status: 'opaque' },
+    ]);
+  });
 });
 
 describe('viteLoadExpander', () => {
