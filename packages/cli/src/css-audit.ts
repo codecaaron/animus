@@ -227,6 +227,10 @@ export interface Unproven {
      *  value the audit cannot read, as `Component's prop`. */
     unreadDefaults: string[];
   } | null;
+  /** Where an origin above names React context, what it rests on
+   *  (`CONTEXT_ASSUMPTION`): no code mutates the value the provider
+   *  supplies, which no module's analysis can prove. */
+  contextAssumption?: string;
   /** The build-wide hold (`CssAuditReport.restructures.pruningHold`) keeps
    *  every option of this component, so no change at a site can remove one
    *  until it closes. */
@@ -1708,6 +1712,7 @@ function keptOptions(
       blocked,
       savingMeans: 'removed-if-proven-unreached',
     };
+    if (namesContext(unproven)) unproven.contextAssumption = CONTEXT_ASSUMPTION;
     const title = `${name(id)}: ${count} ${count === 1 ? 'option' : 'options'} unproven (${listed})`;
     const owners = provenance?.owners[id] ?? [];
     const unseen = owners.filter(
@@ -3167,6 +3172,22 @@ function holdLines(
   ];
 }
 
+/** What a context origin assumes: React treats context values as
+ *  immutable, and code in another module could still mutate one. */
+const CONTEXT_ASSUMPTION =
+  'a context origin holds only if no code mutates the value its provider supplies (React treats context values as immutable)';
+
+/** Whether any origin a finding lists names React context. */
+function namesContext(unproven: Unproven): boolean {
+  return (
+    unproven.context.length > 0 ||
+    unproven.derived.some(({ contexts = [] }) => contexts.length > 0) ||
+    (unproven.matchedCallers?.derived ?? []).some(
+      ({ contexts = [] }) => contexts.length > 0
+    )
+  );
+}
+
 const keptByCount = (sites: number): string =>
   `kept by ${sites} dynamic ${sites === 1 ? 'site' : 'sites'}`;
 
@@ -3220,7 +3241,11 @@ function titleText({ title, unproven }: Restructure | Refusal): string {
     return `${site}${note}`;
   });
   const more = dynamicSites.length - named.length;
-  return `${title}, ${keptByCount(dynamicSites.length)}: ${named.join(', ')}${more > 0 ? `, +${more} more` : ''}`;
+  const assumed =
+    unproven.contextAssumption === undefined
+      ? ''
+      : `; ${unproven.contextAssumption}`;
+  return `${title}, ${keptByCount(dynamicSites.length)}: ${named.join(', ')}${more > 0 ? `, +${more} more` : ''}${assumed}`;
 }
 
 function deliveryLines(delivery: DeliveryReport, components: number): string[] {

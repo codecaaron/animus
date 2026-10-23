@@ -1403,7 +1403,9 @@ async function axesAudit(root: string, attrs: JsonValue[]) {
  *  whose value has no origin says so. A value read from React context
  *  points at what provides it, never at a literal at the site, and names
  *  the default its destructuring gives it; a derived value that also reads
- *  context says the context decides it beside the callers. */
+ *  context says the context decides it beside the callers. A finding that
+ *  names a context origin states what it assumes, once in the text and as
+ *  `contextAssumption` in the JSON; one that names none does not. */
 test("a kept finding names each axis's origin, React context included", async () => {
   const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
   try {
@@ -1453,6 +1455,10 @@ test("a kept finding names each axis's origin, React context included", async ()
     expect(segment.suggestion).toContain(
       "what Wrap's callers pass decides it, and what provides SegmentContext decides it wherever the value does not take the prop (where a caller leaves it out, for one), so a change belongs at those callers and where SegmentContext is provided"
     );
+    const assumption =
+      'a context origin holds only if no code mutates the value its provider supplies (React treats context values as immutable)';
+    expect(segment.contextAssumption).toBe(assumption);
+    expect(segment.text.split(assumption)).toHaveLength(2);
 
     // DialogContentStyle's shape: two derived axes at one site, both kept.
     const dialog = await axesAudit(root, [
@@ -1468,6 +1474,8 @@ test("a kept finding names each axis's origin, React context included", async ()
       }),
     ]);
     expect(dialog.derived).toHaveLength(2);
+    expect(dialog.contextAssumption).toBeUndefined();
+    expect(dialog.text).not.toContain('a context origin holds');
     expect(dialog.text).toContain(
       "(size: derived from Wrap's size through ??; tone: derived from Wrap's corners through useLayerCorners)"
     );

@@ -2867,10 +2867,12 @@ mod tests {
     /// member written or called, a value stored, spread, copied or
     /// returned, all leave it naming nothing, and a root chain passed to a
     /// call or to a child names no origin for the reads below it, wherever
-    /// the call sits.
-    /// A context is named only by a module-scope `const` or an import, and
-    /// an outermost call counts only of a function a plain module-scope
-    /// name holds. A literal destructuring default of a context member is
+    /// the call sits. Every root of one context answers for all: a second
+    /// `useContext` of it, or a module hook that reads it, written or
+    /// handed on drops each. A context is named only where it is imported,
+    /// or a module-scope `const` React's `createContext` gives a literal
+    /// default no other name holds, and an outermost call counts only of a
+    /// function a plain module-scope name holds. A literal destructuring default of a context member is
     /// carried as it is read; any other default is local code.
     #[test]
     fn a_value_local_code_also_decides_names_no_origin() {
@@ -2930,6 +2932,21 @@ mod tests {
             ("init-prop-root", "const done = Object.assign(opts, { size: 'lg' }); return <Box size={opts.size} />;"),
             // A bare prop whose members are written.
             ("prop-bare-written", "size.md = 'lg'; return <Box size={size} />;"),
+            // Another root of the same context, written or handed to a child.
+            ("second-root-written", "const seg = useContext(Seg); const w = useContext(Seg); w.size = 'lg'; return <Box size={seg.size} />;"),
+            ("second-root-handed", "const seg = useContext(Seg); const w = useContext(Seg); return <><Box size={seg.size} /><Writer ctx={w} /></>;"),
+        ];
+        // A module hook that writes the context, and a context whose default
+        // another name holds and the component writes.
+        let modules = [
+            (
+                "module-hook",
+                "import { useContext } from 'react';\nimport { Seg } from './seg';\nfunction useSegWriter() { const s = useContext(Seg); s.size = 'lg'; }\nexport function C() { useSegWriter(); const seg = useContext(Seg); return <Box size={seg.size} />; }\n",
+            ),
+            (
+                "default-written",
+                "import { createContext, useContext } from 'react';\nconst fallback = { size: 'sm' };\nconst Ctx = createContext(fallback);\nexport function C() { const seg = useContext(Ctx); fallback.size = 'lg'; return <Box size={seg.size} />; }\n",
+            ),
         ];
         // The props object is a root as a destructured prop is.
         let props_object = [
@@ -2948,6 +2965,7 @@ mod tests {
                     ),
                 })
             })
+            .chain(modules.iter().map(|(name, source)| serde_json::json!({ "path": format!("{name}.tsx"), "source": source })))
             .chain(props_object.iter().map(|(name, body)| {
                 serde_json::json!({ "path": format!("{name}.tsx"), "source": format!("export function C(props) {{ {body} }}\n") })
             }))
@@ -2967,7 +2985,7 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_str(&engine.analyze_full(serde_json::Value::Array(files).to_string(), None).unwrap()).unwrap();
         let attr = |file: &str| manifest["fileFacts"][file]["proven"][0]["element"]["attrs"][0].clone();
-        for (name, _) in cases.iter().chain(&props_object) {
+        for (name, _) in cases.iter().chain(&modules).chain(&props_object) {
             let attr = attr(&format!("{name}.tsx"));
             assert_eq!(attr["name"], "size", "{name}: {attr}");
             for origin in ["context", "derived", "forwarded"] {
