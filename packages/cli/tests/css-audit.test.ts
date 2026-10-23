@@ -1310,6 +1310,33 @@ test("an inline object's literal members are read beside a function", async () =
     const closed = await passing({ readable: { tone: 'a' } });
     expect(closed.matchedCallers?.unexplained).toBe(false);
     expect(closed.reachedByCallers).toEqual([{ axis: 'size', options: [] }]);
+
+    // A proven object whose `__proto__` may supply the key reads as unread,
+    // never as leaving it out.
+    const proto = await forwardAudit(
+      root,
+      site,
+      {
+        'src/app.tsx': [
+          {
+            element: {
+              tag: { ident: 'Wrap' },
+              attrs: [
+                {
+                  name: 'buttonProps',
+                  // An own key, as the manifest's JSON holds it (a literal
+                  // `__proto__:` here would set this object's prototype).
+                  values: [JSON.parse('{"__proto__":{"size":"lg"}}')],
+                  proven: true,
+                },
+              ],
+            },
+          },
+        ],
+      },
+      { tag_declarations: { 'src/app.tsx': { Wrap: 'src/wrap.tsx::Wrap' } } }
+    );
+    expect(proto.matchedCallers?.unexplained).toBe(true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

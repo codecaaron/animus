@@ -2762,8 +2762,10 @@ mod tests {
     /// Contract: an inline object literal that is no static value as a
     /// whole lists its members, each read on its own: a literal beside a
     /// function, getter or shorthand is readable, they are not, `undefined`
-    /// is left out, and a spread or computed key opens the object, listing
-    /// only what is written after the last one. A static object lists none.
+    /// is left out, a spread or computed key opens the object, listing only
+    /// what is written after the last one, and `__proto__: value` opens it
+    /// too, since the prototype may supply any key. A static object lists
+    /// none.
     #[test]
     fn an_inline_objects_members_are_read_one_by_one() {
         let mut engine = ExtractEngine::new(None).unwrap();
@@ -2771,7 +2773,11 @@ mod tests {
                       export const B = ({ rest }) => <Box p={{ size: 'lg', ...rest, tone: 'a' }} />;\n\
                       export const C = ({ k }) => <Box p={{ size: 'lg', [k]: 1 }} />;\n\
                       export const D = ({ size }) => <Box p={{ size, tone: undefined, get on() { return 1; }, mode: 'x' }} />;\n\
-                      export const E = () => <Box p={{ size: 'small' }} />;\n";
+                      export const E = () => <Box p={{ size: 'small' }} />;\n\
+                      export const F = ({ base }) => <Box p={{ size: 'lg', __proto__: base, onClick: () => 1 }} />;\n\
+                      export const G = () => <Box p={{ '__proto__': { size: 'lg' }, onClick: () => 1 }} />;\n\
+                      export const H = () => <Box p={{ ['__proto__']: { size: 'lg' }, tone: 'a', onClick: () => 1 }} />;\n\
+                      export const I = ({ __proto__ }) => <Box p={{ __proto__, onClick: () => 1 }} />;\n";
         let manifest: serde_json::Value = serde_json::from_str(
             &engine.analyze_full(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string(), None).unwrap(),
         )
@@ -2785,6 +2791,19 @@ mod tests {
         assert_eq!(members(2), serde_json::json!({ "readable": {}, "open": true }));
         assert_eq!(members(3), serde_json::json!({ "readable": { "mode": "x" }, "unreadable": ["size", "on"] }));
         assert_eq!(members(4), serde_json::Value::Null);
+        // `__proto__: value` sets the prototype, which may supply any key the
+        // object does not write; a computed one opens it as any computed key
+        // does, and a shorthand one is an own key.
+        assert_eq!(
+            members(5),
+            serde_json::json!({ "readable": { "size": "lg" }, "unreadable": ["onClick"], "open": true })
+        );
+        assert_eq!(members(6), serde_json::json!({ "readable": {}, "unreadable": ["onClick"], "open": true }));
+        assert_eq!(
+            members(7),
+            serde_json::json!({ "readable": { "tone": "a" }, "unreadable": ["onClick"], "open": true })
+        );
+        assert_eq!(members(8), serde_json::json!({ "readable": {}, "unreadable": ["__proto__", "onClick"] }));
     }
 
     #[test]

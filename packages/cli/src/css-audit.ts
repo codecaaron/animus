@@ -1884,7 +1884,8 @@ function forwardedValues(
 }
 
 /** The literal `value` holds at `path`, `undefined` where it holds none
- *  there, or `null` where what it holds is no literal. */
+ *  there, or `null` where what it holds is no literal, or where an object
+ *  on the way that lacks the key holds a `__proto__`, which may supply it. */
 function memberAt(
   value: JsonValue,
   path: readonly string[]
@@ -1892,7 +1893,13 @@ function memberAt(
   let current: JsonValue | undefined = value;
   for (const key of path) {
     if (!isRecord(current)) return undefined;
-    current = ownEntry(current, key);
+    const record: JsonRecord = current;
+    current = ownEntry(record, key);
+    // An object literal's `__proto__: value` sets its prototype, which may
+    // supply a key it does not write.
+    if (current === undefined && ownEntry(record, '__proto__') !== undefined) {
+      return null;
+    }
   }
   if (current === undefined) return undefined;
   return isLiteral(current) ? current : null;

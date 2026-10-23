@@ -95,8 +95,10 @@ pub struct AttrFact {
 /// The members an inline object literal writes, each read on its own: the
 /// keys whose values are literals, and the keys it writes with a value the
 /// walk cannot read (a function, a getter, a shorthand). `open` where a
-/// spread or a computed key may write any key; neither is read past, so
-/// only the keys written after the last one are listed.
+/// spread or a computed key may write any key, and neither is read past, so
+/// only the keys written after the last one are listed; or where a
+/// `__proto__: value` member sets the prototype, which may supply any key
+/// the object does not write itself.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ObjectMembers {
     pub readable: serde_json::Map<String, Value>,
@@ -120,6 +122,12 @@ fn object_members(object: &oxc::ast::ast::ObjectExpression<'_>, origins: Option<
             members = ObjectMembers { open: true, ..ObjectMembers::default() };
             continue;
         };
+        // `__proto__: value` sets the prototype rather than writing a key;
+        // a computed, shorthand or method one is an own key.
+        if key == "__proto__" && property.kind == PropertyKind::Init && !property.shorthand && !property.method {
+            members.open = true;
+            continue;
+        }
         members.readable.remove(&key);
         members.unreadable.retain(|unread| *unread != key);
         let value = crate::chain_walk::unwrap_type_assertions(&property.value);
