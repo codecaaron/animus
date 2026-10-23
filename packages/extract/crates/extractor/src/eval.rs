@@ -640,7 +640,10 @@ pub fn parse_variant_arg(
                     if let Expression::ObjectExpression(obj) = &p.value {
                         let (val, skips, _captures) =
                             eval_object_expr_with_statics(obj, static_values)?;
-                        all_skips.extend(skips);
+                        all_skips.extend(skips.into_iter().map(|mut skip| {
+                            skip.parent.insert(0, "base".to_string());
+                            skip
+                        }));
                         base = Some(val);
                     } else {
                         // A value that evaluates is no object; one that does
@@ -666,7 +669,10 @@ pub fn parse_variant_arg(
                                         &mut skips,
                                         static_values,
                                     )?;
-                                    all_skips.extend(skips);
+                                    all_skips.extend(skips.into_iter().map(|mut skip| {
+                                        skip.parent.splice(0..0, ["variants".to_string(), vkey.clone()]);
+                                        skip
+                                    }));
                                     variants.insert(&vkey, vstyles);
                                 }
                                 ObjectPropertyKind::SpreadProperty(spread) => {

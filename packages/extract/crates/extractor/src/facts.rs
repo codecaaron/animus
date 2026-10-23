@@ -2143,9 +2143,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             ("base".to_string(), cfg.base.unwrap_or(StaticValue::Null)),
                             ("variants".to_string(), cfg.variants),
                         ]);
-                        let lost = eval::take_unevaluated(&mut value);
+                        facts.record_unevaluated(&mut value);
                         facts.value = Some(eval::plain(&value));
-                        facts.skipped.extend(lost);
                     };
                     match object_index.get(key) {
                         Some(obj) => match eval::parse_variant_arg(obj, Some(statics)) {

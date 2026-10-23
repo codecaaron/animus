@@ -16635,6 +16635,16 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
                 ".states({ busy: { color: live } })",
                 "ds.styles({ display: 'block' }).states({ busy: { opacity: 0.5 } })",
             ),
+            (
+                "ds.variant({ prop: 'size', variants: { sm: { color: 'red', opacity: 0.5 } } })",
+                ".variant({ prop: 'size', variants: { sm: { color: live } } })",
+                "ds.variant({ prop: 'size', variants: { sm: { opacity: 0.5 } } })",
+            ),
+            (
+                "ds.variant({ prop: 'size', base: { color: 'red', opacity: 0.5 }, variants: { sm: {} } })",
+                ".variant({ prop: 'size', base: { color: live }, variants: { sm: {} } })",
+                "ds.variant({ prop: 'size', base: { opacity: 0.5 }, variants: { sm: {} } })",
+            ),
         ];
         let vals = ("vals.tsx", "export let live = 'pink';\nexport let liveHover = { color: 'pink' };\n");
         for (parent, child, merged) in cases {

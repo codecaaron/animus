@@ -38,11 +38,15 @@ fn variant_prop(config: &Value) -> &str {
 }
 
 /// Stage facts write an omitted `defaultVariant` or `base` as null; an
-/// omitted key must not replace the inherited value.
-fn merge_variant_config(inherited: &Value, config: &Value) -> Value {
+/// omitted key must not replace the inherited value. A key evaluation could
+/// not read replaces it, as in `authored`.
+fn merge_variant_config(inherited: &Value, stage: &StageFacts, config: &Value) -> Value {
     let mut authored = config.clone();
     if let Value::Object(fields) = &mut authored {
         fields.retain(|_, field| !field.is_null());
+    }
+    for path in &stage.skipped_at {
+        write_absent(&mut authored, path);
     }
     deep_merge(inherited, &authored)
 }
@@ -101,7 +105,7 @@ pub fn inherit_stages(chain: &ChainFacts, inherited: &InheritedConfigs) -> (Opti
                 let Some((_, parent_config)) = inherited.variants.iter().find(|(p, _)| p == prop) else {
                     continue;
                 };
-                merge_variant_config(parent_config, value)
+                merge_variant_config(parent_config, stage, value)
             }
             _ => continue,
         };
@@ -215,7 +219,7 @@ pub fn effective_configs(chain: &ChainFacts, inherited: &InheritedConfigs) -> In
         if stage.method == "variant" {
             let prop = variant_prop(value);
             match configs.variants.iter_mut().find(|(p, _)| p == prop) {
-                Some((_, config)) => *config = merge_variant_config(config, value),
+                Some((_, config)) => *config = merge_variant_config(config, stage, value),
                 None => configs.variants.push((prop.to_string(), value.clone())),
             }
         } else if let Some(slot) = configs.raw_mut(&stage.method) {
