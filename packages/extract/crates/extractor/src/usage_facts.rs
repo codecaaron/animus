@@ -7974,6 +7974,12 @@ const CONTEXT_FUNCTIONS: [&str; 2] = ["useContext", "createContext"];
 /// The hooks that read a context's value: React 19's `use` reads one too.
 const CONTEXT_HOOKS: [&str; 2] = ["useContext", "use"];
 
+/// Whether `name` is a hook's, as React's rules of hooks name one: `use`,
+/// or `use` followed by an uppercase letter or a digit.
+fn hook_named(name: &str) -> bool {
+    name.strip_prefix("use").is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_ascii_uppercase() || c.is_ascii_digit()))
+}
+
 fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentParams {
     use oxc::ast::ast::{BindingIdentifier, BindingPattern, Declaration, ExportDefaultDeclarationKind};
     let mut params = ComponentParams::default();
@@ -8452,12 +8458,21 @@ fn held_bindings(
             matches!(self.hooks.export(expression), Some("useContext" | "use"))
         }
 
-        /// Whether the walk follows what `callee` calls: a function the
-        /// module defines, a method of a value that is no import, parameter
-        /// or `this` (what such a value holds, the walk already tracks: a
-        /// literal, a local, another call's result), a React runtime's
-        /// export, or a builtin global's.
+        /// Whether the walk follows what `callee` calls: any function not
+        /// named as a hook, which React's rules of hooks leave unable to
+        /// read a context; and, of a hook, one the module defines, a method
+        /// of a value that is no import, parameter or `this` (what such a
+        /// value holds, the walk already tracks: a literal, a local, another
+        /// call's result), a React runtime's export, or a builtin global's.
         fn followed(&self, callee: &Expression<'_>) -> bool {
+            let name = match callee.get_inner_expression() {
+                Expression::Identifier(ident) => Some(ident.name.as_str()),
+                Expression::StaticMemberExpression(member) => Some(member.property.name.as_str()),
+                _ => None,
+            };
+            if name.is_some_and(|name| !hook_named(name)) {
+                return true;
+            }
             let (base, path) = match member_base(callee) {
                 Some(found) => found,
                 None => return false,
