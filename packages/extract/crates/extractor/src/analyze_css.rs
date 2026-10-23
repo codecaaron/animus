@@ -1341,7 +1341,7 @@ struct UnreadLoad<'f> {
     unread: Option<&'f str>,
 }
 
-/// Each computed load outside the config-only modules that may load a file
+/// Each computed load outside the config roots that may load a file
 /// the analysis does not read. A load the configuration declares closed
 /// loads only analysed modules, an `import()` the host leaves unbundled
 /// loads none of the app's sources, and a prefix into a package is read as
@@ -1349,9 +1349,9 @@ struct UnreadLoad<'f> {
 fn unread_loads<'f>(files: &'f BTreeMap<String, FileFacts>, inputs: &'f CssInputs) -> Vec<UnreadLoad<'f>> {
     use crate::loads::LoadTarget;
     note_build_chunks(files, inputs);
-    let config_only = config_only(files, inputs);
+    let config_files = config_files(files, inputs);
     let mut unread = Vec::new();
-    for (importer, ff) in files.iter().filter(|(file, _)| !config_only.contains(*file)) {
+    for (importer, ff) in files.iter().filter(|(file, _)| !config_files.contains(*file)) {
         for load in &ff.module_loads {
             match &load.target {
                 LoadTarget::Specifier(_) => continue,
@@ -1421,9 +1421,12 @@ fn analysis_gaps(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs, all: b
     if gaps.len() >= take {
         return gaps;
     }
-    let config_only = config_only(files, inputs);
+    // Only a config root runs solely in its tool: a module it imports may
+    // be an app entry the host loads (`config_only`), whose unread imports
+    // the app runs too.
+    let config_files = config_files(files, inputs);
     match inputs.incomplete_probes.lock() {
-        Ok(probes) => gaps.extend(probes.iter().filter(|probe| !config_only.contains(&probe.importer)).take(take).map(|probe| {
+        Ok(probes) => gaps.extend(probes.iter().filter(|probe| !config_files.contains(&probe.importer)).take(take).map(|probe| {
             SlotOpening::rule("incomplete-probe").in_file(&probe.importer).detail(probe.specifier.as_str())
         })),
         Err(_) => gaps.push(SlotOpening::rule("incomplete-probe")),
@@ -1479,9 +1482,10 @@ pub(crate) fn config_files(files: &BTreeMap<String, FileFacts>, inputs: &CssInpu
 /// The config-only modules: what the config roots (a build configuration
 /// the host declares, or a well-known tool config file in the analysis
 /// root) import, transitively, that no other module can reach. A config
-/// runs in its tool, never in the app, so an unanalysed import of one opens
-/// nothing the app renders. A config file app code imports, and a module a
-/// config imports beside app code, are not config-only.
+/// file app code imports, and a module a config imports beside app code,
+/// are not config-only. One may still be an app entry the host loads, which
+/// no analysed module imports, so only the config roots among them are
+/// known to run solely in their tool (`config_files`).
 pub(crate) fn config_only<'i>(files: &BTreeMap<String, FileFacts>, inputs: &'i CssInputs) -> &'i BTreeSet<String> {
     inputs.config_only.get_or_init(|| {
         let roots: Vec<&String> = files.keys().filter(|file| is_config_root(file, inputs)).collect();
@@ -12293,13 +12297,13 @@ fn run_with_system_floor(
     // is reported once per importer and specifier: a case variant, a skipped
     // source where analysis would otherwise have read a later candidate, and
     // any other opening, as each stops pruning.
-    // An unanalysed import a config-only module makes opens nothing the
-    // app renders.
-    let config_only = config_only(files, inputs);
+    // An unanalysed import a config root makes opens nothing the app
+    // renders; one a module it imports makes may (`analysis_gaps`).
+    let config_files = config_files(files, inputs);
     let incomplete: Vec<IncompleteProbe> = inputs
         .incomplete_probes
         .lock()
-        .map(|probes| probes.iter().filter(|probe| !config_only.contains(&probe.importer)).cloned().collect())
+        .map(|probes| probes.iter().filter(|probe| !config_files.contains(&probe.importer)).cloned().collect())
         .unwrap_or_default();
     // Each import is reported once; one a skipped-source finding names
     // already says pruning stops.
@@ -23813,11 +23817,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// otherwise have been read, and as an unanalysed import otherwise: no
     /// opening stops pruning silently. An asset, or an adapted original,
     /// names no module, as before, and stops nothing.
-    /// Contract: an unanalysed import made only by build or tooling
-    /// configuration (a config the host declares, a well-known tool config
-    /// file in the root, or a module only those import) leaves pruning on.
-    /// A module app code imports, even one named as a config or also
-    /// imported by one, still stops it.
+    /// Contract: an unanalysed import a config root makes (a config the
+    /// host declares, or a well-known tool config file in the root) leaves
+    /// pruning on. A module only a config imports may be an app entry the
+    /// host loads, which no analysed module imports (a prerendering config
+    /// importing `src/main.tsx`), so its unanalysed import stops pruning, as
+    /// does a config root app code imports or may load.
     #[test]
     fn an_unanalysed_import_from_configuration_alone_leaves_pruning_on() {
         let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
@@ -23850,11 +23855,17 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let pruned = run(&[], &[], app);
         let everything = vec!["sm", "md", "lg"];
         assert_ne!(pruned, everything);
-        // A well-known tool config, and a module only a config imports.
+        // A well-known tool config; a module only a config imports may be
+        // the app's entry.
         assert_eq!(run(&[], &[("vitest.config.ts", outside)], app), pruned);
         let via = "import shared from '../../outside';\nexport default shared;\n";
         let vite = "import build from './tools/build';\nexport default build;\n";
-        assert_eq!(run(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], app), pruned);
+        assert_eq!(run(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], app), everything);
+        let entry = "import { App } from './app';\nimport shared from '../../outside';\nexport const prerender = () => [App, shared];\n";
+        let prerendering = "import { prerender } from './src/main';\nexport default { plugins: [prerender] };\n";
+        let mut files = vec![("vite.config.ts", prerendering), ("src/main.tsx", entry)];
+        files.extend([("src/app.tsx", app)]);
+        assert_eq!(run(&[], &files, app), everything);
         // A config at a path the host declares, and the same file undeclared.
         let custom = [("config/build.ts", via)];
         assert_eq!(run(&["config/build.ts"], &custom, app), pruned);
@@ -23863,23 +23874,21 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         // imports, keeps it from being config-only.
         let importing = format!("import theme from './tailwind.config';\n{app}");
         assert_eq!(run(&[], &[("tailwind.config.ts", outside)], &importing), everything);
-        let shared = format!("import build from './tools/build';\n{app}");
-        assert_eq!(run(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], &shared), everything);
         // So does a computed load the app makes: a closed expansion that lists
         // it, or one that may load any module.
-        let globbing = format!("const tools = import.meta.glob('./tools/*.ts', {{ eager: true }});\n{app}");
+        let globbing = format!("const configs = import.meta.glob('./*.config.ts', {{ eager: true }});\n{app}");
         let expansion = HostExpansion {
             importer: "app.tsx".to_string(),
             start: globbing.find("import.meta.glob").expect("a glob") as u32,
             closed: true,
-            files: vec![ExpandedFile { path: "tools/build.ts".to_string(), status: ExpandedStatus::Analysed }],
+            files: vec![ExpandedFile { path: "vite.config.ts".to_string(), status: ExpandedStatus::Analysed }],
         };
-        assert_eq!(run_expanded(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], &globbing, vec![expansion]), everything);
+        assert_eq!(run_expanded(&[], &[("vite.config.ts", outside)], &globbing, vec![expansion]), everything);
         // A closed expansion reaches only what it lists, past the load-set
         // bound too.
         let pages: Vec<String> = (0..=LOAD_SET_LIMIT).map(|page| format!("pages/p{page}.ts")).collect();
         let mut extra: Vec<(&str, &str)> = pages.iter().map(|page| (page.as_str(), "export const page = 1;\n")).collect();
-        extra.extend([("vite.config.ts", vite), ("tools/build.ts", via)]);
+        extra.extend([("vite.config.ts", outside)]);
         let paging = format!("const pages = import.meta.glob('./pages/*.ts');\n{app}");
         let expansion = HostExpansion {
             importer: "app.tsx".to_string(),
@@ -23888,8 +23897,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             files: pages.iter().map(|page| ExpandedFile { path: page.clone(), status: ExpandedStatus::Analysed }).collect(),
         };
         assert_eq!(run_expanded(&[], &extra, &paging, vec![expansion]), pruned);
-        let open = format!("export const load = (name) => import(`./tools/${{name}}.ts`);\n{app}");
-        assert_eq!(run(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], &open), everything);
+        let open = format!("export const load = (name) => import(`./${{name}}.ts`);\n{app}");
+        assert_eq!(run(&[], &[("vite.config.ts", outside)], &open), everything);
     }
 
     #[test]
@@ -23934,6 +23943,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             assert!(kept(&[("src/app.tsx", &app(load))], None, false), "{load}");
             assert!(kept(&[("src/app.tsx", &app(load))], empty(), false), "{load}");
         }
+        // In a module only a config imports, which may be the app's entry.
+        let config = ("vite.config.ts", "import './src/app';\nexport default {};\n");
+        assert!(kept(&[config, ("src/app.tsx", &glob)], None, false));
         // With a closed expansion that lists the unread file.
         let parts = ("src/parts/a.tsx", "export const boot = () => null;\n");
         let unread = [("src/parts/a.tsx", ExpandedStatus::Analysed), ("src/parts/legacy.tsx", ExpandedStatus::Unanalysed)];
