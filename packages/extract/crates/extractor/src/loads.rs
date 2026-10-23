@@ -620,7 +620,13 @@ fn host_args(kind: HostLoadKind, call: &CallExpression<'_>, comments: Vec<String
                     .collect::<Option<Vec<_>>>()?,
                 expression => vec![literal_text(expression)?],
             };
-            let options = optional(argument(1), object_json)?;
+            // Rolldown's glob plugin skips an option written as a template
+            // (a `query` of `?raw` imports no query), which its value would
+            // not show: such options are not read.
+            let options = optional(argument(1), |options| match options.get_inner_expression() {
+                Expression::ObjectExpression(_) => json_of(options, false),
+                _ => None,
+            })?;
             Some(HostArgs::Glob { patterns, options })
         }
     }
@@ -772,6 +778,12 @@ fn object_json(expression: &Expression<'_>) -> Option<serde_json::Value> {
 /// differently (webpack's import attributes read identifiers only), and
 /// disagree on which of a repeated key wins.
 fn static_json(expression: &Expression<'_>) -> Option<serde_json::Value> {
+    json_of(expression, true)
+}
+
+/// `static_json`, reading a template with no substitution as its text only
+/// where `templates`.
+fn json_of(expression: &Expression<'_>, templates: bool) -> Option<serde_json::Value> {
     use serde_json::Value;
     Some(match expression.get_inner_expression() {
         Expression::ObjectExpression(object) => {
@@ -783,18 +795,23 @@ fn static_json(expression: &Expression<'_>) -> Option<serde_json::Value> {
                 let oxc::ast::ast::PropertyKey::StaticIdentifier(key) = &property.key else {
                     return None;
                 };
-                if map.insert(key.name.to_string(), static_json(&property.value)?).is_some() {
+                if map.insert(key.name.to_string(), json_of(&property.value, templates)?).is_some() {
                     return None;
                 }
             }
             Value::Object(map)
         }
         Expression::ArrayExpression(array) => Value::Array(
-            array.elements.iter().map(|element| element.as_expression().and_then(static_json)).collect::<Option<_>>()?,
+            array
+                .elements
+                .iter()
+                .map(|element| element.as_expression().and_then(|element| json_of(element, templates)))
+                .collect::<Option<_>>()?,
         ),
         Expression::BooleanLiteral(literal) => Value::Bool(literal.value),
         Expression::NullLiteral(_) => Value::Null,
         Expression::NumericLiteral(literal) => Value::Number(serde_json::Number::from_f64(literal.value)?),
+        Expression::TemplateLiteral(_) if !templates => return None,
         expression => Value::String(literal_text(expression)?),
     })
 }

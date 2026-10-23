@@ -22435,6 +22435,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "export const o = (n) => import(`./pages/${'group/' + n}.js`);\n",
             "export const p = (n) => import(`./q/${n}.js`, { 'with': { type: 'raw' } });\n",
             "export const q = (n) => import(`./q/${n}.js`, { with: { type: 'raw' }, with: { type: 'code' } });\n",
+            "export const r = import.meta.glob('./h/*.js', { query: { url: true, x: `v` } });\n",
         );
         let allocator = oxc::allocator::Allocator::default();
         let program = oxc::parser::Parser::new(&allocator, loader, oxc::span::SourceType::ts()).parse().program;
@@ -22466,6 +22467,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 { "start": start("import(`./pages/${'"), "kind": "import", "args": null },
                 { "start": start("import(`./q/${n}.js`, { '"), "kind": "import", "args": null },
                 { "start": start("import(`./q/${n}.js`, { with: { type: 'raw' }, with"), "kind": "import", "args": null },
+                // Glob options holding a template, which rolldown's glob
+                // plugin skips, list no arguments.
+                { "start": start("import.meta.glob('./h/*.js', { query"), "kind": "glob", "args": null },
             ])
         );
         let files = [("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("loader.ts", loader)];
