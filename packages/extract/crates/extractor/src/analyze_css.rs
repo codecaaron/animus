@@ -1345,10 +1345,11 @@ struct UnreadLoad<'f> {
 }
 
 /// Each computed load outside the config roots that may load a file
-/// the analysis does not read. A load the configuration declares closed
-/// loads only analysed modules, an `import()` the host leaves unbundled
-/// loads none of the app's sources, and a prefix into a package is read as
-/// a bare import is.
+/// the analysis does not read. The host's closed expansion of a load
+/// decides it. Without one, a load the configuration declares closed loads
+/// only analysed modules, an `import()` the host leaves unbundled loads
+/// none of the app's sources, and a prefix into a package is read as a bare
+/// import is.
 fn unread_loads<'f>(files: &'f BTreeMap<String, FileFacts>, inputs: &'f CssInputs) -> Vec<UnreadLoad<'f>> {
     use crate::loads::LoadTarget;
     note_build_chunks(files, inputs);
@@ -1356,30 +1357,25 @@ fn unread_loads<'f>(files: &'f BTreeMap<String, FileFacts>, inputs: &'f CssInput
     let mut unread = Vec::new();
     for (importer, ff) in files.iter().filter(|(file, _)| !config_files.contains(*file)) {
         for load in &ff.module_loads {
-            match &load.target {
-                LoadTarget::Specifier(_) => continue,
-                // A package's files are the package map's, as a bare import's
-                // are, never probed.
-                LoadTarget::Prefix(prefix)
-                    if !prefix.is_empty()
-                        && !prefix.starts_with(['.', '/'])
-                        && expand_alias(prefix, &inputs.path_aliases).is_none() =>
-                {
-                    continue
-                }
-                LoadTarget::Prefix(prefix) if !prefix.is_empty() => {}
-                LoadTarget::Context { .. } | LoadTarget::Glob(_) => {}
-                LoadTarget::Prefix(_) | LoadTarget::Unknown => {
-                    if load.dynamic_import && inputs.analysis_context.unbundled_computed_imports {
-                        continue;
-                    }
-                }
+            if let LoadTarget::Specifier(_) = load.target {
+                continue;
             }
             let expansion = inputs
                 .probe_evidence
                 .iter()
                 .flat_map(|evidence| &evidence.expansions)
                 .find(|expansion| expansion.importer == *importer && expansion.start == load.start && expansion.closed);
+            let exempt = || match &load.target {
+                // A package's files are the package map's, as a bare import's
+                // are, never probed.
+                LoadTarget::Prefix(prefix) if !prefix.is_empty() => {
+                    !prefix.starts_with(['.', '/']) && expand_alias(prefix, &inputs.path_aliases).is_none()
+                }
+                LoadTarget::Prefix(_) | LoadTarget::Unknown => {
+                    load.dynamic_import && inputs.analysis_context.unbundled_computed_imports
+                }
+                _ => false,
+            };
             match expansion {
                 Some(expansion) => {
                     let read = |expanded: &&ExpandedFile| match expanded.status {
@@ -1391,7 +1387,7 @@ fn unread_loads<'f>(files: &'f BTreeMap<String, FileFacts>, inputs: &'f CssInput
                         unread.push(UnreadLoad { importer, load, unread: Some(expanded.path.as_str()) });
                     }
                 }
-                None if declared_reach(importer, load, files, inputs, usize::MAX).is_some() => {}
+                None if exempt() || declared_reach(importer, load, files, inputs, usize::MAX).is_some() => {}
                 None => unread.push(UnreadLoad { importer, load, unread: None }),
             }
         }
@@ -24074,6 +24070,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert!(!kept(&[("src/app.tsx", &opaque)], None, true));
         let locale = app("export const locale = (lang) => import(`dayjs/locale/${lang}`);");
         assert!(!kept(&[("src/app.tsx", &locale)], None, false));
+        // Unless the host's closed expansion of it lists an unread file (an
+        // alias the analysis was not given).
+        let aliased = app("export const boot = (name) => import(`@parts/${name}`).then((m) => m.boot());");
+        let named = [("src/parts/legacy.tsx", ExpandedStatus::Unanalysed)];
+        assert!(kept(&[("src/app.tsx", &aliased)], Some(expanded(&aliased, "import(", &named)), false));
     }
 
     #[test]
