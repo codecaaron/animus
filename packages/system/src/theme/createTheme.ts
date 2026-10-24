@@ -406,22 +406,25 @@ type FoldedDefault<Key extends string> = Key extends `${infer Parent}._`
 /** The dot paths `varRef` accepts on a built theme, its token paths: each
  *  scale's own (flat) keys, numeric ones included, and, in an emitted scale,
  *  each nested `_` default by its parent's path, which only an emitted
- *  scale's variable map holds. A scale whose name starts with `_`, and a
+ *  scale's variable map holds. A scale is any object but an array, an
+ *  interface-typed one included; a scale whose name starts with `_`, and a
  *  method, is never a token scale. */
 type VarRefPath<Theme> = {
   [
     Scale in Exclude<ThemeScaleKeys<Theme>, `_${string}`>
   ]: Theme[Scale] extends (...args: never[]) => unknown
     ? never
-    : Theme[Scale] extends Record<string, unknown>
-      ? `${Scale}.${
-          | (keyof Theme[Scale] & (string | number))
-          | (Theme extends { readonly __emitted: infer Emitted }
-              ? Scale extends keyof Emitted
-                ? FoldedDefault<keyof Theme[Scale] & string>
-                : never
-              : never)}`
-      : never;
+    : Theme[Scale] extends readonly unknown[]
+      ? never
+      : Theme[Scale] extends object
+        ? `${Scale}.${
+            | (keyof Theme[Scale] & (string | number))
+            | (Theme extends { readonly __emitted: infer Emitted }
+                ? Scale extends keyof Emitted
+                  ? FoldedDefault<keyof Theme[Scale] & string>
+                  : never
+                : never)}`
+        : never;
 }[Exclude<ThemeScaleKeys<Theme>, `_${string}`>];
 
 /** A string type with infinitely many members, `string` or a template
@@ -678,8 +681,42 @@ type ThemeDataOf<Source> = {
   ]: Source[Key];
 };
 
+/** Whether `T` is an object the runtime `merge` walks into: not an array
+ *  or a function. */
+type IsMergedObject<T> = T extends readonly unknown[]
+  ? false
+  : T extends (...args: never[]) => unknown
+    ? false
+    : T extends object
+      ? true
+      : false;
+
+/** One key of inherited theme data, as the runtime `merge` writes it: an
+ *  object over an object keeps both one level down (a built theme's scales
+ *  and breakpoints are flat, so one level is all of them), and anything
+ *  else takes the later value. A base keyed by `string`, such as a fresh
+ *  theme's `breakpoints`, holds no key yet, so the later value replaces it,
+ *  as merging into an empty object does. */
+type MergeThemeKey<Base, Incoming> = string extends keyof Base
+  ? Incoming
+  : IsMergedObject<Base> extends true
+    ? IsMergedObject<Incoming> extends true
+      ? Flatten<MergeRecord<Base, Incoming>>
+      : Incoming
+    : Incoming;
+
+/** Inherited theme data over the base, each key merged as the runtime
+ *  merges it, so every surviving token of each extended theme stays in the
+ *  type: its prop values, token paths, breakpoints and `varRef` paths. */
 type MergeThemeData<Base, Source> = Flatten<
-  MergeRecord<Base, ThemeDataOf<Source>>
+  MergeRecord<
+    Base,
+    {
+      [Key in keyof ThemeDataOf<Source>]: Key extends keyof Base
+        ? MergeThemeKey<Base[Key], ThemeDataOf<Source>[Key]>
+        : ThemeDataOf<Source>[Key];
+    }
+  >
 >;
 
 type EmittedThemeScalesOf<Source> = Source extends {

@@ -2204,3 +2204,24 @@ void varRefBoth.varRef('space.8');
 void varRefBoth.varRef('colors.red');
 // @ts-expect-error — still a misspelled token path
 void varRefBoth.varRef('colors.rde');
+// Contract: every surviving token from each extended theme remains a valid
+// varRef path: successive `extend()` calls merge a shared scale as the
+// runtime does.
+const varRefMerged = createTheme()
+  .extend(createTheme().addColors({ red: '#f00' }).build())
+  .extend(createTheme().addColors({ blue: '#00f' }).build())
+  .build();
+void varRefMerged.varRef('colors.red');
+void varRefMerged.varRef('colors.blue');
+// Contract: declared interface scales and equivalent object-type scales
+// expose the same token paths.
+interface VarRefSpace {
+  sm: string;
+  lg: number;
+}
+declare const varRefSpace: VarRefSpace;
+void createTheme().extend({ space: varRefSpace }).build().varRef('space.sm');
+void createTheme()
+  .addScale({ name: 'space', values: varRefSpace })
+  .build()
+  .varRef('space.sm');
