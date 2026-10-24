@@ -8349,37 +8349,13 @@ fn held_bindings(
         Binding(SymbolId),
         Member(SymbolId),
     }
-    /// The module's `const` aliases, the functions it defines (a
-    /// declaration, or a `const` of a function or arrow) and the bindings
-    /// its parameters bind.
+    /// The module's `const` aliases, and the functions it defines (a
+    /// declaration, or a `const` of a function or arrow).
     struct Aliases<'s> {
         scoping: &'s Scoping,
         kind: VariableDeclarationKind,
         found: FxHashMap<SymbolId, Alias>,
         functions: FxHashSet<SymbolId>,
-        parameters: FxHashSet<SymbolId>,
-    }
-    fn bound(pattern: &BindingPattern<'_>, found: &mut FxHashSet<SymbolId>) {
-        match pattern {
-            BindingPattern::BindingIdentifier(id) => found.extend(id.symbol_id.get()),
-            BindingPattern::ObjectPattern(object) => {
-                for property in &object.properties {
-                    bound(&property.value, found);
-                }
-                if let Some(rest) = &object.rest {
-                    bound(&rest.argument, found);
-                }
-            }
-            BindingPattern::ArrayPattern(array) => {
-                for element in array.elements.iter().flatten() {
-                    bound(element, found);
-                }
-                if let Some(rest) = &array.rest {
-                    bound(&rest.argument, found);
-                }
-            }
-            BindingPattern::AssignmentPattern(assignment) => bound(&assignment.left, found),
-        }
     }
     impl<'a> Visit<'a> for Aliases<'_> {
         fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
@@ -8387,10 +8363,6 @@ fn held_bindings(
                 self.functions.extend(id.symbol_id.get());
             }
             oxc::ast_visit::walk::walk_function(self, function, flags);
-        }
-        fn visit_formal_parameter(&mut self, parameter: &oxc::ast::ast::FormalParameter<'a>) {
-            bound(&parameter.pattern, &mut self.parameters);
-            oxc::ast_visit::walk::walk_formal_parameter(self, parameter);
         }
         fn visit_variable_declaration(&mut self, declaration: &oxc::ast::ast::VariableDeclaration<'a>) {
             let outer = std::mem::replace(&mut self.kind, declaration.kind);
@@ -8435,7 +8407,6 @@ fn held_bindings(
         module: ModuleContexts,
         aliases: FxHashMap<SymbolId, Alias>,
         functions: FxHashSet<SymbolId>,
-        parameters: FxHashSet<SymbolId>,
         /// The keys of the module's own contexts no other code can reach:
         /// unexported, and used only as a hook's argument or a Provider
         /// (`sealed`).
@@ -8527,28 +8498,42 @@ fn held_bindings(
             matches!(self.hooks.export(expression), Some("useContext" | "use"))
         }
 
-        /// Whether the walk follows what `callee` calls: a function the
-        /// module defines, a method of a value that is no import, parameter
-        /// or `this` (what such a value holds, the walk already tracks: a
-        /// literal, a local, another call's result), a React runtime's
-        /// export, or a builtin global's. Any other call, whatever its name,
-        /// may return a context value a hook captured earlier (an imported
-        /// getter of a module-scope variable).
+        /// Whether the walk follows what `callee` calls, an allowlist: a
+        /// function the module defines, called by its own name; a React
+        /// runtime's export; a builtin global, or a static method of one;
+        /// and a method called directly on a literal (a string, number,
+        /// template, array or object literal). `.call`, `.apply` and `.bind`
+        /// follow what they are called on. Any other callee, a method of any
+        /// binding, a stored or computed function, may return a context
+        /// value a hook captured earlier (an imported getter, kept in a local
+        /// object), so it is unfollowed whatever its name.
         fn followed(&self, callee: &Expression<'_>) -> bool {
-            let (base, path) = match member_base(callee) {
-                Some(found) => found,
-                None => return false,
-            };
-            let Expression::Identifier(ident) = base else {
-                return !path.is_empty() && !matches!(base, Expression::ThisExpression(_));
-            };
-            match symbol_of(self.scoping, ident) {
-                None => BUILTINS.contains(&ident.name.as_str()) || (ident.name == "React" && !path.is_empty()),
-                Some(symbol) if self.module.react.contains(&symbol) => true,
-                Some(symbol) if path.is_empty() => self.functions.contains(&symbol),
-                Some(symbol) => {
-                    !(self.module.imports.contains_key(&symbol) || self.module.namespaces.contains(&symbol) || self.parameters.contains(&symbol))
+            let mut link = callee.get_inner_expression();
+            while let Some(member) = link.as_member_expression() {
+                if matches!(member, oxc::ast::ast::MemberExpression::ComputedMemberExpression(_)) {
+                    return false;
                 }
+                link = member.object().get_inner_expression();
+            }
+            let Some((base, mut path)) = member_base(callee) else { return false };
+            if path.last().is_some_and(|last| matches!(last.as_str(), "call" | "apply" | "bind")) {
+                path.pop();
+            }
+            match base {
+                Expression::Identifier(ident) => match symbol_of(self.scoping, ident) {
+                    None => BUILTINS.contains(&ident.name.as_str()) || (ident.name == "React" && !path.is_empty()),
+                    Some(symbol) if self.module.react.contains(&symbol) => true,
+                    Some(symbol) => path.is_empty() && self.functions.contains(&symbol),
+                },
+                Expression::StringLiteral(_)
+                | Expression::NumericLiteral(_)
+                | Expression::BigIntLiteral(_)
+                | Expression::BooleanLiteral(_)
+                | Expression::RegExpLiteral(_)
+                | Expression::TemplateLiteral(_)
+                | Expression::ArrayExpression(_)
+                | Expression::ObjectExpression(_) => path.len() == 1,
+                _ => false,
             }
         }
 
@@ -8955,7 +8940,6 @@ fn held_bindings(
             kind: VariableDeclarationKind::Var,
             found: FxHashMap::default(),
             functions: FxHashSet::default(),
-            parameters: FxHashSet::default(),
         };
         aliases.visit_program(program);
         ContextKeys {
@@ -8964,7 +8948,6 @@ fn held_bindings(
             module,
             aliases: aliases.found,
             functions: aliases.functions,
-            parameters: aliases.parameters,
             sealed,
         }
     });

@@ -3042,6 +3042,8 @@ mod tests {
             ("imported-hook-bound", "import { useSeg } from './hooks';\n", "", "const w = useSeg(); w.size = 'lg';"),
             // An imported getter of a value a hook captured, whatever its name.
             ("imported-getter", "import { getCaptured } from './capture';\n", "", "getCaptured().size = 'lg';"),
+            // The same getter kept in a local object and called as its method.
+            ("stored-getter", "import { getCaptured } from './capture';\n", "", "const api = { get: getCaptured }; api.get().size = 'lg';"),
         ];
         let controls = [
             ("direct-read", "", "", "const label = useContext(Seg).size;"),
