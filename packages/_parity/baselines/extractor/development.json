@@ -2,7 +2,7 @@
   "corpusSha256": "02c0857c02a4a32d2721f03dfb51bc0eb3a91a0865b61d9736eac2e6efc9d9d6",
   "engine": "extractor",
   "mode": "development",
-  "refreshIntent": "land-0186-extension-merge-combined-20261023",
+  "refreshIntent": "land-0187-combined-20261023",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -529,7 +529,7 @@
     },
     "integration/composition.tsx": {
       "code": {
-        "composition.tsx": "import { createComponent, createComposedFamily } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n\nimport { ds } from '../setup';\n\nconst Root = /* @__PURE__ */ createComponent('div', 'animus-Root-df07b414', {\"variants\":{\"size\":{}}});\n\nconst Child = /* @__PURE__ */ createComponent('span', 'animus-Child-bf244152', {\"variants\":{\"size\":{},\"intent\":{}}});\n\nexport const Family = /* @__PURE__ */ createComposedFamily({ Root: Root, Child: Child }, { name: \"Family\" });\n\nexport const App = () => (\n  <Family.Root size=\"small\">\n    <Family.Child size=\"small\" intent=\"primary\" />\n    <Family.Child size=\"large\" intent=\"secondary\" />\n  </Family.Root>\n);\n\n"
+        "composition.tsx": "import { createComponent, createComposedFamily } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n\nimport { ds } from '../setup';\n\nconst Root = /* @__PURE__ */ createComponent('div', 'animus-Root-df07b414', {\"variants\":{\"size\":{}}});\n\nconst Child = /* @__PURE__ */ createComponent('span', 'animus-Child-bf244152', {\"variants\":{\"size\":{},\"intent\":{}}});\n\nexport const Family = /* @__PURE__ */ createComposedFamily({ Root: Root, Child: Child }, { name: \"Composed\" });\n\nexport const App = () => (\n  <Family.Root size=\"small\">\n    <Family.Child size=\"small\" intent=\"primary\" />\n    <Family.Child size=\"large\" intent=\"secondary\" />\n  </Family.Root>\n);\n\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-Child-bf244152 {\n    display: inline-flex;\n  }\n  .animus-Root-df07b414 {\n    display: flex;\n    align-items: center;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer standalone {\n\n  .animus-Child-bf244152--size-small {\n    padding-left: 0.25rem;\n    padding-right: 0.25rem;\n  }\n  .animus-Child-bf244152--size-large {\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n  }\n  .animus-Child-bf244152--intent-primary {\n    background-color: var(--color-primary);\n    --current-bg: var(--color-primary);\n    color: var(--color-background);\n  }\n  .animus-Child-bf244152--intent-secondary {\n    background-color: var(--color-secondary);\n    --current-bg: var(--color-secondary);\n    color: var(--color-background);\n  }\n  .animus-Root-df07b414--size-small {\n    padding: 0.25rem;\n    font-size: 0.875rem;\n  }\n  .animus-Root-df07b414--size-large {\n    padding: 1rem;\n    font-size: 1.25rem;\n  }\n  }\n  @layer composed {\n  .animus-Root-df07b414--size-small .animus-Child-bf244152 {\n    padding-left: 0.25rem;\n    padding-right: 0.25rem;\n  }\n  .animus-Root-df07b414 .animus-Child-bf244152.animus-Child-bf244152--size-small {\n    padding-left: 0.25rem;\n    padding-right: 0.25rem;\n  }\n  .animus-Root-df07b414--size-large .animus-Child-bf244152 {\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n  }\n  .animus-Root-df07b414 .animus-Child-bf244152.animus-Child-bf244152--size-large {\n    padding-left: 0.5rem;\n    padding-right: 0.5rem;\n  }\n  }\n}\n\n",
       "diagnostics": [],
@@ -909,7 +909,7 @@
     },
     "parity/compose-reassignment.tsx": {
       "code": {
-        "compose-reassignment.tsx": "import { createComponent, createComposedFamily } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n\nimport { ds } from '../test-system';\n\nconst PanelRoot = /* @__PURE__ */ createComponent('div', 'animus-PanelRoot-7f06c09b', {});\nconst PanelBody = /* @__PURE__ */ createComponent('div', 'animus-PanelBody-6d89c88f', {});\n\nexport const Panel = /* @__PURE__ */ createComposedFamily({ Root: PanelRoot, Body: PanelBody }, { name: \"Panel\" });\n\nexport const App = () => (\n  <Panel.Root>\n    <Panel.Body p={4} />\n  </Panel.Root>\n);\n\n"
+        "compose-reassignment.tsx": "import { createComponent, createComposedFamily } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n\nimport { ds } from '../test-system';\n\nconst PanelRoot = /* @__PURE__ */ createComponent('div', 'animus-PanelRoot-7f06c09b', {});\nconst PanelBody = /* @__PURE__ */ createComponent('div', 'animus-PanelBody-6d89c88f', {});\n\nexport const Panel = /* @__PURE__ */ createComposedFamily({ Root: PanelRoot, Body: PanelBody }, { name: \"Composed\" });\n\nexport const App = () => (\n  <Panel.Root>\n    <Panel.Body p={4} />\n  </Panel.Root>\n);\n\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-PanelBody-6d89c88f {\n    padding: 0.5rem;\n    display: block;\n  }\n  .animus-PanelRoot-7f06c09b {\n    gap: 0.5rem;\n    display: flex;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [],
