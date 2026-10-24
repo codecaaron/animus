@@ -9,7 +9,6 @@ import {
 } from 'react';
 
 import { assertRootSlot } from './runtime/assert-root-slot';
-import { IS_DEV } from './runtime/is-dev';
 
 import type {
   AnyBrandedComponent,
@@ -19,6 +18,25 @@ import type {
 
 // Module-local so reading the token never widens a global (see is-dev.ts).
 declare const __ANIMUS_DEV__: boolean | undefined;
+
+/**
+ * Whether this is a development build, where no host defines the token: the
+ * fallback runtime/is-dev.ts computes, kept here rather than imported. A
+ * second entry importing `IS_DEV` splits it into a chunk of its own, and a
+ * runtime chunk that starts with that import leaves every gate reading it
+ * unfolded in a consumer's production bundle (the uncompiled report among
+ * them). Read only as the token's fallback, so a host's define drops it.
+ */
+function devFallback(): boolean {
+  try {
+    if (typeof process !== 'undefined' && typeof process.env === 'undefined') {
+      return true;
+    }
+    return process.env.NODE_ENV !== 'production';
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Context transport for shared variants, for children rendered in portals,
@@ -112,7 +130,7 @@ function contextFamily(
         if (
           requireRoot &&
           inherited === NO_ROOT &&
-          (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : IS_DEV)
+          (typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__ : devFallback())
         ) {
           throw new Error(
             `<${member}> must be inside <${familyName}.Root>: ${familyName} is composed with requireRoot, so each member reads its shared props from the Root above it.`
