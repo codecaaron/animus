@@ -3044,6 +3044,15 @@ mod tests {
             ("imported-getter", "import { getCaptured } from './capture';\n", "", "getCaptured().size = 'lg';"),
             // The same getter kept in a local object and called as its method.
             ("stored-getter", "import { getCaptured } from './capture';\n", "", "const api = { get: getCaptured }; api.get().size = 'lg';"),
+            // The same getter as an object literal's member, and as the
+            // value a module function's binding is reassigned to.
+            ("literal-getter", "import { getCaptured } from './capture';\n", "", "({ get: getCaptured }).get().size = 'lg';"),
+            (
+                "reassigned-function",
+                "import { getCaptured } from './capture';\nfunction pick() { return { size: 'sm' }; }\n",
+                "",
+                "pick = getCaptured; pick().size = 'lg';",
+            ),
         ];
         let controls = [
             ("direct-read", "", "", "const label = useContext(Seg).size;"),

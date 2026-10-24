@@ -8350,7 +8350,7 @@ fn held_bindings(
         Member(SymbolId),
     }
     /// The module's `const` aliases, and the functions it defines (a
-    /// declaration, or a `const` of a function or arrow).
+    /// declaration nothing reassigns, or a `const` of a function or arrow).
     struct Aliases<'s> {
         scoping: &'s Scoping,
         kind: VariableDeclarationKind,
@@ -8360,7 +8360,7 @@ fn held_bindings(
     impl<'a> Visit<'a> for Aliases<'_> {
         fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
             if let Some(id) = &function.id {
-                self.functions.extend(id.symbol_id.get());
+                self.functions.extend(unwritten(self.scoping, id));
             }
             oxc::ast_visit::walk::walk_function(self, function, flags);
         }
@@ -8407,6 +8407,10 @@ fn held_bindings(
         module: ModuleContexts,
         aliases: FxHashMap<SymbolId, Alias>,
         functions: FxHashSet<SymbolId>,
+        /// The React objects (a default or namespace import, or an unbound
+        /// `React`) the module may rewrite a member of (`React.useId = …`),
+        /// whose members it no longer follows.
+        patched: FxHashSet<String>,
         /// The keys of the module's own contexts no other code can reach:
         /// unexported, and used only as a hook's argument or a Provider
         /// (`sealed`).
@@ -8499,14 +8503,17 @@ fn held_bindings(
         }
 
         /// Whether the walk follows what `callee` calls, an allowlist: a
-        /// function the module defines, called by its own name; a React
-        /// runtime's export; a builtin global, or a static method of one;
-        /// and a method called directly on a literal (a string, number,
-        /// template, array or object literal). `.call`, `.apply` and `.bind`
-        /// follow what they are called on. Any other callee, a method of any
-        /// binding, a stored or computed function, may return a context
-        /// value a hook captured earlier (an imported getter, kept in a local
-        /// object), so it is unfollowed whatever its name.
+        /// function the module defines and nothing reassigns, called by its
+        /// own name; a React runtime's export, unless the module may rewrite
+        /// a member of the React object it reads it from; a builtin global,
+        /// or a static method of one; a method called directly on a string,
+        /// number, template or array literal; and an object literal's
+        /// method whose value is written inline (its body is walked).
+        /// `.call`, `.apply` and `.bind` follow what they are called on. Any
+        /// other callee, a method of any binding, a stored or computed
+        /// function, an object literal's member holding one, may return a
+        /// context value a hook captured earlier (an imported getter), so it
+        /// is unfollowed whatever its name.
         fn followed(&self, callee: &Expression<'_>) -> bool {
             let mut link = callee.get_inner_expression();
             while let Some(member) = link.as_member_expression() {
@@ -8519,10 +8526,11 @@ fn held_bindings(
             if path.last().is_some_and(|last| matches!(last.as_str(), "call" | "apply" | "bind")) {
                 path.pop();
             }
+            let patched = |ident: &IdentifierReference<'_>| !path.is_empty() && self.patched.contains(ident.name.as_str());
             match base {
                 Expression::Identifier(ident) => match symbol_of(self.scoping, ident) {
-                    None => BUILTINS.contains(&ident.name.as_str()) || (ident.name == "React" && !path.is_empty()),
-                    Some(symbol) if self.module.react.contains(&symbol) => true,
+                    None => BUILTINS.contains(&ident.name.as_str()) || (ident.name == "React" && !path.is_empty() && !patched(ident)),
+                    Some(symbol) if self.module.react.contains(&symbol) => !patched(ident),
                     Some(symbol) => path.is_empty() && self.functions.contains(&symbol),
                 },
                 Expression::StringLiteral(_)
@@ -8531,8 +8539,29 @@ fn held_bindings(
                 | Expression::BooleanLiteral(_)
                 | Expression::RegExpLiteral(_)
                 | Expression::TemplateLiteral(_)
-                | Expression::ArrayExpression(_)
-                | Expression::ObjectExpression(_) => path.len() == 1,
+                | Expression::ArrayExpression(_) => path.len() == 1,
+                // The property the member reads is the last that names it, and
+                // a spread after it may replace it.
+                Expression::ObjectExpression(object) => match path.as_slice() {
+                    [name] => object
+                        .properties
+                        .iter()
+                        .rev()
+                        .find_map(|property| match property {
+                            oxc::ast::ast::ObjectPropertyKind::ObjectProperty(property) => {
+                                (property.computed || property.key.static_name().is_some_and(|key| key == name.as_str())).then(|| {
+                                    !property.computed
+                                        && matches!(
+                                            property.value.get_inner_expression(),
+                                            Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_)
+                                        )
+                                })
+                            }
+                            oxc::ast::ast::ObjectPropertyKind::SpreadProperty(_) => Some(false),
+                        })
+                        .unwrap_or(false),
+                    _ => false,
+                },
                 _ => false,
             }
         }
@@ -8933,6 +8962,14 @@ fn held_bindings(
     }
     let contexts = hooks.as_ref().map(|hooks| {
         let module = literal_contexts(program, hooks);
+        let objects: FxHashMap<String, &'static [&'static str]> = module
+            .react_objects
+            .iter()
+            .map(|symbol| scoping.symbol_name(*symbol).to_string())
+            .chain(std::iter::once("React".to_string()))
+            .map(|name| (name, &[][..]))
+            .collect();
+        let patched = rewritable_namespaces(program, &objects);
         let escape_hooks = ReactNames::importing(program, scoping, &CONTEXT_HOOKS, &[], true);
         let sealed = sealed(program, scoping, &escape_hooks, &module).into_iter().map(|symbol| format!("local\0{symbol:?}")).collect();
         let mut aliases = Aliases {
@@ -8949,6 +8986,7 @@ fn held_bindings(
             aliases: aliases.found,
             functions: aliases.functions,
             sealed,
+            patched,
         }
     });
     let mut join = Join {
@@ -9056,8 +9094,9 @@ fn held_bindings(
 /// context then holds (a default held under another name may be written
 /// through it); every module-scope `const` that `createContext` initialises;
 /// each import's imported name; each namespace import; and each import of
-/// a React runtime. `exported` holds the created ones an `export`
-/// declaration declares.
+/// a React runtime, `react_objects` those of them that bind its whole module
+/// (a default or namespace import). `exported` holds the created ones an
+/// `export` declaration declares.
 struct ModuleContexts {
     literal: FxHashSet<SymbolId>,
     created: FxHashSet<SymbolId>,
@@ -9065,6 +9104,7 @@ struct ModuleContexts {
     imports: FxHashMap<SymbolId, String>,
     namespaces: FxHashSet<SymbolId>,
     react: FxHashSet<SymbolId>,
+    react_objects: FxHashSet<SymbolId>,
 }
 
 fn literal_contexts(program: &Program<'_>, hooks: &ReactNames) -> ModuleContexts {
@@ -9089,6 +9129,7 @@ fn literal_contexts(program: &Program<'_>, hooks: &ReactNames) -> ModuleContexts
         imports: FxHashMap::default(),
         namespaces: FxHashSet::default(),
         react: FxHashSet::default(),
+        react_objects: FxHashSet::default(),
     };
     for statement in &program.body {
         let declaration = match statement {
@@ -9099,6 +9140,9 @@ fn literal_contexts(program: &Program<'_>, hooks: &ReactNames) -> ModuleContexts
                 for specifier in import.specifiers.iter().flatten() {
                     if runtime {
                         found.react.extend(specifier.local().symbol_id.get());
+                        if !matches!(specifier, ImportDeclarationSpecifier::ImportSpecifier(_)) {
+                            found.react_objects.extend(specifier.local().symbol_id.get());
+                        }
                     }
                     let (local, imported) = match specifier {
                         ImportDeclarationSpecifier::ImportSpecifier(named) => (&named.local, named.imported.name().to_string()),
