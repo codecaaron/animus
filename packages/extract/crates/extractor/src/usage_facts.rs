@@ -7974,12 +7974,6 @@ const CONTEXT_FUNCTIONS: [&str; 2] = ["useContext", "createContext"];
 /// The hooks that read a context's value: React 19's `use` reads one too.
 const CONTEXT_HOOKS: [&str; 2] = ["useContext", "use"];
 
-/// Whether `name` is a hook's, as React's rules of hooks name one: `use`,
-/// or `use` followed by an uppercase letter or a digit.
-fn hook_named(name: &str) -> bool {
-    name.strip_prefix("use").is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_ascii_uppercase() || c.is_ascii_digit()))
-}
-
 fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentParams {
     use oxc::ast::ast::{BindingIdentifier, BindingPattern, Declaration, ExportDefaultDeclarationKind};
     let mut params = ComponentParams::default();
@@ -8349,7 +8343,8 @@ fn held_bindings(
         Some(())
     }
     /// What a module `const` holds, where it holds another binding or a
-    /// namespace member (`const Alias = Seg`, `const S = segs.Seg`).
+    /// member chain off one (`const Alias = Seg`, `const S = segs.Seg`,
+    /// `const P = Seg.Provider`).
     enum Alias {
         Binding(SymbolId),
         Member(SymbolId),
@@ -8411,10 +8406,8 @@ fn held_bindings(
                 }
                 let alias = match init.get_inner_expression() {
                     Expression::Identifier(held) => symbol_of(self.scoping, held).map(Alias::Binding),
-                    Expression::StaticMemberExpression(member) => match &member.object {
-                        Expression::Identifier(object) => {
-                            symbol_of(self.scoping, object).map(Alias::Member)
-                        }
+                    member @ Expression::StaticMemberExpression(_) => match member_base(member) {
+                        Some((Expression::Identifier(object), _)) => symbol_of(self.scoping, object).map(Alias::Member),
                         _ => None,
                     },
                     _ => None,
@@ -8451,14 +8444,17 @@ fn held_bindings(
     /// The module's own contexts no code outside the module can reach, so no
     /// hook of another module can read: a created one no `export`
     /// declaration declares, each of whose uses is a hook's argument
-    /// (`useContext(Seg)`), its `.Provider` (in JSX or read as a member), or
-    /// its own tag (React 19's `<Seg value>`). Any other use, an export, a
-    /// value stored, handed on, returned or aliased, `.Consumer`, a member
-    /// written, may let it out.
+    /// (`useContext(Seg)`), its own tag (React 19's `<Seg value>`), or its
+    /// `.Provider` as a tag (`<Seg.Provider>`) or an element function's
+    /// first argument (`createElement(Seg.Provider, …)`). `.Provider` is the
+    /// context itself (React 19), so any other use of it, as any other use
+    /// of the context (an export, a value stored, handed on, returned or
+    /// aliased, `.Consumer`, a member written), may let it out.
     fn sealed(program: &Program<'_>, scoping: &Scoping, hooks: &ReactNames, module: &ModuleContexts) -> FxHashSet<SymbolId> {
         use oxc::ast::ast::{JSXElementName, JSXMemberExpressionObject};
         struct Allowed<'h> {
             hooks: &'h ReactNames,
+            elements: ReactNames,
             references: FxHashSet<oxc::semantic::ReferenceId>,
         }
         impl Allowed<'_> {
@@ -8479,18 +8475,20 @@ fn held_bindings(
         }
         impl<'a> Visit<'a> for Allowed<'_> {
             fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+                let first = call.arguments.first().and_then(Argument::as_expression).map(Expression::get_inner_expression);
                 if matches!(self.hooks.export(&call.callee), Some("useContext" | "use")) {
-                    if let Some(Expression::Identifier(ident)) = call.arguments.first().and_then(Argument::as_expression).map(Expression::get_inner_expression) {
+                    if let Some(Expression::Identifier(ident)) = first {
                         self.allow(ident);
                     }
                 }
-                oxc::ast_visit::walk::walk_call_expression(self, call);
-            }
-            fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
-                if let (Expression::Identifier(ident), "Provider") = (&member.object, member.property.name.as_str()) {
-                    self.allow(ident);
+                if self.elements.element_call(&call.callee).is_some() {
+                    if let Some(Expression::StaticMemberExpression(member)) = first {
+                        if let (Expression::Identifier(ident), "Provider") = (&member.object, member.property.name.as_str()) {
+                            self.allow(ident);
+                        }
+                    }
                 }
-                oxc::ast_visit::walk::walk_static_member_expression(self, member);
+                oxc::ast_visit::walk::walk_call_expression(self, call);
             }
             fn visit_jsx_opening_element(&mut self, element: &oxc::ast::ast::JSXOpeningElement<'a>) {
                 self.tag(&element.name);
@@ -8501,7 +8499,7 @@ fn held_bindings(
                 oxc::ast_visit::walk::walk_jsx_closing_element(self, element);
             }
         }
-        let mut allowed = Allowed { hooks, references: FxHashSet::default() };
+        let mut allowed = Allowed { hooks, elements: ReactNames::from_imports(program, scoping), references: FxHashSet::default() };
         allowed.visit_program(program);
         module
             .created
@@ -8529,21 +8527,14 @@ fn held_bindings(
             matches!(self.hooks.export(expression), Some("useContext" | "use"))
         }
 
-        /// Whether the walk follows what `callee` calls: any function not
-        /// named as a hook, which React's rules of hooks leave unable to
-        /// read a context; and, of a hook, one the module defines, a method
-        /// of a value that is no import, parameter or `this` (what such a
-        /// value holds, the walk already tracks: a literal, a local, another
-        /// call's result), a React runtime's export, or a builtin global's.
+        /// Whether the walk follows what `callee` calls: a function the
+        /// module defines, a method of a value that is no import, parameter
+        /// or `this` (what such a value holds, the walk already tracks: a
+        /// literal, a local, another call's result), a React runtime's
+        /// export, or a builtin global's. Any other call, whatever its name,
+        /// may return a context value a hook captured earlier (an imported
+        /// getter of a module-scope variable).
         fn followed(&self, callee: &Expression<'_>) -> bool {
-            let name = match callee.get_inner_expression() {
-                Expression::Identifier(ident) => Some(ident.name.as_str()),
-                Expression::StaticMemberExpression(member) => Some(member.property.name.as_str()),
-                _ => None,
-            };
-            if name.is_some_and(|name| !hook_named(name)) {
-                return true;
-            }
             let (base, path) = match member_base(callee) {
                 Some(found) => found,
                 None => return false,
@@ -8570,9 +8561,13 @@ fn held_bindings(
             Some(match call.arguments.first().and_then(Argument::as_expression) {
                 Some(context) => match context.get_inner_expression() {
                     Expression::Identifier(ident) => symbol_of(self.scoping, ident).map_or(UNKNOWN.to_string(), |symbol| self.binding(symbol, 0)),
-                    Expression::StaticMemberExpression(member) => match &member.object {
-                        Expression::Identifier(object) => symbol_of(self.scoping, object)
-                            .map_or(UNKNOWN.to_string(), |object| self.member(object)),
+                    // A member chain off a binding: a namespace's member, or a
+                    // context's own `.Provider` (React 19's is the context;
+                    // React 18's `._context` points back), the same context.
+                    context @ Expression::StaticMemberExpression(_) => match member_base(context) {
+                        Some((Expression::Identifier(object), _)) => {
+                            symbol_of(self.scoping, object).map_or(UNKNOWN.to_string(), |object| self.member(object, 0))
+                        }
                         _ => UNKNOWN.to_string(),
                     },
                     _ => UNKNOWN.to_string(),
@@ -8597,7 +8592,7 @@ fn held_bindings(
             }
             match self.aliases.get(&symbol) {
                 Some(Alias::Binding(held)) if depth < 8 => self.binding(*held, depth + 1),
-                Some(Alias::Member(object)) => self.member(*object),
+                Some(Alias::Member(object)) if depth < 8 => self.member(*object, depth + 1),
                 _ => UNKNOWN.to_string(),
             }
         }
@@ -8607,10 +8602,12 @@ fn held_bindings(
             symbol_of(self.scoping, ident).map_or(UNKNOWN.to_string(), |symbol| self.binding(symbol, 0))
         }
 
-        fn member(&self, object: SymbolId) -> String {
+        /// The context a member chain off `object` reads: a namespace's
+        /// member is an import; any other, `object`'s own context.
+        fn member(&self, object: SymbolId, depth: usize) -> String {
             match self.module.namespaces.contains(&object) {
                 true => IMPORTED.to_string(),
-                false => UNKNOWN.to_string(),
+                false => self.binding(object, depth),
             }
         }
     }
@@ -8910,6 +8907,13 @@ fn held_bindings(
         fn visit_do_while_statement(&mut self, statement: &oxc::ast::ast::DoWhileStatement<'a>) {
             self.visit_statement(&statement.body);
             self.visit_in(Slot::Test, &statement.test);
+        }
+        // A call whose result a statement discards uses nothing of it.
+        fn visit_expression_statement(&mut self, statement: &oxc::ast::ast::ExpressionStatement<'a>) {
+            match statement.expression.get_inner_expression() {
+                Expression::CallExpression(_) => self.visit_in(Slot::Test, &statement.expression),
+                _ => oxc::ast_visit::walk::walk_expression_statement(self, statement),
+            }
         }
         fn visit_jsx_member_expression(&mut self, member: &oxc::ast::ast::JSXMemberExpression<'a>) {
             if let (Some(contexts), oxc::ast::ast::JSXMemberExpressionObject::IdentifierReference(ident), "Consumer") =

@@ -3040,12 +3040,15 @@ mod tests {
             ("default-import", "import SegDefault from './seg';\n", "", "useContext(SegDefault).size = 'lg';"),
             ("imported-hook", "import { useSeg } from './hooks';\n", "", "useSeg().size = 'lg';"),
             ("imported-hook-bound", "import { useSeg } from './hooks';\n", "", "const w = useSeg(); w.size = 'lg';"),
+            // An imported getter of a value a hook captured, whatever its name.
+            ("imported-getter", "import { getCaptured } from './capture';\n", "", "getCaptured().size = 'lg';"),
         ];
         let controls = [
             ("direct-read", "", "", "const label = useContext(Seg).size;"),
             ("alias-read", "const Alias = Seg;\n", "", "const w = useContext(Alias); const label = w.size;"),
             ("unknown-read", "", "{ ctx }", "const label = useContext(ctx).size;"),
             ("other-written", "const Other = createContext({ size: 'md' });\n", "", "useContext(Other).size = 'lg';"),
+            ("getter-discarded", "import { getCaptured } from './capture';\n", "", "getCaptured();"),
         ];
         let source = |prelude: &str, params: &str, body: &str| {
             format!(
@@ -3068,6 +3071,10 @@ mod tests {
                     "path": "hooks.ts",
                     "source": "import { useContext } from 'react';\nimport { Seg } from './seg';\nexport const useSeg = () => useContext(Seg);\n",
                 }),
+                serde_json::json!({
+                    "path": "capture.ts",
+                    "source": "import { useContext } from 'react';\nimport { Seg } from './seg';\nlet captured;\nexport function useCapture() { captured = useContext(Seg); }\nexport function getCaptured() { return captured; }\n",
+                }),
             ])
             .collect();
         let mut engine = ExtractEngine::new(None).unwrap();
@@ -3088,23 +3095,33 @@ mod tests {
     /// context used only as a hook argument or Provider. No hook of another
     /// module can read a context it cannot reach, so an imported hook's
     /// result handed on leaves that context's reads named; the same context
-    /// exported may be read, and written, anywhere, and names nothing.
+    /// exported may be read, and written, anywhere, and names nothing. Its
+    /// `.Provider` is the context itself (React 19), so one read other than
+    /// as a tag or an element function's argument is another spelling of it,
+    /// and a write through it names nothing either.
     #[test]
     fn an_unknown_escape_does_not_reach_a_sealed_module_context() {
-        let source = |declare: &str| {
+        let source = |declare: &str, prelude: &str, body: &str| {
             format!(
-                "import {{ createContext, useContext }} from 'react';\n\
+                "import {{ createContext, useContext, use }} from 'react';\n\
                  import {{ useThing }} from './thing';\n\
                  {declare} Seg = createContext({{ size: 'sm' }});\n\
-                 export function P({{ children }}) {{ return <Seg.Provider value={{{{ size: 'md' }}}}>{{children}}</Seg.Provider>; }}\n\
-                 export function C() {{ useThing().go(); const seg = useContext(Seg); return <Box size={{seg.size}} />; }}\n"
+                 {prelude}export function P({{ children }}) {{ return <Seg.Provider value={{{{ size: 'md' }}}}>{{children}}</Seg.Provider>; }}\n\
+                 export function C() {{ useThing().go(); {body}const seg = useContext(Seg); return <Box size={{seg.size}} />; }}\n"
             )
         };
-        let files = serde_json::json!([
-            { "path": "sealed.tsx", "source": source("const") },
-            { "path": "exported.tsx", "source": source("export const") },
-            { "path": "thing.ts", "source": "export const useThing = () => ({ go() {} });\n" },
-        ]);
+        let writers = [
+            ("provider-direct", "", "useContext(Seg.Provider).size = 'lg'; "),
+            ("provider-alias", "const Provider = Seg.Provider;\n", "useContext(Provider).size = 'lg'; "),
+            ("provider-use", "", "use(Seg.Provider).size = 'lg'; "),
+        ];
+        let files: Vec<serde_json::Value> = [("sealed", "const"), ("exported", "export const")]
+            .iter()
+            .map(|(name, declare)| serde_json::json!({ "path": format!("{name}.tsx"), "source": source(declare, "", "") }))
+            .chain(writers.iter().map(|(name, prelude, body)| serde_json::json!({ "path": format!("{name}.tsx"), "source": source("const", prelude, body) })))
+            .chain([serde_json::json!({ "path": "thing.ts", "source": "export const useThing = () => ({ go() {} });\n" })])
+            .collect();
+        let files = serde_json::Value::Array(files);
         let mut engine = ExtractEngine::new(None).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&engine.analyze_full(files.to_string(), None).unwrap()).unwrap();
         let attr = |file: &str| {
@@ -3113,6 +3130,9 @@ mod tests {
         };
         assert_eq!(attr("sealed.tsx")["context"], serde_json::json!({ "reads": ["Seg.size"] }));
         assert_eq!(attr("exported.tsx").get("context"), None, "an exported context's reads stay unnamed");
+        for (name, ..) in &writers {
+            assert_eq!(attr(&format!("{name}.tsx")).get("context"), None, "{name} writes Seg through its Provider");
+        }
     }
 
     #[test]
