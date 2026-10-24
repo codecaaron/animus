@@ -90,9 +90,10 @@ pub struct AttrFact {
     /// For an inline object literal that is no static value as a whole
     /// (`{ onClick: () => …, size: 'small' }`), the members it writes, each
     /// read on its own. Enriched collection only; evidence for the css
-    /// audit, which no pruning reads.
+    /// audit, which no pruning reads. Boxed: few attributes have one, and
+    /// inline it would widen every `AttrFact` by an ordered map and a list.
     #[serde(skip)]
-    pub members: Option<ObjectMembers>,
+    pub members: Option<Box<ObjectMembers>>,
 }
 
 /// The members an inline object literal writes, each read on its own: the
@@ -469,7 +470,7 @@ pub(crate) fn serialize_proven<S: serde::Serializer>(
                     forwarded,
                     derived,
                     runtime_state,
-                    members: attr.members.as_ref(),
+                    members: attr.members.as_deref(),
                     }
                 })
                 .collect(),
@@ -7174,7 +7175,7 @@ impl<'a> FactCollector<'a, '_> {
                     absent,
                     members: match written {
                         Some(Expression::ObjectExpression(object)) if dynamic && self.enrich => {
-                            Some(object_members(object, self.origins))
+                            Some(Box::new(object_members(object, self.origins)))
                         }
                         _ => None,
                     },
